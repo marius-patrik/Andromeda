@@ -28,16 +28,18 @@ export function setViewHtml(options: ViewHtmlOptions): void {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${serverOrigin}; script-src 'nonce-${nonce}' ${cspSource}; style-src 'unsafe-inline' ${cspSource}; connect-src ${serverOrigin} ${cspSource}; img-src data: blob: ${cspSource}; font-src ${cspSource};">
       <style>
-        html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); }
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--vscode-editor-background, #1e1e1e); color: var(--vscode-foreground, #cccccc); font-family: var(--vscode-font-family); }
         #root { width: 100%; height: 100%; display: flex; flex-direction: column; }
         #placeholder { margin: auto; text-align: center; opacity: 0.7; }
+        #error { margin: auto; text-align: center; color: var(--vscode-errorForeground, #f48771); padding: 20px; }
       </style>
     </head>
     <body>
       <div id="root">
         <div id="placeholder">
           <h2>${viewType}</h2>
-          <p>Project: ${projectId}</p>
+          <p>Loading view bundle...</p>
+          <p id="status"></p>
         </div>
       </div>
       <script nonce="${nonce}">
@@ -45,6 +47,7 @@ export function setViewHtml(options: ViewHtmlOptions): void {
           const vscode = acquireVsCodeApi();
           const projectId = ${JSON.stringify(projectId)};
           const viewType = ${JSON.stringify(viewType)};
+          const status = document.getElementById('status');
 
           window.vsdaw = {
             projectId,
@@ -64,17 +67,15 @@ export function setViewHtml(options: ViewHtmlOptions): void {
             }
           });
 
-          window.vsdaw.postMessage('view.ready', { viewType });
+          window.addEventListener('error', function (event) {
+            console.error('[vsdaw] runtime error', event.error);
+            if (status) status.textContent = 'Error: ' + (event.error && event.error.message || event.message);
+          });
 
-          const script = document.createElement('script');
-          script.src = ${JSON.stringify(bundleUri.toString())};
-          script.nonce = ${JSON.stringify(nonce)};
-          script.onerror = function () {
-            console.warn('[vsdaw] view bundle not found for ' + viewType);
-          };
-          document.head.appendChild(script);
+          window.vsdaw.postMessage('view.ready', { viewType });
         })();
       </script>
+      <script nonce="${nonce}" src="${bundleUri.toString()}" onerror="document.getElementById('status').textContent = 'Failed to load view bundle'"></script>
     </body>
     </html>
   `;

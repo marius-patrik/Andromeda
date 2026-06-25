@@ -50,11 +50,36 @@ const VARIABLES: (keyof VsCodeTheme)[] = [
   "--vscode-warningForeground",
 ];
 
+const FALLBACK_THEME: VsCodeTheme = {
+  "--vscode-editor-background": "#1e1e1e",
+  "--vscode-editor-foreground": "#cccccc",
+  "--vscode-button-background": "#0e639c",
+  "--vscode-button-foreground": "#ffffff",
+  "--vscode-button-hoverBackground": "#1177bb",
+  "--vscode-input-background": "#3c3c3c",
+  "--vscode-input-foreground": "#cccccc",
+  "--vscode-input-border": "#3c3c3c",
+  "--vscode-focusBorder": "#007fd4",
+  "--vscode-activityBar-background": "#333333",
+  "--vscode-panel-background": "#1e1e1e",
+  "--vscode-panel-border": "#414141",
+  "--vscode-sideBar-background": "#252526",
+  "--vscode-list-activeSelectionBackground": "#094771",
+  "--vscode-list-activeSelectionForeground": "#ffffff",
+  "--vscode-list-hoverBackground": "#2a2d2e",
+  "--vscode-scrollbarSlider-background": "#79797966",
+  "--vscode-scrollbarSlider-hoverBackground": "#646464b3",
+  "--vscode-statusBar-background": "#007acc",
+  "--vscode-statusBar-foreground": "#ffffff",
+  "--vscode-errorForeground": "#f48771",
+  "--vscode-warningForeground": "#cca700",
+};
+
 function readTheme(): VsCodeTheme {
   const styles = getComputedStyle(document.documentElement);
   const theme = {} as VsCodeTheme;
   for (const key of VARIABLES) {
-    theme[key] = styles.getPropertyValue(key).trim() || "#000000";
+    theme[key] = styles.getPropertyValue(key).trim() || FALLBACK_THEME[key];
   }
   return theme;
 }
