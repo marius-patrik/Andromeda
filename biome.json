@@ -32,6 +32,6 @@
     "lineWidth": 100
   },
   "files": {
-    "ignore": ["node_modules", "out", "dist", ".vscode-test", "*.vsix", "bun.lock"]
+    "ignore": ["node_modules", "out", "dist", ".vscode-test", "coverage", "*.vsix", "bun.lock"]
   }
 }

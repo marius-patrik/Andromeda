@@ -9,12 +9,37 @@ export interface PeakOptions {
   channel?: number;
 }
 
+function validateSamplesPerPeak(samplesPerPeak: number): void {
+  if (!Number.isInteger(samplesPerPeak) || samplesPerPeak <= 0) {
+    throw new RangeError("samplesPerPeak must be a positive integer");
+  }
+}
+
+function validateAudioBuffer(buffer: AudioBuffer): void {
+  if (!buffer || typeof buffer !== "object") {
+    throw new TypeError("Invalid AudioBuffer");
+  }
+  if (
+    !Number.isInteger(buffer.numberOfChannels) ||
+    buffer.numberOfChannels <= 0 ||
+    !Number.isInteger(buffer.length) ||
+    buffer.length < 0
+  ) {
+    throw new RangeError("AudioBuffer has invalid dimensions");
+  }
+}
+
 function getChannelData(buffer: AudioBuffer, channel?: number): Float32Array {
+  validateAudioBuffer(buffer);
+
   if (channel === undefined) {
     const frames = buffer.length;
     const data = new Float32Array(frames);
     for (let c = 0; c < buffer.numberOfChannels; c++) {
       const channelData = buffer.getChannelData(c);
+      if (!channelData || channelData.length !== frames) {
+        throw new RangeError(`Channel ${c} data is inconsistent with buffer length`);
+      }
       for (let i = 0; i < frames; i++) {
         data[i] += channelData[i];
       }
@@ -24,10 +49,15 @@ function getChannelData(buffer: AudioBuffer, channel?: number): Float32Array {
     }
     return data;
   }
-  if (channel < 0 || channel >= buffer.numberOfChannels) {
+
+  if (!Number.isInteger(channel) || channel < 0 || channel >= buffer.numberOfChannels) {
     throw new RangeError(`Invalid channel ${channel}`);
   }
-  return buffer.getChannelData(channel);
+  const channelData = buffer.getChannelData(channel);
+  if (!channelData || channelData.length !== buffer.length) {
+    throw new RangeError(`Channel ${channel} data is inconsistent with buffer length`);
+  }
+  return channelData;
 }
 
 export function generatePeaksFromAudioBuffer(
@@ -35,50 +65,32 @@ export function generatePeaksFromAudioBuffer(
   options: PeakOptions,
 ): PeakPoint[] {
   const { samplesPerPeak } = options;
-  if (samplesPerPeak <= 0 || !Number.isInteger(samplesPerPeak)) {
-    throw new RangeError("samplesPerPeak must be a positive integer");
-  }
+  validateSamplesPerPeak(samplesPerPeak);
 
   const data = getChannelData(buffer, options.channel);
-  const totalFrames = data.length;
-  const peakCount = Math.ceil(totalFrames / samplesPerPeak);
-  const peaks: PeakPoint[] = [];
-
-  for (let i = 0; i < peakCount; i++) {
-    const start = i * samplesPerPeak;
-    const end = Math.min(start + samplesPerPeak, totalFrames);
-
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    let sumSquares = 0;
-
-    for (let j = start; j < end; j++) {
-      const sample = data[j];
-      if (sample < min) min = sample;
-      if (sample > max) max = sample;
-      sumSquares += sample * sample;
-    }
-
-    const count = end - start;
-    peaks.push({
-      min: min === Number.POSITIVE_INFINITY ? 0 : min,
-      max: max === Number.NEGATIVE_INFINITY ? 0 : max,
-      rms: Math.sqrt(sumSquares / count),
-    });
-  }
-
-  return peaks;
+  return generatePeaksFromFloat32ArrayInternal(data, samplesPerPeak);
 }
 
 export function generatePeaksFromFloat32Array(
   data: Float32Array,
   samplesPerPeak: number,
 ): PeakPoint[] {
-  if (samplesPerPeak <= 0 || !Number.isInteger(samplesPerPeak)) {
-    throw new RangeError("samplesPerPeak must be a positive integer");
+  if (!(data instanceof Float32Array)) {
+    throw new TypeError("Data must be a Float32Array");
+  }
+  validateSamplesPerPeak(samplesPerPeak);
+  return generatePeaksFromFloat32ArrayInternal(data, samplesPerPeak);
+}
+
+function generatePeaksFromFloat32ArrayInternal(
+  data: Float32Array,
+  samplesPerPeak: number,
+): PeakPoint[] {
+  const totalFrames = data.length;
+  if (totalFrames === 0) {
+    return [];
   }
 
-  const totalFrames = data.length;
   const peakCount = Math.ceil(totalFrames / samplesPerPeak);
   const peaks: PeakPoint[] = [];
 
@@ -109,7 +121,10 @@ export function generatePeaksFromFloat32Array(
 }
 
 export function downsamplePeaks(peaks: PeakPoint[], targetCount: number): PeakPoint[] {
-  if (targetCount <= 0 || !Number.isInteger(targetCount)) {
+  if (!Array.isArray(peaks)) {
+    throw new TypeError("peaks must be an array");
+  }
+  if (!Number.isInteger(targetCount) || targetCount <= 0) {
     throw new RangeError("targetCount must be a positive integer");
   }
   if (peaks.length === 0) {

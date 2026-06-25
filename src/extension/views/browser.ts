@@ -15,6 +15,7 @@ export class BrowserWebviewProvider {
       router: this.router,
       projectId,
       viewType: "vsdaw.browser",
+      bundleName: "browser",
       title: `Browser (${projectId.slice(0, 8)})`,
       column: vscode.ViewColumn.One,
       serverOrigin: this.getServerOrigin() ?? "",

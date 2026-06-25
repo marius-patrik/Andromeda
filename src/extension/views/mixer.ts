@@ -15,6 +15,7 @@ export class MixerWebviewProvider {
       router: this.router,
       projectId,
       viewType: "vsdaw.mixer",
+      bundleName: "mixer",
       title: `Mixer (${projectId.slice(0, 8)})`,
       column: vscode.ViewColumn.Beside,
       serverOrigin: this.getServerOrigin() ?? "",

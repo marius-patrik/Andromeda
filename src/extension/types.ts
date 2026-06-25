@@ -1,5 +1,6 @@
 import type * as vscode from "vscode";
 import type { MessageEnvelope } from "../shared/protocol.js";
+import type { ProjectJson } from "../shared/schemas.js";
 
 export type { MessageEnvelope };
 
@@ -14,6 +15,9 @@ export interface ProjectSession {
   backupTimer?: NodeJS.Timeout;
   isDirty: boolean;
   isUntitled: boolean;
+  isSaving?: boolean;
+  isClosing?: boolean;
+  projectJson?: ProjectJson;
   lastSnapshot?: unknown;
 }
 

@@ -20,25 +20,25 @@ export async function activate(context: vscode.ExtensionContext) {
   const router = new MessageRouter(outputChannel, {
     onEngineReady: (projectId, payload) => {
       outputChannel.appendLine(`[engine] ready for ${projectId}: ${JSON.stringify(payload)}`);
-      const session = projectManager?.getSession(projectId);
-      if (session) {
-        session.engineReady = true;
-      }
+      projectManager?.onEngineReady(projectId, payload);
     },
     onEngineError: (projectId, payload) => {
       outputChannel.appendLine(`[engine] error for ${projectId}: ${JSON.stringify(payload)}`);
-      vscode.window.showErrorMessage(`Engine error in ${projectId}`);
+      projectManager?.onEngineError(projectId, payload);
     },
     onViewMessage: (projectId, message) => {
       outputChannel.appendLine(`[view] ${projectId}: ${message.type}`);
+      projectManager?.onViewMessage(projectId, message);
     },
   });
+  context.subscriptions.push(router);
 
   projectManager = new ProjectManager({
     context,
     outputChannel,
     router,
   });
+  context.subscriptions.push(projectManager);
 
   const getServerOrigin = () => projectManager?.getServerOrigin();
 
@@ -68,7 +68,8 @@ export async function activate(context: vscode.ExtensionContext) {
   await projectManager.initialize();
 }
 
-export function deactivate() {
-  void projectManager?.closeAll();
-  void releaseServer();
+export function deactivate(): Thenable<void> {
+  return Promise.all([projectManager?.closeAll() ?? Promise.resolve(), releaseServer()]).then(
+    () => undefined,
+  );
 }

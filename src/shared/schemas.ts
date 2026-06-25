@@ -32,10 +32,12 @@ export const trackSchema = z.object({
   inserts: z.array(z.unknown()),
 });
 
+const audioFilePathRegex = /^audio\/[\w\-. ]+\.\w+$/i;
+
 export const regionSchema = z.object({
   id: z.string().min(1),
   trackId: z.string().min(1),
-  audioFile: z.string().optional(),
+  audioFile: z.string().regex(audioFilePathRegex).optional(),
   start: z.number().int(),
   duration: z.number().int().positive(),
   offset: z.number().int().default(0),
@@ -49,7 +51,7 @@ export const regionSchema = z.object({
 
 export const projectJsonSchema = z.object({
   $schema: z.literal("vsdaw://project.json/v1"),
-  version: z.string(),
+  version: z.string().regex(/^\d+\.\d+\.\d+$/),
   createdBy: z.literal("vsdaw"),
   createdAt: z.string().datetime(),
   project: projectMetadataSchema,

@@ -37,7 +37,7 @@ export function getServerPort(): number | undefined {
 }
 
 async function startServerLocked(context: vscode.ExtensionContext): Promise<number> {
-  if (serverPort && serverProcess) {
+  if (serverPort && serverProcess && serverProcess.exitCode === null) {
     return serverPort;
   }
 
@@ -59,10 +59,19 @@ async function startServerLocked(context: vscode.ExtensionContext): Promise<numb
       return;
     }
 
-    const onError = (error: Error) => reject(error);
+    let settled = false;
+
+    const onError = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
     proc.on("error", onError);
     proc.on("exit", (code) => {
+      if (settled) return;
       if (!serverPort) {
+        settled = true;
         reject(new Error(`VSDAW audio server exited before announcing port (code ${code})`));
       }
     });
@@ -72,6 +81,8 @@ async function startServerLocked(context: vscode.ExtensionContext): Promise<numb
     });
 
     const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
       serverProcess?.kill();
       reject(new Error("VSDAW audio server did not announce port within 10 seconds"));
     }, 10000);
@@ -79,7 +90,8 @@ async function startServerLocked(context: vscode.ExtensionContext): Promise<numb
     proc.stdout?.on("data", (data) => {
       const text = data.toString();
       const match = text.match(/PORT:(\d+)/);
-      if (match) {
+      if (match && !settled) {
+        settled = true;
         clearTimeout(timeout);
         serverPort = Number.parseInt(match[1], 10);
         resolve(serverPort);
@@ -90,9 +102,25 @@ async function startServerLocked(context: vscode.ExtensionContext): Promise<numb
 
 async function stopServer(): Promise<void> {
   startPromise = undefined;
-  if (serverProcess) {
-    serverProcess.kill();
-    serverProcess = undefined;
-  }
+  const proc = serverProcess;
+  serverProcess = undefined;
   serverPort = undefined;
+
+  if (!proc || proc.exitCode !== null) {
+    return;
+  }
+
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      proc.kill("SIGKILL");
+      resolve();
+    }, 5000);
+
+    proc.once("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+
+    proc.kill();
+  });
 }

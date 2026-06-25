@@ -126,28 +126,30 @@ export const MixerStrip: React.FC<MixerStripProps> = ({
         style={{ width: "100%", accentColor: "var(--vsdaw-button-bg)" }}
       />
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%" }}>
-        {Array.from({ length: 4 }).map((_, i) => (
-          <button
-            key={i}
-            aria-label={`Insert slot ${i + 1}`}
-            onDoubleClick={() => onOpenInsert(i)}
-            style={{
-              height: 18,
-              border: "1px dashed var(--vsdaw-border)",
-              borderRadius: 2,
-              backgroundColor: "transparent",
-              color: "inherit",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Plus size={10} />
-          </button>
-        ))}
-      </div>
+      {!isMaster && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, width: "100%" }}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <button
+              key={i}
+              aria-label={`Insert slot ${i + 1}`}
+              onDoubleClick={() => onOpenInsert(i)}
+              style={{
+                height: 18,
+                border: "1px dashed var(--vsdaw-border)",
+                borderRadius: 2,
+                backgroundColor: "transparent",
+                color: "inherit",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Plus size={10} />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

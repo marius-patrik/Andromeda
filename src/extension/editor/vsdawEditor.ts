@@ -35,14 +35,40 @@ export class VsdawEditorProvider implements vscode.CustomEditorProvider<VsdawDoc
   async resolveCustomEditor(
     document: VsdawDocument,
     webviewPanel: vscode.WebviewPanel,
-    _token: vscode.CancellationToken,
+    token: vscode.CancellationToken,
   ): Promise<void> {
+    if (token.isCancellationRequested) {
+      return;
+    }
+
     webviewPanel.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "out", "webview")],
     };
 
-    const session = await this.projectManager.ensureProjectForDocument(document.uri, webviewPanel);
+    let session: Awaited<ReturnType<ProjectManager["ensureProjectForDocument"]>>;
+    try {
+      session = await this.projectManager.ensureProjectForDocument(
+        document.uri,
+        webviewPanel,
+        token,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.projectManager.outputChannel.appendLine(
+        `[editor] failed to resolve custom editor for ${document.uri.toString()}: ${message}`,
+      );
+      if (!(error instanceof vscode.CancellationError)) {
+        vscode.window.showErrorMessage(`VSDAW: ${message}`);
+      }
+      webviewPanel.dispose();
+      throw error;
+    }
+
+    if (token.isCancellationRequested) {
+      webviewPanel.dispose();
+      throw new vscode.CancellationError();
+    }
 
     setViewHtml({
       webview: webviewPanel.webview,
@@ -53,17 +79,34 @@ export class VsdawEditorProvider implements vscode.CustomEditorProvider<VsdawDoc
       serverOrigin: this.getServerOrigin() ?? "",
     });
 
-    webviewPanel.onDidChangeViewState((e) => {
-      if (e.webviewPanel.active) {
-        this.projectManager.setActiveProjectId(session.projectId);
-      }
-    });
+    const disposables: vscode.Disposable[] = [];
 
-    webviewPanel.onDidDispose(() => {
-      if (this.projectManager.getActiveProjectId() === session.projectId) {
-        this.projectManager.setActiveProjectId(undefined);
-      }
-    });
+    disposables.push(
+      webviewPanel.onDidChangeViewState((e) => {
+        if (e.webviewPanel.active) {
+          this.projectManager.setActiveProjectId(session.projectId);
+        }
+      }),
+    );
+
+    disposables.push(
+      this.projectManager.onDidChangeProject((changedProjectId) => {
+        if (changedProjectId === session.projectId) {
+          this._onDidChangeCustomDocument.fire({ document });
+        }
+      }),
+    );
+
+    disposables.push(
+      webviewPanel.onDidDispose(() => {
+        if (this.projectManager.getActiveProjectId() === session.projectId) {
+          this.projectManager.setActiveProjectId(undefined);
+        }
+        for (const d of disposables) {
+          d.dispose();
+        }
+      }),
+    );
   }
 
   async saveCustomDocument(
@@ -71,7 +114,7 @@ export class VsdawEditorProvider implements vscode.CustomEditorProvider<VsdawDoc
     cancellation: vscode.CancellationToken,
   ): Promise<void> {
     if (cancellation.isCancellationRequested) return;
-    await this.projectManager.saveProjectByUri(document.uri);
+    await this.projectManager.saveProjectByUri(document.uri, cancellation);
   }
 
   async saveCustomDocumentAs(
@@ -84,9 +127,7 @@ export class VsdawEditorProvider implements vscode.CustomEditorProvider<VsdawDoc
     if (!session) {
       throw new Error("No project session for document");
     }
-    session.uri = destination;
-    session.isUntitled = false;
-    await this.projectManager.saveProject(session.projectId);
+    await this.projectManager.saveProjectAs(session.projectId, destination, cancellation);
   }
 
   async revertCustomDocument(
@@ -101,6 +142,38 @@ export class VsdawEditorProvider implements vscode.CustomEditorProvider<VsdawDoc
     context: vscode.CustomDocumentBackupContext,
     _cancellation: vscode.CancellationToken,
   ): Promise<vscode.CustomDocumentBackup> {
+    const session = this.projectManager.getSessionByUri(document.uri);
+    let data: Uint8Array | undefined;
+
+    if (session?.engineReady) {
+      try {
+        const { MessageType } = await import("../../shared/protocol.js");
+        const response = await this.projectManager.router.requestEngine(
+          session.projectId,
+          MessageType.ProjectSave,
+          { format: "arraybuffer" },
+          { responseType: `${MessageType.ProjectSave}.ack`, timeoutMs: 30000 },
+        );
+        const bytes = response.payload as Uint8Array | ArrayBuffer | undefined;
+        if (bytes) {
+          data = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.projectManager.outputChannel.appendLine(`[backup] engine save failed: ${message}`);
+      }
+    }
+
+    if (!data) {
+      try {
+        data = await vscode.workspace.fs.readFile(document.uri);
+      } catch {
+        data = new Uint8Array();
+      }
+    }
+
+    await vscode.workspace.fs.writeFile(context.destination, data);
+
     return {
       id: context.destination.toString(),
       delete: async () => {

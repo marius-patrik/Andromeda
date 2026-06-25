@@ -62,5 +62,23 @@ const server = serve({
   },
 });
 
+function shutdown(): void {
+  try {
+    server.stop();
+  } catch {
+    // ignore
+  }
+}
+
+process.on("SIGINT", () => {
+  shutdown();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  shutdown();
+  process.exit(0);
+});
+
 console.log(`PORT:${server.port}`);
 console.error(`VSDAW audio server listening on http://127.0.0.1:${server.port}`);

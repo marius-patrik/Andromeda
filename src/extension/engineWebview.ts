@@ -34,7 +34,7 @@ export function setEngineWebviewHtml(
       <script nonce="${nonce}">
         (function () {
           const vscode = acquireVsCodeApi();
-          const origin = '${origin}';
+          const origin = ${JSON.stringify(origin)};
           window.addEventListener('message', function (event) {
             if (event.origin !== origin) return;
             vscode.postMessage(event.data);
@@ -77,5 +77,6 @@ export function createEngineWebview(
     },
   );
 
+  context.subscriptions.push(panel);
   return panel;
 }

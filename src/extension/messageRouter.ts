@@ -8,7 +8,7 @@ export interface MessageRouterCallbacks {
   onViewMessage: (projectId: string, message: MessageEnvelope) => void;
 }
 
-export class MessageRouter {
+export class MessageRouter implements vscode.Disposable {
   private engines = new Map<string, vscode.WebviewPanel>();
   private views = new Map<string, Set<vscode.WebviewPanel>>();
   private pending = new Map<string, Map<string, PendingRequest>>();
@@ -17,6 +17,18 @@ export class MessageRouter {
     private outputChannel: vscode.OutputChannel,
     private callbacks: MessageRouterCallbacks,
   ) {}
+
+  dispose(): void {
+    for (const [, map] of this.pending) {
+      for (const [, req] of map) {
+        clearTimeout(req.timeout);
+        req.reject(new Error("Message router disposed"));
+      }
+    }
+    this.pending.clear();
+    this.engines.clear();
+    this.views.clear();
+  }
 
   registerEngine(projectId: string, panel: vscode.WebviewPanel): void {
     this.engines.set(projectId, panel);
@@ -48,7 +60,7 @@ export class MessageRouter {
       }
       this.pending.delete(projectId);
     }
-    this.views.delete(projectId);
+    // Do NOT delete view registrations here; engine lifecycle is independent of views.
   }
 
   registerView(projectId: string, panel: vscode.WebviewPanel): void {
@@ -56,6 +68,9 @@ export class MessageRouter {
     if (!set) {
       set = new Set();
       this.views.set(projectId, set);
+    }
+    if (set.has(panel)) {
+      return;
     }
     set.add(panel);
 
@@ -110,7 +125,11 @@ export class MessageRouter {
       return;
     }
     const envelope: MessageEnvelope = { ...message, direction: "host-to-engine" };
-    panel.webview.postMessage(envelope);
+    Promise.resolve(panel.webview.postMessage(envelope)).catch((error) => {
+      this.outputChannel.appendLine(
+        `[router] failed to post to engine ${projectId}: ${String(error)}`,
+      );
+    });
   }
 
   routeToViews(projectId: string, message: Omit<MessageEnvelope, "direction">): void {
@@ -118,7 +137,11 @@ export class MessageRouter {
     const set = this.views.get(projectId);
     if (!set) return;
     for (const panel of set) {
-      panel.webview.postMessage(envelope);
+      Promise.resolve(panel.webview.postMessage(envelope)).catch((error) => {
+        this.outputChannel.appendLine(
+          `[router] failed to post to view ${projectId}: ${String(error)}`,
+        );
+      });
     }
   }
 
@@ -163,7 +186,10 @@ export class MessageRouter {
         payload,
         requestId,
       };
-      panel.webview.postMessage(envelope);
+      Promise.resolve(panel.webview.postMessage(envelope)).catch((error) => {
+        this.clearPending(projectId, requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      });
     });
   }
 
@@ -193,22 +219,21 @@ export class MessageRouter {
       );
       return;
     }
+    if (message.direction !== "engine-to-host") {
+      this.outputChannel.appendLine(
+        `[router] unexpected engine message direction: ${message.direction}`,
+      );
+      return;
+    }
 
     // Resolve pending requests first.
     if (message.requestId) {
-      const map = this.pending.get(projectId);
-      const req = map?.get(message.requestId);
-      if (req) {
-        if (!req.responseType || req.responseType === message.type) {
-          clearTimeout(req.timeout);
-          map?.delete(message.requestId);
-          if (map?.size === 0) {
-            this.pending.delete(projectId);
-          }
-          req.resolve(message);
-          return;
-        }
-      }
+      const resolved = this.tryResolvePending(projectId, message);
+      if (resolved) return;
+      this.outputChannel.appendLine(
+        `[router] dropping unmatched engine response: ${message.type} ${message.requestId}`,
+      );
+      return;
     }
 
     if (message.type === MessageType.EngineReady) {
@@ -229,6 +254,28 @@ export class MessageRouter {
     });
   }
 
+  private tryResolvePending(projectId: string, message: MessageEnvelope): boolean {
+    const map = this.pending.get(projectId);
+    if (!map || !message.requestId) return false;
+    const req = map.get(message.requestId);
+    if (!req) return false;
+
+    if (req.responseType && req.responseType !== message.type) {
+      this.outputChannel.appendLine(
+        `[router] response type mismatch for ${message.requestId}: expected ${req.responseType}, got ${message.type}`,
+      );
+      return true;
+    }
+
+    clearTimeout(req.timeout);
+    map.delete(message.requestId);
+    if (map.size === 0) {
+      this.pending.delete(projectId);
+    }
+    req.resolve(message);
+    return true;
+  }
+
   private handleViewMessage(projectId: string, raw: unknown): void {
     const parse = MessageSchema.safeParse(raw);
     if (!parse.success) {
@@ -239,6 +286,12 @@ export class MessageRouter {
     if (message.projectId !== projectId) {
       this.outputChannel.appendLine(
         `[router] view message projectId mismatch: ${message.projectId} vs ${projectId}`,
+      );
+      return;
+    }
+    if (message.direction !== "view-to-host") {
+      this.outputChannel.appendLine(
+        `[router] unexpected view message direction: ${message.direction}`,
       );
       return;
     }

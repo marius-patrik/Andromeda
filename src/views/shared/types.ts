@@ -76,6 +76,7 @@ export type ViewMessage =
   | { type: "transport/toggleMetronome" }
   | { type: "transport/setTempo"; bpm: number }
   | { type: "transport/setTimeSignature"; timeSignature: TimeSignature }
+  | { type: "transport/seek"; beats: number }
   | { type: "track/setMute"; trackId: string; muted: boolean }
   | { type: "track/setSolo"; trackId: string; soloed: boolean }
   | { type: "track/setArm"; trackId: string; armed: boolean }

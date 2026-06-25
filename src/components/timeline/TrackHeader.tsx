@@ -1,4 +1,4 @@
-import { Headphones, Mic, Volume2, VolumeX } from "lucide-react";
+import { Mic, Volume2, VolumeX } from "lucide-react";
 import type * as React from "react";
 import type { TrackState } from "../../views/shared/types.js";
 
@@ -28,7 +28,7 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
       style={{
         width: 180,
         minWidth: 180,
-        height: track.height,
+        height: Math.max(60, track.height || 60),
         padding: "4px 6px",
         borderRight: "1px solid var(--vsdaw-border)",
         borderBottom: "1px solid var(--vsdaw-border)",
@@ -93,8 +93,11 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: "auto" }}>
-        <label style={{ fontSize: 10, opacity: 0.8 }}>VOL</label>
+        <label htmlFor={`vol-${track.id}`} style={{ fontSize: 10, opacity: 0.8, minWidth: 20 }}>
+          VOL
+        </label>
         <input
+          id={`vol-${track.id}`}
           aria-label="Volume"
           type="range"
           min={0}
@@ -104,10 +107,24 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
           onChange={(e) => onVolume(Number.parseFloat(e.target.value))}
           style={{ flex: 1, accentColor: "var(--vsdaw-button-bg)" }}
         />
+        <span
+          aria-hidden
+          style={{
+            fontSize: 10,
+            fontVariantNumeric: "tabular-nums",
+            minWidth: 28,
+            textAlign: "right",
+          }}
+        >
+          {Math.round(track.volume * 100)}%
+        </span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <label style={{ fontSize: 10, opacity: 0.8 }}>PAN</label>
+        <label htmlFor={`pan-${track.id}`} style={{ fontSize: 10, opacity: 0.8, minWidth: 20 }}>
+          PAN
+        </label>
         <input
+          id={`pan-${track.id}`}
           aria-label="Pan"
           type="range"
           min={-1}
@@ -117,6 +134,21 @@ export const TrackHeader: React.FC<TrackHeaderProps> = ({
           onChange={(e) => onPan(Number.parseFloat(e.target.value))}
           style={{ flex: 1, accentColor: "var(--vsdaw-button-bg)" }}
         />
+        <span
+          aria-hidden
+          style={{
+            fontSize: 10,
+            fontVariantNumeric: "tabular-nums",
+            minWidth: 28,
+            textAlign: "right",
+          }}
+        >
+          {track.pan > 0
+            ? `R${Math.round(track.pan * 100)}`
+            : track.pan < 0
+              ? `L${Math.round(-track.pan * 100)}`
+              : "C"}
+        </span>
       </div>
     </div>
   );
@@ -130,6 +162,7 @@ const TrackButton: React.FC<{
   children: React.ReactNode;
 }> = ({ ariaLabel, active, onClick, color, children }) => (
   <button
+    type="button"
     aria-label={ariaLabel}
     aria-pressed={active}
     onClick={onClick}

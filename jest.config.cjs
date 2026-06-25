@@ -13,8 +13,8 @@ module.exports = {
   },
   testMatch: ["<rootDir>/tests/unit/**/*.test.ts", "<rootDir>/src/**/*.test.ts"],
   collectCoverageFrom: [
-    "src/extension/**/*.ts",
     "src/shared/**/*.ts",
+    "src/engine/messageHandlers.ts",
     "!src/**/*.d.ts",
     "!src/**/*.test.ts",
   ],
@@ -23,6 +23,7 @@ module.exports = {
       lines: 70,
     },
   },
+  coverageReporters: ["text", "lcov"],
   moduleNameMapper: {
     "^(\\.{1,2}/.*)\\.js$": "$1",
   },

@@ -5,23 +5,34 @@ import * as vscode from "vscode";
 import { createEmptyProject, writeBundle } from "../../src/shared/bundle.js";
 
 const EXTENSION_ID = "marius-patrik.vsdaw";
-
-function getWorkspacePath(): string {
-  return path.resolve(__dirname, "..", "..", "workspace");
-}
-
-function getFixturePath(): string {
-  return path.resolve(__dirname, "..", "..", "fixtures", "sample.vsdaw");
-}
+const FIXTURE_PATH = path.resolve(
+  process.cwd(),
+  "tests",
+  "integration",
+  "fixtures",
+  "sample.vsdaw",
+);
 
 async function ensureSampleFixture(): Promise<void> {
-  const fixturePath = getFixturePath();
-  if (fs.existsSync(fixturePath)) return;
+  if (fs.existsSync(FIXTURE_PATH)) return;
 
   const project = createEmptyProject("Sample", 48000);
   const bytes = await writeBundle(project);
-  fs.mkdirSync(path.dirname(fixturePath), { recursive: true });
-  fs.writeFileSync(fixturePath, bytes);
+  fs.mkdirSync(path.dirname(FIXTURE_PATH), { recursive: true });
+  fs.writeFileSync(FIXTURE_PATH, bytes);
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  timeoutMs = 5000,
+  intervalMs = 100,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("Condition was not met within timeout");
 }
 
 suite("VSDAW Extension Integration", () => {
@@ -47,25 +58,22 @@ suite("VSDAW Extension Integration", () => {
     }
 
     await vscode.commands.executeCommand("vsdaw.newProject");
-    await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    const created =
-      fs.existsSync(path.join(workspacePath, "Untitled.vsdaw")) ||
-      fs.existsSync(path.join(workspacePath, "Untitled-1.vsdaw"));
-    assert.ok(created, "Expected a new .vsdaw file in the workspace");
+    await waitForCondition(
+      () =>
+        fs.existsSync(path.join(workspacePath, "Untitled.vsdaw")) ||
+        fs.existsSync(path.join(workspacePath, "Untitled-1.vsdaw")),
+    );
   });
 
   test("opens a .vsdaw file and loads the engine webview", async () => {
     await ensureSampleFixture();
-    const uri = vscode.Uri.file(getFixturePath());
+    const uri = vscode.Uri.file(FIXTURE_PATH);
     await vscode.commands.executeCommand("vscode.openWith", uri, "vsdaw.editor");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs);
-    assert.ok(tabs.length > 0, "No tabs were opened");
-    assert.ok(
-      tabs.some((tab) => tab.label.includes("VSDAW") || tab.label.includes("Sample")),
-      "Expected a VSDAW tab to be open",
-    );
+    await waitForCondition(() => {
+      const tabs = vscode.window.tabGroups.all.flatMap((group) => group.tabs);
+      return tabs.some((tab) => tab.label.includes("VSDAW") || tab.label.includes("Sample"));
+    });
   });
 });

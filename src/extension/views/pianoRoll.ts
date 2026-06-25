@@ -15,6 +15,7 @@ export class PianoRollWebviewProvider {
       router: this.router,
       projectId,
       viewType: "vsdaw.pianoRoll",
+      bundleName: "pianoRoll",
       title: `Piano Roll (${projectId.slice(0, 8)})`,
       column: vscode.ViewColumn.Beside,
       serverOrigin: this.getServerOrigin() ?? "",

@@ -15,6 +15,7 @@ export class GraphWebviewProvider {
       router: this.router,
       projectId,
       viewType: "vsdaw.graph",
+      bundleName: "graph",
       title: `Graph (${projectId.slice(0, 8)})`,
       column: vscode.ViewColumn.Beside,
       serverOrigin: this.getServerOrigin() ?? "",

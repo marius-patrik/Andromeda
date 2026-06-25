@@ -52,6 +52,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onExport,
 }) => {
   const [showOverflow, setShowOverflow] = React.useState(false);
+  const overflowRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (!showOverflow) return;
+    const handleClick = (e: MouseEvent) => {
+      if (!overflowRef.current?.contains(e.target as Node)) {
+        setShowOverflow(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showOverflow]);
 
   return (
     <div
@@ -95,8 +107,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         onSetTimeSignature={onSetTimeSignature}
       />
 
-      <div className="relative ml-auto">
+      <div className="relative ml-auto" ref={overflowRef}>
         <button
+          type="button"
           aria-label="Overflow menu"
           aria-haspopup="menu"
           aria-expanded={showOverflow}
@@ -117,11 +130,28 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           >
             <OverflowItem
               icon={<LayoutGrid size={14} />}
-              label="Show tabs"
-              onClick={() => onShowView(view as ViewName)}
+              label="Show timeline"
+              onClick={() => {
+                setShowOverflow(false);
+                onShowView("timeline");
+              }}
             />
-            <OverflowItem icon={<Settings size={14} />} label="Settings" onClick={onSettings} />
-            <OverflowItem icon={<Download size={14} />} label="Export" onClick={onExport} />
+            <OverflowItem
+              icon={<Settings size={14} />}
+              label="Settings"
+              onClick={() => {
+                setShowOverflow(false);
+                onSettings();
+              }}
+            />
+            <OverflowItem
+              icon={<Download size={14} />}
+              label="Export"
+              onClick={() => {
+                setShowOverflow(false);
+                onExport();
+              }}
+            />
           </div>
         )}
       </div>
@@ -135,6 +165,7 @@ const OverflowItem: React.FC<{
   onClick: () => void;
 }> = ({ icon, label, onClick }) => (
   <button
+    type="button"
     role="menuitem"
     onClick={onClick}
     className="flex items-center gap-2 w-full px-2.5 py-1.5 text-left bg-transparent border-0 text-inherit cursor-pointer"

@@ -83,6 +83,7 @@ export function useViewState(view: ViewName) {
     setTempo: (value: number) => send({ type: "transport/setTempo", bpm: value }),
     setTimeSignature: (value: TimeSignature) =>
       send({ type: "transport/setTimeSignature", timeSignature: value }),
+    seek: (beats: number) => send({ type: "transport/seek", beats }),
   };
 
   const trackActions = {

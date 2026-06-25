@@ -4,7 +4,8 @@
     "module": "CommonJS",
     "moduleResolution": "node",
     "isolatedModules": false,
-    "noEmit": false
+    "noEmit": false,
+    "types": ["node", "jest"]
   },
-  "include": ["src/shared/**/*", "tests/unit/**/*"]
+  "include": ["src/shared/**/*", "src/engine/messageHandlers.ts", "tests/unit/**/*"]
 }

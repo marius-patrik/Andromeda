@@ -22,6 +22,8 @@ export interface GraphViewProps {
 
 const NODE_WIDTH = 120;
 const NODE_HEIGHT = 48;
+const VIEWBOX_WIDTH = 800;
+const VIEWBOX_HEIGHT = 600;
 
 export const GraphView: React.FC<GraphViewProps> = ({ nodes, edges, onNodeMove, onConnect }) => {
   const svgRef = React.useRef<SVGSVGElement>(null);
@@ -32,7 +34,7 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, edges, onNodeMove, 
     null,
   );
 
-  const toSvgPoint = (e: React.MouseEvent) => {
+  const toSvgPoint = (e: { clientX: number; clientY: number }) => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
     const pt = svg.createSVGPoint();
@@ -80,7 +82,7 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, edges, onNodeMove, 
       ref={svgRef}
       role="img"
       aria-label="Routing graph"
-      viewBox="0 0 800 600"
+      viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
       style={{ width: "100%", height: "100%", backgroundColor: "var(--vsdaw-bg)" }}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -98,6 +100,20 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, edges, onNodeMove, 
           <path d="M0,0 L0,6 L9,3 z" fill="var(--vsdaw-fg)" />
         </marker>
       </defs>
+      {nodes.length === 0 && (
+        <text
+          x={VIEWBOX_WIDTH / 2}
+          y={VIEWBOX_HEIGHT / 2}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={14}
+          fill="var(--vsdaw-fg)"
+          opacity={0.5}
+          pointerEvents="none"
+        >
+          No routing nodes
+        </text>
+      )}
       {edges.map((edge) => {
         const from = nodes.find((n) => n.id === edge.from);
         const to = nodes.find((n) => n.id === edge.to);
@@ -118,8 +134,8 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, edges, onNodeMove, 
       })}
       {connecting && (
         <line
-          x1={nodes.find((n) => n.id === connecting.from)?.x + NODE_WIDTH}
-          y1={nodes.find((n) => n.id === connecting.from)?.y + NODE_HEIGHT / 2}
+          x1={nodes.find((n) => n.id === connecting.from)?.x ?? 0 + NODE_WIDTH}
+          y1={nodes.find((n) => n.id === connecting.from)?.y ?? 0 + NODE_HEIGHT / 2}
           x2={connecting.x}
           y2={connecting.y}
           stroke="var(--vsdaw-button-bg)"

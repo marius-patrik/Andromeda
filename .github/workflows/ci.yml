@@ -10,6 +10,7 @@ jobs:
   build:
     name: ${{ matrix.os }} / ${{ matrix.runtime }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +49,9 @@ jobs:
 
       - name: Typecheck
         run: ${{ matrix.runtime == 'bun' && 'bun run' || 'npm run' }} typecheck
+
+      - name: Typecheck engine
+        run: ${{ matrix.runtime == 'bun' && 'bun run' || 'npm run' }} typecheck:engine
 
       - name: Unit tests
         run: ${{ matrix.runtime == 'bun' && 'bun run' || 'npm run' }} test -- --coverage

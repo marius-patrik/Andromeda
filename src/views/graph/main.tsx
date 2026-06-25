@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { type GraphEdge, type GraphNode, GraphView } from "../../components/graph/GraphView.js";
+import { ErrorBoundary } from "../../components/shared/ErrorBoundary.js";
 import { PanelShell } from "../../components/shared/PanelShell.js";
 import { ThemeProvider } from "../../components/shared/ThemeProvider.js";
 import { Toolbar } from "../../components/shared/Toolbar.js";
@@ -36,34 +37,36 @@ const GraphPage: React.FC = () => {
   };
 
   return (
-    <ThemeProvider>
-      <PanelShell>
-        <Toolbar
-          view="Graph"
-          projectName={state.projectName}
-          saved={state.saved}
-          isPlaying={state.isPlaying}
-          isRecording={state.isRecording}
-          isLooping={state.isLooping}
-          isMetronomeEnabled={state.isMetronomeEnabled}
-          position={state.position}
-          bpm={state.bpm}
-          timeSignature={state.timeSignature}
-          onPlay={state.transport.play}
-          onPause={state.transport.pause}
-          onStop={state.transport.stop}
-          onRecord={state.transport.record}
-          onToggleLoop={state.transport.toggleLoop}
-          onToggleMetronome={state.transport.toggleMetronome}
-          onSetTempo={state.transport.setTempo}
-          onSetTimeSignature={state.transport.setTimeSignature}
-          onShowView={state.commands.showView}
-          onSettings={() => state.commands.showView("browser")}
-          onExport={state.commands.export}
-        />
-        <GraphView nodes={nodes} edges={edges} onNodeMove={onNodeMove} onConnect={onConnect} />
-      </PanelShell>
-    </ThemeProvider>
+    <ErrorBoundary viewName="Graph">
+      <ThemeProvider>
+        <PanelShell>
+          <Toolbar
+            view="Graph"
+            projectName={state.projectName}
+            saved={state.saved}
+            isPlaying={state.isPlaying}
+            isRecording={state.isRecording}
+            isLooping={state.isLooping}
+            isMetronomeEnabled={state.isMetronomeEnabled}
+            position={state.position}
+            bpm={state.bpm}
+            timeSignature={state.timeSignature}
+            onPlay={state.transport.play}
+            onPause={state.transport.pause}
+            onStop={state.transport.stop}
+            onRecord={state.transport.record}
+            onToggleLoop={state.transport.toggleLoop}
+            onToggleMetronome={state.transport.toggleMetronome}
+            onSetTempo={state.transport.setTempo}
+            onSetTimeSignature={state.transport.setTimeSignature}
+            onShowView={state.commands.showView}
+            onSettings={() => state.commands.showView("browser")}
+            onExport={state.commands.export}
+          />
+          <GraphView nodes={nodes} edges={edges} onNodeMove={onNodeMove} onConnect={onConnect} />
+        </PanelShell>
+      </ThemeProvider>
+    </ErrorBoundary>
   );
 };
 

@@ -6,6 +6,7 @@ const BEAT_WIDTH = 80;
 const PITCH_MIN = 24;
 const PITCH_MAX = 108;
 const PITCH_COUNT = PITCH_MAX - PITCH_MIN + 1;
+const VISIBLE_BEATS = 16;
 
 export interface PianoRollGridProps {
   notes: NoteState[];
@@ -30,8 +31,9 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
     | { type: "resize"; noteId: string; startDuration: number; startX: number }
     | null
   >(null);
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
 
-  const totalWidth = 16 * BEAT_WIDTH; // 16 beats visible
+  const totalWidth = VISIBLE_BEATS * BEAT_WIDTH;
   const totalHeight = PITCH_COUNT * KEY_HEIGHT;
 
   const xToBeats = (x: number) => x / BEAT_WIDTH;
@@ -43,15 +45,19 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
     return Math.round(beats / grid) * grid;
   };
 
-  const handleBackgroundClick = (e: React.MouseEvent<SVGRectElement>) => {
-    if (drag) return;
+  const toSvgPoint = (e: { clientX: number; clientY: number }) => {
     const svg = svgRef.current;
-    if (!svg) return;
+    if (!svg) return { x: 0, y: 0 };
     const pt = svg.createSVGPoint();
     pt.x = e.clientX;
     pt.y = e.clientY;
-    const cursor = pt.matrixTransform(svg.getScreenCTM()?.inverse());
-    const start = snapBeats(xToBeats(cursor.x));
+    return pt.matrixTransform(svg.getScreenCTM()?.inverse());
+  };
+
+  const handleBackgroundClick = (e: React.MouseEvent<SVGRectElement>) => {
+    if (drag) return;
+    const cursor = toSvgPoint(e);
+    const start = snapBeats(xToBeats(cursor.x - 60));
     const pitch = yToPitch(cursor.y);
     if (pitch >= PITCH_MIN && pitch <= PITCH_MAX) {
       onAddNote({ start, duration: 0.5, pitch, velocity: 100 });
@@ -60,12 +66,8 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
 
   const handleNoteMouseDown = (e: React.MouseEvent, note: NoteState, action: "move" | "resize") => {
     e.stopPropagation();
-    const svg = svgRef.current;
-    if (!svg) return;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const cursor = pt.matrixTransform(svg.getScreenCTM()?.inverse());
+    setSelectedId(note.id);
+    const cursor = toSvgPoint(e);
 
     if (action === "move") {
       setDrag({
@@ -86,12 +88,7 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!drag) return;
-    const svg = svgRef.current;
-    if (!svg) return;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const cursor = pt.matrixTransform(svg.getScreenCTM()?.inverse());
+    const cursor = toSvgPoint(e);
 
     if (drag.type === "move") {
       const rawStart = xToBeats(cursor.x) - drag.startOffset;
@@ -108,13 +105,18 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
   const handleMouseUp = () => setDrag(null);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (
-      (e.key === "Delete" || e.key === "Backspace") &&
-      document.activeElement?.getAttribute("data-note-id")
-    ) {
-      onDeleteNote(document.activeElement.getAttribute("data-note-id")!);
+    if (e.key === "Delete" || e.key === "Backspace") {
+      const target = document.activeElement;
+      const noteId = target?.getAttribute("data-note-id") ?? selectedId;
+      if (noteId) {
+        e.preventDefault();
+        onDeleteNote(noteId);
+        setSelectedId(null);
+      }
     }
   };
+
+  const blackKeyIndices = React.useMemo(() => new Set([1, 3, 6, 8, 10]), []);
 
   return (
     <svg
@@ -129,6 +131,7 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
       style={{
         width: "100%",
         height: "100%",
+        minWidth: totalWidth + 60,
         cursor: drag ? (drag.type === "resize" ? "e-resize" : "grabbing") : "default",
       }}
     >
@@ -144,16 +147,16 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
       {Array.from({ length: PITCH_COUNT + 1 }).map((_, i) => {
         const y = i * KEY_HEIGHT;
         const pitch = PITCH_MAX - i;
-        const isBlack = [1, 3, 6, 8, 10].includes(pitch % 12);
+        const isBlack = blackKeyIndices.has(pitch % 12);
         return (
-          <g key={i}>
+          <g key={`row-${pitch}`}>
             <rect
               x={0}
               y={y}
               width={60}
               height={KEY_HEIGHT}
-              fill={isBlack ? "#1e1e1e" : "#f3f3f3"}
-              opacity={0.2}
+              fill={isBlack ? "var(--vsdaw-input-bg)" : "var(--vsdaw-panel-bg)"}
+              opacity={isBlack ? 0.6 : 0.3}
             />
             <line
               x1={0}
@@ -171,11 +174,11 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
           </g>
         );
       })}
-      {Array.from({ length: 16 * 4 + 1 }).map((_, i) => {
+      {Array.from({ length: VISIBLE_BEATS * 4 + 1 }).map((_, i) => {
         const x = 60 + (i / 4) * BEAT_WIDTH;
         return (
           <line
-            key={i}
+            key={`grid-${x}`}
             x1={x}
             y1={0}
             x2={x}
@@ -192,6 +195,7 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
         const y = (PITCH_MAX - note.pitch) * KEY_HEIGHT;
         const x = 60 + note.start * BEAT_WIDTH;
         const w = Math.max(2, note.duration * BEAT_WIDTH);
+        const isSelected = selectedId === note.id;
         return (
           <g key={note.id}>
             <rect
@@ -204,9 +208,10 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
               height={KEY_HEIGHT - 2}
               rx={2}
               fill="var(--vsdaw-button-bg)"
-              stroke="var(--vsdaw-focus)"
-              strokeWidth={0.5}
+              stroke={isSelected ? "var(--vsdaw-button-fg)" : "var(--vsdaw-focus)"}
+              strokeWidth={isSelected ? 2 : 0.5}
               onMouseDown={(e) => handleNoteMouseDown(e, note, "move")}
+              onFocus={() => setSelectedId(note.id)}
             />
             <rect
               x={x + w - 6}
@@ -220,6 +225,21 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
           </g>
         );
       })}
+
+      {notes.length === 0 && (
+        <text
+          x={(totalWidth + 60) / 2}
+          y={totalHeight / 2}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={12}
+          fill="var(--vsdaw-fg)"
+          opacity={0.5}
+          pointerEvents="none"
+        >
+          Click on the grid to add notes
+        </text>
+      )}
     </svg>
   );
 };

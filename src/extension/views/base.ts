@@ -20,13 +20,19 @@ export function setViewHtml(options: ViewHtmlOptions): void {
     vscode.Uri.joinPath(extensionUri, "out", "webview", "views", `${resolvedBundleName}.js`),
   );
 
+  const frameSrc = serverOrigin ? `frame-src ${serverOrigin};` : "";
+  const connectSrc = serverOrigin
+    ? `connect-src ${serverOrigin} ${cspSource};`
+    : `connect-src ${cspSource};`;
+  const csp = `default-src 'none'; ${frameSrc} script-src 'nonce-${nonce}' ${cspSource}; style-src 'unsafe-inline' ${cspSource}; ${connectSrc} img-src data: blob: ${cspSource}; font-src ${cspSource};`;
+
   webview.html = `
     <!DOCTYPE html>
     <html lang="en">
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src ${serverOrigin}; script-src 'nonce-${nonce}' ${cspSource}; style-src 'unsafe-inline' ${cspSource}; connect-src ${serverOrigin} ${cspSource}; img-src data: blob: ${cspSource}; font-src ${cspSource};">
+      <meta http-equiv="Content-Security-Policy" content="${csp}">
       <style>
         html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: var(--vscode-editor-background, #1e1e1e); color: var(--vscode-foreground, #cccccc); font-family: var(--vscode-font-family); }
         #root { width: 100%; height: 100%; display: flex; flex-direction: column; }
@@ -56,7 +62,7 @@ export function setViewHtml(options: ViewHtmlOptions): void {
           });
         })();
       </script>
-      <script nonce="${nonce}" src="${bundleUri.toString()}" onerror="document.getElementById('status').textContent = 'Failed to load view bundle'"></script>
+      <script nonce="${nonce}" src="${bundleUri.toString()}" onerror="const s=document.getElementById('status'); if(s) s.textContent='Failed to load view bundle'"></script>
     </body>
     </html>
   `;
@@ -70,10 +76,11 @@ export interface ViewPanelOptions {
   title: string;
   column: vscode.ViewColumn;
   serverOrigin: string;
+  bundleName?: string;
 }
 
 export function createViewPanel(options: ViewPanelOptions): vscode.WebviewPanel {
-  const { context, router, projectId, viewType, title, column, serverOrigin } = options;
+  const { context, router, projectId, viewType, title, column, serverOrigin, bundleName } = options;
 
   const existing = router.findView(projectId, viewType);
   if (existing) {
@@ -92,6 +99,7 @@ export function createViewPanel(options: ViewPanelOptions): vscode.WebviewPanel 
     extensionUri: context.extensionUri,
     projectId,
     viewType,
+    bundleName,
     serverOrigin,
   });
 

@@ -24,6 +24,18 @@ function formatSeconds(seconds: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(ms).padStart(2, "0")}`;
 }
 
+function clampBpm(value: number): number {
+  return Math.max(1, Math.min(999, Number.isFinite(value) ? value : 120));
+}
+
+function parseTimeSignature(text: string): TimeSignature | null {
+  const parts = text.split("/").map((s) => Number.parseInt(s.trim(), 10));
+  if (parts.length !== 2) return null;
+  const [num, den] = parts;
+  if (!num || !den || num < 1 || num > 64 || den < 1 || (den & (den - 1)) !== 0) return null;
+  return { numerator: num, denominator: den };
+}
+
 export const TimeDisplay: React.FC<TimeDisplayProps> = ({
   position,
   bpm,
@@ -38,15 +50,23 @@ export const TimeDisplay: React.FC<TimeDisplayProps> = ({
     setTempoValue(String(bpm));
   }, [bpm]);
 
+  const commitTempo = () => {
+    const value = Number.parseFloat(tempoValue);
+    if (!Number.isNaN(value)) onSetTempo(clampBpm(value));
+    setEditingTempo(false);
+  };
+
   return (
-    <div
-      role="group"
+    <fieldset
       aria-label="Time display"
       style={{
         display: "flex",
         alignItems: "center",
         gap: 8,
         fontVariantNumeric: "tabular-nums",
+        border: 0,
+        margin: 0,
+        padding: 0,
       }}
     >
       <div
@@ -82,19 +102,10 @@ export const TimeDisplay: React.FC<TimeDisplayProps> = ({
           min={1}
           max={999}
           onChange={(e) => setTempoValue(e.target.value)}
-          onBlur={() => {
-            const value = Number.parseFloat(tempoValue);
-            if (!Number.isNaN(value) && value > 0) onSetTempo(value);
-            setEditingTempo(false);
-          }}
+          onBlur={commitTempo}
           onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              const value = Number.parseFloat(tempoValue);
-              if (!Number.isNaN(value) && value > 0) onSetTempo(value);
-              setEditingTempo(false);
-            } else if (e.key === "Escape") {
-              setEditingTempo(false);
-            }
+            if (e.key === "Enter") commitTempo();
+            else if (e.key === "Escape") setEditingTempo(false);
           }}
           style={{
             width: 50,
@@ -107,6 +118,7 @@ export const TimeDisplay: React.FC<TimeDisplayProps> = ({
         />
       ) : (
         <button
+          type="button"
           aria-label={`Tempo ${bpm} BPM`}
           onClick={() => setEditingTempo(true)}
           style={{
@@ -122,7 +134,7 @@ export const TimeDisplay: React.FC<TimeDisplayProps> = ({
         </button>
       )}
       <TimeSignatureEditor value={timeSignature} onChange={onSetTimeSignature} />
-    </div>
+    </fieldset>
   );
 };
 
@@ -137,24 +149,21 @@ const TimeSignatureEditor: React.FC<{
     setText(`${value.numerator}/${value.denominator}`);
   }, [value]);
 
+  const commit = () => {
+    const parsed = parseTimeSignature(text);
+    if (parsed) onChange(parsed);
+    setEditing(false);
+  };
+
   return editing ? (
     <input
       aria-label="Time signature"
       value={text}
       onChange={(e) => setText(e.target.value)}
-      onBlur={() => {
-        const [num, den] = text.split("/").map((s) => Number.parseInt(s, 10));
-        if (num && den) onChange({ numerator: num, denominator: den });
-        setEditing(false);
-      }}
+      onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          const [num, den] = text.split("/").map((s) => Number.parseInt(s, 10));
-          if (num && den) onChange({ numerator: num, denominator: den });
-          setEditing(false);
-        } else if (e.key === "Escape") {
-          setEditing(false);
-        }
+        if (e.key === "Enter") commit();
+        else if (e.key === "Escape") setEditing(false);
       }}
       style={{
         width: 50,
@@ -167,6 +176,7 @@ const TimeSignatureEditor: React.FC<{
     />
   ) : (
     <button
+      type="button"
       aria-label={`Time signature ${value.numerator}/${value.denominator}`}
       onClick={() => setEditing(true)}
       style={{

@@ -1,16 +1,42 @@
-.gitignore
-.github/**
-.vscode/**
-node_modules/**
-scripts/**
+# Build tooling and source maps
+*.map
+out/**/*.map
+
+# Source code and tests (compiled outputs live under out/)
 src/**
+tests/**
+scripts/**
 specs/**
 plans/**
-docs/**
-tests/**
+
+# Development/configuration files
+.github/**
+.vscode/**
+.vscode-test.mjs
+.husky/**
+node_modules/**
+.env*
 *.log
 *.vsix
-.env*
 
-# Keep build outputs but strip source maps from the package.
-out/**/*.map
+# Build/test artifacts
+out/tests/**
+out/fixtures/**
+out/workspace/**
+public/**
+coverage/**
+
+# Tooling configs
+biome.json
+jest.config.cjs
+postcss.config.js
+tailwind.config.js
+tsconfig.json
+tsconfig.test.json
+bun.lock
+
+# Documentation (keep README and CHANGELOG at root for marketplace)
+docs/**
+
+# Notices and license are kept by VSCE automatically
+# Keep: package.json, README.md, CHANGELOG.md, LICENSE, ThirdPartyNotices.txt, media/, out/extension/, out/webview/

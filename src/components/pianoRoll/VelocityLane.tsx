@@ -3,6 +3,7 @@ import type { NoteState } from "../../views/shared/types.js";
 
 const LANE_HEIGHT = 80;
 const BEAT_WIDTH = 80;
+const VISIBLE_BEATS = 16;
 
 export interface VelocityLaneProps {
   notes: NoteState[];
@@ -13,24 +14,28 @@ export const VelocityLane: React.FC<VelocityLaneProps> = ({ notes, onSetVelocity
   const svgRef = React.useRef<SVGSVGElement>(null);
   const [dragId, setDragId] = React.useState<string | null>(null);
 
-  const totalWidth = 16 * BEAT_WIDTH;
+  const totalWidth = VISIBLE_BEATS * BEAT_WIDTH;
+
+  const toSvgPoint = (e: { clientX: number; clientY: number }) => {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    return pt.matrixTransform(svg.getScreenCTM()?.inverse());
+  };
+
+  const updateVelocity = (e: { clientX: number; clientY: number }) => {
+    if (!dragId) return;
+    const cursor = toSvgPoint(e);
+    const velocity = Math.max(0, Math.min(127, Math.round((1 - cursor.y / LANE_HEIGHT) * 127)));
+    onSetVelocity(dragId, velocity);
+  };
 
   const handleMouseDown = (e: React.MouseEvent, note: NoteState) => {
     e.stopPropagation();
     setDragId(note.id);
     updateVelocity(e);
-  };
-
-  const updateVelocity = (e: React.MouseEvent) => {
-    if (!dragId) return;
-    const svg = svgRef.current;
-    if (!svg) return;
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-    const cursor = pt.matrixTransform(svg.getScreenCTM()?.inverse());
-    const velocity = Math.max(0, Math.min(127, Math.round((1 - cursor.y / LANE_HEIGHT) * 127)));
-    onSetVelocity(dragId, velocity);
   };
 
   return (
@@ -39,7 +44,12 @@ export const VelocityLane: React.FC<VelocityLaneProps> = ({ notes, onSetVelocity
       role="img"
       aria-label="Velocity lane"
       viewBox={`0 0 ${totalWidth + 60} ${LANE_HEIGHT}`}
-      style={{ width: "100%", height: LANE_HEIGHT, borderTop: "1px solid var(--vsdaw-border)" }}
+      style={{
+        width: "100%",
+        minWidth: totalWidth + 60,
+        height: LANE_HEIGHT,
+        borderTop: "1px solid var(--vsdaw-border)",
+      }}
       onMouseMove={updateVelocity}
       onMouseUp={() => setDragId(null)}
       onMouseLeave={() => setDragId(null)}
@@ -56,6 +66,20 @@ export const VelocityLane: React.FC<VelocityLaneProps> = ({ notes, onSetVelocity
           strokeDasharray="2 2"
         />
       ))}
+      {notes.length === 0 && (
+        <text
+          x={(totalWidth + 60) / 2}
+          y={LANE_HEIGHT / 2}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={11}
+          fill="var(--vsdaw-fg)"
+          opacity={0.4}
+          pointerEvents="none"
+        >
+          No notes
+        </text>
+      )}
       {notes.map((note) => {
         const x = 60 + note.start * BEAT_WIDTH;
         const w = Math.max(4, note.duration * BEAT_WIDTH);

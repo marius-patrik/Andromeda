@@ -5,10 +5,14 @@ import {
   AudioRegionBoxAdapter,
   type AudioUnitBoxAdapter,
   AudioUnitFactory,
+  Devices,
+  type ExportConfiguration,
+  type InstrumentBox,
   InstrumentFactories,
   type NoteEventBoxAdapter,
   NoteEventCollectionBoxAdapter,
   NoteRegionBoxAdapter,
+  RegionAdapters,
   RegionEditing,
   TrackType as SdkTrackType,
   type TrackBoxAdapter,
@@ -24,11 +28,13 @@ import {
 import {
   AudioOfflineRenderer,
   type AudioWorklets,
+  CaptureAudio,
+  CaptureMidi,
   EffectFactories,
   type EffectFactory,
-  type ExportConfiguration,
   GlobalSampleLoaderManager,
   GlobalSoundfontLoaderManager,
+  MidiDevices,
   Project,
   type ProjectEnv,
   SampleService,
@@ -60,6 +66,14 @@ export interface ProjectControllerOptions {
   onTransportPosition?: (position: number) => void;
 }
 
+function log(action: string, message: string) {
+  console.log(`[VSDAW engine] ${action}: ${message}`);
+}
+
+function warn(action: string, message: string) {
+  console.warn(`[VSDAW engine] ${action}: ${message}`);
+}
+
 export class ProjectController {
   readonly bootEnv: BootEnv;
   readonly projectId: string;
@@ -67,6 +81,7 @@ export class ProjectController {
   private subscriptions: Array<() => void> = [];
   private trackNames = new Map<string, string>();
   private trackColors = new Map<string, string>();
+  private trackTypes = new Map<string, ApiTrackType>();
   private takeRegions = new Map<string, AnyRegionBoxAdapter[]>();
 
   constructor(options: ProjectControllerOptions) {
@@ -111,37 +126,51 @@ export class ProjectController {
   // ---------------------------------------------------------------------------
 
   newProject(defaultBpm = 120, timeSignature: [number, number] = [4, 4]) {
-    this.closeProject();
-    const env: ProjectEnv = {
-      audioContext: this.bootEnv.audioContext,
-      audioWorklets: this.bootEnv.audioWorklets,
-      sampleManager: this.bootEnv.sampleManager,
-      soundfontManager: this.bootEnv.soundfontManager,
-      sampleService: this.bootEnv.sampleService,
-      soundfontService: this.bootEnv.soundfontService,
-    };
-    this.project = Project.new(env);
-    this.api.setBpm(defaultBpm);
-    this.setTimeSignature(timeSignature[0], timeSignature[1]);
-    this.project.startAudioWorklet();
-    this.attachTransportObservers();
-    this.broadcastState();
+    try {
+      this.closeProject();
+      log("project", `creating new project bpm=${defaultBpm}`);
+      const env: ProjectEnv = {
+        audioContext: this.bootEnv.audioContext,
+        audioWorklets: this.bootEnv.audioWorklets,
+        sampleManager: this.bootEnv.sampleManager,
+        soundfontManager: this.bootEnv.soundfontManager,
+        sampleService: this.bootEnv.sampleService,
+        soundfontService: this.bootEnv.soundfontService,
+      };
+      this.project = Project.new(env);
+      this.api.setBpm(defaultBpm);
+      this.setTimeSignature(timeSignature[0], timeSignature[1]);
+      this.project.startAudioWorklet();
+      this.attachTransportObservers();
+      this.broadcastState();
+    } catch (error: unknown) {
+      const text = error instanceof Error ? error.message : String(error);
+      log("project", `newProject failed: ${text}`);
+      throw error;
+    }
   }
 
   loadProject(data: ArrayBufferLike) {
-    this.closeProject();
-    const env: ProjectEnv = {
-      audioContext: this.bootEnv.audioContext,
-      audioWorklets: this.bootEnv.audioWorklets,
-      sampleManager: this.bootEnv.sampleManager,
-      soundfontManager: this.bootEnv.soundfontManager,
-      sampleService: this.bootEnv.sampleService,
-      soundfontService: this.bootEnv.soundfontService,
-    };
-    this.project = Project.load(env, data as ArrayBuffer);
-    this.project.startAudioWorklet();
-    this.attachTransportObservers();
-    this.broadcastState();
+    try {
+      this.closeProject();
+      log("project", "loading project");
+      const env: ProjectEnv = {
+        audioContext: this.bootEnv.audioContext,
+        audioWorklets: this.bootEnv.audioWorklets,
+        sampleManager: this.bootEnv.sampleManager,
+        soundfontManager: this.bootEnv.soundfontManager,
+        sampleService: this.bootEnv.sampleService,
+        soundfontService: this.bootEnv.soundfontService,
+      };
+      this.project = Project.load(env, data as ArrayBuffer);
+      this.project.startAudioWorklet();
+      this.attachTransportObservers();
+      this.broadcastState();
+    } catch (error: unknown) {
+      const text = error instanceof Error ? error.message : String(error);
+      log("project", `loadProject failed: ${text}`);
+      throw error;
+    }
   }
 
   serializeProject(): ArrayBufferLike {
@@ -149,8 +178,13 @@ export class ProjectController {
   }
 
   closeProject() {
+    log("project", "closing project");
     for (const unsubscribe of this.subscriptions) {
-      unsubscribe();
+      try {
+        unsubscribe();
+      } catch {
+        // ignore
+      }
     }
     this.subscriptions = [];
     if (this.project) {
@@ -159,11 +193,16 @@ export class ProjectController {
       } catch {
         // ignore
       }
-      this.project.terminate();
+      try {
+        this.project.terminate();
+      } catch {
+        // ignore
+      }
       this.project = null;
     }
     this.trackNames.clear();
     this.trackColors.clear();
+    this.trackTypes.clear();
     this.takeRegions.clear();
   }
 
@@ -232,6 +271,12 @@ export class ProjectController {
   // ---------------------------------------------------------------------------
 
   createTrack(type: ApiTrackType, name?: string, index?: number, color?: string) {
+    if (type === "master") {
+      throw new Error(
+        "Track type 'master' is reserved for the primary output bus and cannot be created",
+      );
+    }
+
     const project = this.assertProject();
     let audioUnit: AudioUnitBox;
 
@@ -252,7 +297,16 @@ export class ProjectController {
 
     const id = UUID.toString(audioUnit.address.uuid);
     this.trackNames.set(id, name ?? `${type} track`);
+    this.trackTypes.set(id, type);
     if (color) this.trackColors.set(id, color);
+
+    // Ensure the displayed label stays in sync with our name map.
+    try {
+      const adapter = this.resolveAudioUnit(id);
+      adapter.input.label = this.trackNames.get(id) ?? id;
+    } catch {
+      // ignore
+    }
 
     if (index !== undefined) {
       const adapter = this.resolveAudioUnit(id);
@@ -268,6 +322,7 @@ export class ProjectController {
     this.api.deleteAudioUnit(unit.box);
     this.trackNames.delete(trackId);
     this.trackColors.delete(trackId);
+    this.trackTypes.delete(trackId);
     this.broadcastState();
   }
 
@@ -283,9 +338,10 @@ export class ProjectController {
   setTrackName(trackId: string, name: string) {
     this.trackNames.set(trackId, name);
     const unit = this.resolveAudioUnit(trackId);
-    const input = unit.input.adapter().unwrapOrNull();
-    if (input && "labelField" in input) {
-      (input as any).labelField.setValue(name);
+    try {
+      unit.input.label = name;
+    } catch {
+      // some inputs do not support label writes
     }
     this.broadcastState();
   }
@@ -324,7 +380,6 @@ export class ProjectController {
     const devices = this.assertProject().captureDevices;
     const capture = devices.get(unit.box.address.uuid);
     if (capture.nonEmpty()) {
-      devices.setArm(capture.unwrap(), false);
       capture.unwrap().armed.setValue(arm);
     }
     this.broadcastState();
@@ -349,25 +404,56 @@ export class ProjectController {
 
   createAudioRegion(
     trackId: string,
-    sample: { uuid: string; name: string; duration: number; bpm: number },
+    sample: {
+      uuid: string;
+      name: string;
+      duration: number;
+      bpm: number;
+      sample_rate?: number;
+      origin?: "recording" | "openDAW" | "import";
+    },
     position: number,
     duration?: number,
-    _offset?: number,
+    offset?: number,
     name?: string,
   ): string {
     const track = this.resolveMainTrack(trackId);
     const project = this.assertProject();
+
+    if (!sample.uuid || !sample.name || sample.duration == null || sample.bpm == null) {
+      throw new Error("Invalid sample metadata: uuid, name, duration and bpm are required");
+    }
+
+    const sampleRate = sample.sample_rate ?? this.bootEnv.audioContext.sampleRate;
+    const fullSample = {
+      ...sample,
+      sample_rate: sampleRate,
+      origin: sample.origin ?? "import",
+    };
+
     const audioFileBox = AudioFileBox.create(project.boxGraph, UUID.parse(sample.uuid));
     const regionBox = this.api.createNotStretchedRegion({
       boxGraph: project.boxGraph,
       targetTrack: track.box,
       audioFileBox,
-      sample,
+      sample: fullSample as any,
       position,
       duration,
       name: name ?? sample.name,
     });
-    const adapter = this.assertProject().boxAdapters.adapterFor(regionBox, AudioRegionBoxAdapter);
+    const adapter = project.boxAdapters.adapterFor(regionBox, AudioRegionBoxAdapter);
+
+    if (offset !== undefined && offset !== 0) {
+      try {
+        adapter.waveformOffset.setValue(offset);
+      } catch (error: unknown) {
+        warn(
+          "region",
+          `could not apply offset: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     this.broadcastState();
     return UUID.toString(adapter.uuid);
   }
@@ -405,7 +491,9 @@ export class ProjectController {
 
   splitRegion(regionId: string, position: number): string[] {
     const region = this.resolveRegion(regionId);
+    this.boxGraph.beginTransaction();
     const split = RegionEditing.cut(region, position, false);
+    this.boxGraph.endTransaction();
     if (split.isEmpty()) {
       return [regionId];
     }
@@ -484,29 +572,23 @@ export class ProjectController {
     this.broadcastState();
   }
 
-  handleMidiInput(deviceId: string, data: Uint8Array, _timestamp: number) {
-    // Forward note-on/note-off to the engine as NoteSignal when playing.
-    if (data.length < 3) return;
-    const status = data[0] & 0xf0;
-    const channel = data[0] & 0x0f;
-    const note = data[1];
-    const velocity = data[2];
-    if (status === 0x90 && velocity > 0) {
-      this.engine.noteSignal({
-        type: "note-on",
-        note,
-        velocity: velocity / 127,
-        channel,
-        deviceId,
-      } as any);
-    } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
-      this.engine.noteSignal({
-        type: "note-off",
-        note,
-        velocity: 0,
-        channel,
-        deviceId,
-      } as any);
+  handleMidiInput(deviceId: string, data: Uint8Array, timestamp: number) {
+    if (data.length < 1) return;
+
+    // Forward the raw MIDI event through the SDK's software MIDI input so that
+    // armed captures (audio-unit inputs) and the engine's own routing pick it
+    // up with correct latency/timing. This replaces the previous direct
+    // engine.noteSignal() call, which passed an incorrect NoteSignal shape.
+    try {
+      const event = new MIDIMessageEvent("midimessage", {
+        data: new Uint8Array(data),
+      } as MIDIMessageEventInit);
+      MidiDevices.softwareMIDIInput.dispatchEvent(event);
+    } catch (error: unknown) {
+      warn(
+        "midi",
+        `failed to dispatch MIDI input: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -515,31 +597,73 @@ export class ProjectController {
   // ---------------------------------------------------------------------------
 
   async startRecording(trackIds?: string[], countIn = false) {
+    const project = this.assertProject();
+    const devices = project.captureDevices;
+
     if (trackIds && trackIds.length > 0) {
-      const devices = this.assertProject().captureDevices;
       for (const trackId of trackIds) {
         const unit = this.resolveAudioUnit(trackId);
         const capture = devices.get(unit.box.address.uuid);
         if (capture.nonEmpty()) {
-          devices.setArm(capture.unwrap(), false);
           capture.unwrap().armed.setValue(true);
         }
       }
     }
-    this.assertProject().startRecording(countIn);
+
+    log("recording", `start countIn=${countIn}`);
+    project.startRecording(countIn);
     this.broadcastTransportState();
   }
 
   stopRecording() {
-    this.assertProject().stopRecording();
+    const project = this.assertProject();
+    log("recording", "stop");
+    project.stopRecording();
+
+    // Audio captures write recorded regions to themselves; gather them as takes.
+    this.takeRegions.clear();
+    for (const capture of project.captureDevices.allCaptures()) {
+      if (capture instanceof CaptureAudio) {
+        const regions = capture.recordedRegions();
+        if (regions.length > 0) {
+          const unitId = UUID.toString(capture.audioUnitBox.address.uuid);
+          const adapters = regions.map((box) => RegionAdapters.for(project.boxAdapters, box));
+          this.takeRegions.set(unitId, adapters);
+        }
+      }
+    }
+
+    // MIDI captures keep captured notes internally; commit them to a note region.
+    try {
+      project.commitMidiCapture();
+    } catch (error: unknown) {
+      warn(
+        "recording",
+        `commitMidiCapture failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     this.broadcastTransportState();
   }
 
   compTakes(takeRegionIds: string[], activeRegionId: string) {
+    const activeTakes = new Set(takeRegionIds);
     for (const id of takeRegionIds) {
       const region = this.resolveRegion(id);
       if (region.box instanceof AudioRegionBox || region.box instanceof NoteRegionBox) {
         region.box.mute.setValue(id !== activeRegionId);
+      }
+    }
+    // Mute any other recorded takes for the same audio units that are not in
+    // the active comp set.
+    for (const regions of this.takeRegions.values()) {
+      for (const region of regions) {
+        const id = UUID.toString(region.uuid);
+        if (!activeTakes.has(id)) {
+          if (region.box instanceof AudioRegionBox || region.box instanceof NoteRegionBox) {
+            region.box.mute.setValue(true);
+          }
+        }
       }
     }
     this.broadcastState();
@@ -556,16 +680,34 @@ export class ProjectController {
     insertIndex?: number,
   ): string {
     const project = this.assertProject();
-    const factory = this.resolveEffectFactory(factoryName);
 
     if (slot === "instrument") {
       const instrumentFactory =
         (InstrumentFactories.Named as any)[factoryName] ?? InstrumentFactories.Tape;
+
+      if (trackId) {
+        const unit = this.resolveAudioUnit(trackId);
+        const input = unit.input.adapter().unwrapOrNull();
+        if (input && Devices.isInstrument(input)) {
+          const result = this.api.replaceMIDIInstrument(
+            input.box as InstrumentBox,
+            instrumentFactory,
+          );
+          if (result.isSuccess()) {
+            this.broadcastState();
+            return UUID.toString(result.result().address.uuid);
+          }
+          throw new Error(result.failureReason());
+        }
+        throw new Error(`Track '${trackId}' does not host a replaceable instrument`);
+      }
+
       const product = this.api.createInstrument(instrumentFactory);
       this.broadcastState();
       return UUID.toString(product.instrumentBox.address.uuid);
     }
 
+    const factory = this.resolveEffectFactory(factoryName);
     const unit = trackId
       ? this.resolveAudioUnit(trackId)
       : this.rootAdapter.audioUnits.adapters()[0];
@@ -692,33 +834,40 @@ export class ProjectController {
       };
     }
 
-    const audioBuffer = await AudioOfflineRenderer.start(
-      project,
-      Option.wrap(exportConfiguration),
-      () => {},
-      undefined,
-      sampleRate,
-    );
+    log("export", `rendering ${stems ? "stems" : "master"} at ${sampleRate}Hz`);
+    try {
+      const audioBuffer = await AudioOfflineRenderer.start(
+        project,
+        Option.wrap(exportConfiguration),
+        () => {},
+        undefined,
+        sampleRate,
+      );
 
-    if (format === "wav") {
+      if (format === "wav") {
+        const arrayBuffer = WavFile.encodeFloats(audioBuffer);
+        return {
+          format,
+          data: arrayBufferToBase64(arrayBuffer),
+          fileName: fileName ?? "render.wav",
+        };
+      }
+
+      // FLAC/OGG/MP3: encode via the deprecated renderer's AudioBuffer result.
+      // A real implementation would pipe through ffmpeg.wasm or a browser encoder.
+      // For now we fall back to WAV and report the fallback.
       const arrayBuffer = WavFile.encodeFloats(audioBuffer);
       return {
         format,
         data: arrayBufferToBase64(arrayBuffer),
-        fileName: fileName ?? "render.wav",
+        fileName: fileName ?? `render.${format}`,
+        message: `${format.toUpperCase()} encoding not yet implemented; returned WAV data instead.`,
       };
+    } catch (error: unknown) {
+      const text = error instanceof Error ? error.message : String(error);
+      log("export", `render failed: ${text}`);
+      throw error;
     }
-
-    // FLAC/OGG/MP3: encode via the deprecated renderer's AudioBuffer result.
-    // A real implementation would pipe through ffmpeg.wasm or a browser encoder.
-    // For now we fall back to WAV and report the fallback.
-    const arrayBuffer = WavFile.encodeFloats(audioBuffer);
-    return {
-      format,
-      data: arrayBufferToBase64(arrayBuffer),
-      fileName: fileName ?? `render.${format}`,
-      message: `${format.toUpperCase()} encoding not yet implemented; returned WAV data instead.`,
-    };
   }
 
   // ---------------------------------------------------------------------------
@@ -750,8 +899,21 @@ export class ProjectController {
 
     for (const unit of this.rootAdapter.audioUnits.adapters()) {
       const id = UUID.toString(unit.uuid);
-      const type: ApiTrackType = unit.isBus ? "bus" : unit.isInstrument ? "midi" : "audio";
+      const type: ApiTrackType = this.trackTypes.get(id) ?? (unit.isBus ? "bus" : "audio");
       const inserts: InsertState[] = [];
+
+      // The input slot may host an instrument (MIDI tracks) or an audio source.
+      const input = unit.input.adapter().unwrapOrNull();
+      if (input) {
+        inserts.push({
+          id: UUID.toString(input.uuid),
+          name: input.labelField.getValue(),
+          type: Devices.isInstrument(input) ? "instrument" : "audio-effect",
+          enabled: input.enabledField.getValue(),
+          index: -1,
+        });
+      }
+
       for (const fx of unit.audioEffects.adapters()) {
         inserts.push({
           id: UUID.toString(fx.uuid),
@@ -848,16 +1010,18 @@ export class ProjectController {
 
   private resolveMainTrack(trackId: string): TrackBoxAdapter {
     const unit = this.resolveAudioUnit(trackId);
+    const type = this.trackTypes.get(UUID.toString(unit.uuid));
     const tracks = unit.tracks.values();
     if (tracks.length === 0) {
       throw new Error(`Track '${trackId}' has no timeline lane`);
     }
-    // Prefer the first main track matching the unit type.
-    const targetType = unit.isBus
-      ? SdkTrackType.Audio
-      : unit.isInstrument
+    // Prefer the first main track matching the declared unit type.
+    const targetType =
+      type === "midi"
         ? SdkTrackType.Notes
-        : SdkTrackType.Audio;
+        : type === "bus"
+          ? SdkTrackType.Audio
+          : SdkTrackType.Audio;
     return tracks.find((t) => t.type === targetType) ?? tracks[0];
   }
 

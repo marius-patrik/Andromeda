@@ -22,17 +22,23 @@ import { ProjectController, createBootEnv } from "./projectAdapter.js";
 
 const projectId = new URLSearchParams(window.location.search).get("projectId") ?? "default";
 
+function log(source: string, message: string) {
+  console.log(`[VSDAW engine] ${source}: ${message}`);
+}
+
 function setStatus(text: string) {
   const el = document.getElementById("status");
   if (el) el.textContent = text;
+  log("status", text);
 }
 
-function post<T>(type: string, payload: T) {
+function post<T>(type: string, payload: T, requestId?: string) {
   const message: Message<T> = {
     direction: "engine-to-host",
     projectId,
     type,
     payload,
+    requestId,
   };
   window.parent.postMessage(message, "*");
 }
@@ -51,8 +57,12 @@ let controller: ProjectController | null = null;
 
 async function boot() {
   try {
+    log("boot", `projectId=${projectId}`);
+
     if (!window.crossOriginIsolated) {
-      throw new Error(`crossOriginIsolated is false (${window.crossOriginIsolated})`);
+      throw new Error(
+        `crossOriginIsolated is false (${window.crossOriginIsolated}). Ensure COOP/COEP headers are set.`,
+      );
     }
 
     const origin = window.location.origin;
@@ -68,7 +78,13 @@ async function boot() {
     OfflineEngineRenderer.install(offlineEngineUrl);
 
     setStatus("Creating AudioContext...");
-    const audioContext = new AudioContext({ latencyHint: 0 });
+    let audioContext: AudioContext;
+    try {
+      audioContext = new AudioContext({ latencyHint: 0 });
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to create AudioContext: ${reason}`);
+    }
 
     setStatus("Creating AudioWorklets...");
     const audioWorklets = await AudioWorklets.createFor(audioContext);
@@ -104,6 +120,7 @@ async function boot() {
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     const stack = error instanceof Error ? error.stack : undefined;
+    log("boot", `failed: ${message}`);
     setStatus(`Error: ${message}`);
     const errorPayload: EngineErrorPayload = { message, stack };
     post(MessageType.EngineError, errorPayload);
@@ -115,6 +132,7 @@ function resumeOnUserGesture(audioContext: AudioContext) {
     if (audioContext.state === "suspended") {
       try {
         await audioContext.resume();
+        log("audio", `AudioContext resumed, state=${audioContext.state}`);
       } catch (error: unknown) {
         console.warn("Could not resume AudioContext:", error);
       }
@@ -130,26 +148,37 @@ window.addEventListener("message", async (event) => {
   if (message.direction !== "host-to-engine") return;
   if (message.projectId !== projectId) return;
 
+  log(
+    "message",
+    `received ${message.type}${message.requestId ? ` requestId=${message.requestId}` : ""}`,
+  );
+
   if (!controller) {
-    post(MessageType.EngineError, {
-      message: "Engine controller is not initialized",
-    });
+    post(
+      MessageType.EngineError,
+      { message: "Engine controller is not initialized" },
+      message.requestId,
+    );
     return;
   }
 
   try {
     const result = await handleMessage(controller, message);
     if (result.type === "error") {
-      post(MessageType.EngineError, { message: result.message });
+      log("message", `${message.type} failed: ${result.message}`);
+      post(MessageType.EngineError, { message: result.message }, message.requestId);
     } else if (message.type !== MessageType.StateGet) {
-      // Optionally echo a completion event back to the host for operations
-      // that require an explicit ack. StateGet is handled directly by result.
-      post(`${message.type}.ack`, result.payload ?? {});
+      // Echo a completion event back to the host for operations that require
+      // an explicit ack. StateGet is handled directly by result.
+      post(`${message.type}.ack`, result.payload ?? {}, message.requestId);
+    } else {
+      post(`${message.type}.result`, result.payload ?? {}, message.requestId);
     }
   } catch (error: unknown) {
     const messageText = error instanceof Error ? error.message : String(error);
     const stack = error instanceof Error ? error.stack : undefined;
-    post(MessageType.EngineError, { message: messageText, stack });
+    log("message", `unhandled exception for ${message.type}: ${messageText}`);
+    post(MessageType.EngineError, { message: messageText, stack }, message.requestId);
   }
 });
 

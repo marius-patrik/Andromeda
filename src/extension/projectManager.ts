@@ -1,9 +1,15 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { createEmptyProject, writeBundle } from "../shared/bundle.js";
-import { MessageType, type ProjectLoadPayload } from "../shared/protocol.js";
+import { BundleError, createEmptyProject, readBundle, writeBundle } from "../shared/bundle.js";
+import {
+  MessageType,
+  type ProjectLoadPayload,
+  type ProjectNewPayload,
+} from "../shared/protocol.js";
+import type { ProjectJson } from "../shared/schemas.js";
 import { acquireServer, releaseServer } from "./audioServer.js";
 import { createEngineWebview } from "./engineWebview.js";
 import type { MessageRouter } from "./messageRouter.js";
@@ -15,13 +21,28 @@ export interface ProjectManagerOptions {
   router: MessageRouter;
 }
 
-export class ProjectManager {
+interface RecoveryMetadata {
+  originalUri: string;
+  recoveredAt: string;
+  projectName: string;
+}
+
+const RECOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const BACKUP_INTERVAL_MS = 60000;
+
+export class ProjectManager implements vscode.Disposable {
   private sessions = new Map<string, ProjectSession>();
   private uriToProjectId = new Map<string, string>();
   private activeProjectId: string | undefined;
   private serverOrigin: string | undefined;
+  private _onDidChangeProject = new vscode.EventEmitter<string>();
+  public readonly onDidChangeProject = this._onDidChangeProject.event;
 
   constructor(private options: ProjectManagerOptions) {}
+
+  dispose(): void {
+    this._onDidChangeProject.dispose();
+  }
 
   get context(): vscode.ExtensionContext {
     return this.options.context;
@@ -83,7 +104,12 @@ export class ProjectManager {
   async ensureProjectForDocument(
     uri: vscode.Uri,
     timelinePanel: vscode.WebviewPanel,
+    token?: vscode.CancellationToken,
   ): Promise<ProjectSession> {
+    if (token?.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
     const existing = this.getSessionByUri(uri);
     if (existing) {
       existing.views.set("vsdaw.editor", timelinePanel);
@@ -92,62 +118,116 @@ export class ProjectManager {
       return existing;
     }
 
-    return this.createSession(uri, timelinePanel);
+    return this.createSession(uri, timelinePanel, token);
   }
 
   private async createSession(
     uri: vscode.Uri,
     timelinePanel: vscode.WebviewPanel,
+    token?: vscode.CancellationToken,
   ): Promise<ProjectSession> {
+    if (token?.isCancellationRequested) {
+      throw new vscode.CancellationError();
+    }
+
     const port = await acquireServer(this.context);
+    if (token?.isCancellationRequested) {
+      await releaseServer();
+      throw new vscode.CancellationError();
+    }
     this.serverOrigin = `http://127.0.0.1:${port}`;
 
     const projectId = crypto.randomUUID();
     const isUntitled = uri.scheme !== "file";
+    const cleanupDisposables: vscode.Disposable[] = [];
 
-    const session: ProjectSession = {
-      projectId,
-      uri,
-      enginePanel: createEngineWebview(this.context, port, projectId, this.router),
-      engineReady: false,
-      pendingEngineMessages: [],
-      views: new Map(),
-      isDirty: false,
-      isUntitled,
-    };
+    try {
+      const enginePanel = createEngineWebview(this.context, port, projectId, this.router);
+      cleanupDisposables.push(enginePanel);
 
-    session.views.set("vsdaw.editor", timelinePanel);
-    this.router.registerView(projectId, timelinePanel);
+      const session: ProjectSession = {
+        projectId,
+        uri,
+        enginePanel,
+        engineReady: false,
+        pendingEngineMessages: [],
+        views: new Map(),
+        isDirty: false,
+        isUntitled,
+      };
 
-    this.sessions.set(projectId, session);
-    this.uriToProjectId.set(uri.toString(), projectId);
-    this.activeProjectId = projectId;
+      session.views.set("vsdaw.editor", timelinePanel);
+      this.router.registerView(projectId, timelinePanel);
 
-    if (uri.scheme === "file") {
-      try {
-        await this.loadProjectIntoSession(session);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.outputChannel.appendLine(`[project] failed to load ${uri.fsPath}: ${message}`);
-        vscode.window.showWarningMessage(`VSDAW could not load existing project data: ${message}`);
+      this.sessions.set(projectId, session);
+      this.uriToProjectId.set(uri.toString(), projectId);
+      this.activeProjectId = projectId;
+
+      cleanupDisposables.push(
+        enginePanel.onDidDispose(() => {
+          if (!this.sessions.has(projectId)) return;
+          this.outputChannel.appendLine(
+            `[project] engine panel closed for ${projectId}, closing session`,
+          );
+          this.closeProject(projectId).catch(() => {
+            // ignore
+          });
+        }),
+      );
+
+      cleanupDisposables.push(
+        timelinePanel.onDidDispose(() => {
+          this.closeProject(projectId).catch(() => {
+            // ignore
+          });
+        }),
+      );
+
+      if (uri.scheme === "file") {
+        try {
+          await this.loadProjectIntoSession(session, token);
+        } catch (error) {
+          if (error instanceof vscode.CancellationError) throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          this.outputChannel.appendLine(`[project] failed to load ${uri.fsPath}: ${message}`);
+          vscode.window.showWarningMessage(
+            `VSDAW could not load existing project data: ${message}`,
+          );
+        }
       }
+
+      // Cleanup disposables are now owned by the session lifecycle.
+      cleanupDisposables.length = 0;
+      return session;
+    } catch (error) {
+      for (const d of cleanupDisposables) {
+        try {
+          d.dispose();
+        } catch {
+          // ignore
+        }
+      }
+      this.sessions.delete(projectId);
+      this.uriToProjectId.delete(uri.toString());
+      if (this.activeProjectId === projectId) {
+        this.activeProjectId = undefined;
+      }
+      await releaseServer();
+      if (this.sessions.size === 0) {
+        this.serverOrigin = undefined;
+      }
+      throw error;
     }
-
-    timelinePanel.onDidDispose(() => {
-      this.closeProject(projectId).catch(() => {
-        // ignore
-      });
-    });
-
-    return session;
   }
 
   async closeProject(projectId: string): Promise<void> {
     const session = this.sessions.get(projectId);
-    if (!session) return;
+    if (!session || session.isClosing) return;
+    session.isClosing = true;
 
     this.clearAutoSave(session);
     this.router.unregisterEngine(projectId);
+    session.pendingEngineMessages = [];
 
     try {
       session.enginePanel.dispose();
@@ -177,26 +257,56 @@ export class ProjectManager {
 
   async closeAll(): Promise<void> {
     const ids = Array.from(this.sessions.keys());
-    await Promise.all(ids.map((id) => this.closeProject(id)));
+    for (const id of ids) {
+      await this.closeProject(id);
+    }
   }
 
-  async saveProject(projectId: string): Promise<void> {
+  async saveProject(projectId: string, token?: vscode.CancellationToken): Promise<void> {
     const session = this.sessions.get(projectId);
     if (!session) {
       throw new Error(`No session for project ${projectId}`);
     }
-    await this.saveSession(session);
+    await this.saveSession(session, token);
   }
 
-  async saveProjectByUri(uri: vscode.Uri): Promise<void> {
+  async saveProjectByUri(uri: vscode.Uri, token?: vscode.CancellationToken): Promise<void> {
     const session = this.getSessionByUri(uri);
     if (!session) {
       throw new Error(`No project session for ${uri.toString()}`);
     }
-    await this.saveSession(session);
+    await this.saveSession(session, token);
   }
 
-  private async saveSession(session: ProjectSession): Promise<void> {
+  async saveProjectAs(
+    projectId: string,
+    destination: vscode.Uri,
+    token?: vscode.CancellationToken,
+  ): Promise<void> {
+    if (token?.isCancellationRequested) return;
+
+    const session = this.sessions.get(projectId);
+    if (!session) {
+      throw new Error(`No session for project ${projectId}`);
+    }
+
+    this.updateSessionUri(session, destination);
+    session.isUntitled = false;
+
+    await this.saveSession(session, token);
+  }
+
+  private async saveSession(
+    session: ProjectSession,
+    token?: vscode.CancellationToken,
+  ): Promise<void> {
+    if (token?.isCancellationRequested) return;
+
+    if (session.isSaving) {
+      // A save is already in progress; do not queue overlapping saves.
+      return;
+    }
+
     let targetUri = session.uri;
     if (session.isUntitled) {
       const picked = await vscode.window.showSaveDialog({
@@ -205,34 +315,47 @@ export class ProjectManager {
         saveLabel: "Save Project",
       });
       if (!picked) return;
-      targetUri = picked;
+      if (token?.isCancellationRequested) return;
+      this.updateSessionUri(session, picked);
       session.isUntitled = false;
-      this.uriToProjectId.delete(session.uri.toString());
-      session.uri = targetUri;
-      this.uriToProjectId.set(targetUri.toString(), session.projectId);
+      targetUri = picked;
     }
 
-    const response = await this.router.requestEngine(
-      session.projectId,
-      MessageType.ProjectSave,
-      { format: "arraybuffer" },
-      { responseType: `${MessageType.ProjectSave}.ack`, timeoutMs: 30000 },
-    );
-    const bytes = response.payload as Uint8Array | ArrayBuffer | undefined;
-    if (!bytes) {
-      throw new Error("Engine returned empty project data");
-    }
+    session.isSaving = true;
+    try {
+      const response = await this.router.requestEngine(
+        session.projectId,
+        MessageType.ProjectSave,
+        { format: "arraybuffer" },
+        { responseType: `${MessageType.ProjectSave}.ack`, timeoutMs: 30000 },
+      );
+      if (token?.isCancellationRequested) return;
+      const bytes = response.payload as Uint8Array | ArrayBuffer | undefined;
+      if (!bytes) {
+        throw new Error("Engine returned empty project data");
+      }
 
-    const data = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
-    await this.writeProjectBytes(targetUri, data);
-    session.isDirty = false;
-    this.updateSaveIndicator(session);
+      const engineBin = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+      const projectJson = this.buildProjectJsonForSave(session, targetUri);
+      const bundle = await writeBundle(projectJson, new Map(), engineBin);
+      await this.writeProjectBytes(targetUri, bundle);
+      session.projectJson = projectJson;
+      session.isDirty = false;
+      this.updateSaveIndicator(session);
+      this.outputChannel.appendLine(`[project] saved ${targetUri.fsPath}`);
+    } finally {
+      session.isSaving = false;
+    }
   }
 
   markDirty(projectId: string): void {
     const session = this.sessions.get(projectId);
-    if (!session) return;
+    if (!session || session.isClosing) return;
+    const becameDirty = !session.isDirty;
     session.isDirty = true;
+    if (becameDirty) {
+      this._onDidChangeProject.fire(projectId);
+    }
     this.updateSaveIndicator(session);
     this.scheduleAutoSave(session);
   }
@@ -268,6 +391,11 @@ export class ProjectManager {
     if (!config.get<boolean>("autoSave", true)) return;
 
     const delay = config.get<number>("autoSaveDelay", 500);
+    if (!Number.isFinite(delay) || delay < 0) {
+      this.outputChannel.appendLine("[autosave] invalid autoSaveDelay; skipping");
+      return;
+    }
+
     session.autoSaveTimer = setTimeout(() => {
       this.saveProject(session.projectId).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
@@ -285,7 +413,7 @@ export class ProjectManager {
         const message = error instanceof Error ? error.message : String(error);
         this.outputChannel.appendLine(`[backup] failed: ${message}`);
       });
-    }, 60000);
+    }, BACKUP_INTERVAL_MS);
   }
 
   private clearAutoSave(session: ProjectSession): void {
@@ -307,34 +435,86 @@ export class ProjectManager {
     if (uri.scheme === "file") {
       const tempPath = `${uri.fsPath}.tmp-${Date.now()}`;
       const tempUri = vscode.Uri.file(tempPath);
-      await vscode.workspace.fs.writeFile(tempUri, data);
-      await vscode.workspace.fs.rename(tempUri, uri, { overwrite: true });
+      try {
+        await vscode.workspace.fs.writeFile(tempUri, data);
+        await vscode.workspace.fs.rename(tempUri, uri, { overwrite: true });
+      } catch (error) {
+        // Best-effort cleanup of the temporary file.
+        try {
+          await vscode.workspace.fs.delete(tempUri);
+        } catch {
+          // ignore
+        }
+        throw error;
+      }
     } else {
       await vscode.workspace.fs.writeFile(uri, data);
     }
   }
 
-  private async loadProjectIntoSession(session: ProjectSession): Promise<void> {
+  private async loadProjectIntoSession(
+    session: ProjectSession,
+    token?: vscode.CancellationToken,
+  ): Promise<void> {
+    if (token?.isCancellationRequested) return;
     const data = await vscode.workspace.fs.readFile(session.uri);
-    const payload: ProjectLoadPayload = {
-      data: Buffer.from(data).toString("base64"),
-    };
+    if (token?.isCancellationRequested) return;
 
-    const loadMessage: MessageEnvelope = {
-      projectId: session.projectId,
-      direction: "host-to-engine",
-      type: MessageType.ProjectLoad,
-      payload,
-    };
+    let bundle: Awaited<ReturnType<typeof readBundle>>;
+    try {
+      bundle = await readBundle(new Uint8Array(data));
+    } catch (error) {
+      if (error instanceof BundleError) {
+        throw error;
+      }
+      throw new BundleError(
+        `Failed to read bundle: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
-    if (session.engineReady) {
-      this.router.routeToEngine(session.projectId, loadMessage);
+    session.projectJson = bundle.project;
+
+    if (bundle.engineBin && bundle.engineBin.byteLength > 0) {
+      const payload: ProjectLoadPayload = {
+        data: Buffer.from(bundle.engineBin).toString("base64"),
+      };
+      const loadMessage: MessageEnvelope = {
+        projectId: session.projectId,
+        direction: "host-to-engine",
+        type: MessageType.ProjectLoad,
+        payload,
+      };
+      this.queueEngineMessage(session, loadMessage);
     } else {
-      session.pendingEngineMessages.push(loadMessage);
+      // Empty/new project bundle: ask the engine to create a matching empty project.
+      const payload: ProjectNewPayload = {
+        bpm: bundle.project.project.tempo,
+        timeSignature: bundle.project.project.timeSignature,
+      };
+      const newMessage: MessageEnvelope = {
+        projectId: session.projectId,
+        direction: "host-to-engine",
+        type: MessageType.ProjectNew,
+        payload,
+      };
+      this.queueEngineMessage(session, newMessage);
+    }
+  }
+
+  private queueEngineMessage(session: ProjectSession, message: MessageEnvelope): void {
+    if (session.engineReady) {
+      this.router.routeToEngine(session.projectId, message);
+    } else {
+      session.pendingEngineMessages.push(message);
     }
   }
 
   private async writeRecoveryBackup(session: ProjectSession): Promise<void> {
+    if (session.isSaving) {
+      // Avoid racing with an active save operation.
+      return;
+    }
+
     const recoveryDir = this.getRecoveryDir();
     await fs.mkdir(recoveryDir, { recursive: true });
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -349,8 +529,20 @@ export class ProjectManager {
       );
       const bytes = response.payload as Uint8Array | ArrayBuffer | undefined;
       if (!bytes) return;
-      const data = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
-      await fs.writeFile(recoveryPath, data);
+      const engineBin = bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes;
+      const projectJson = this.buildProjectJsonForSave(session, session.uri);
+      const bundle = await writeBundle(projectJson, new Map(), engineBin);
+      await fs.writeFile(recoveryPath, bundle);
+
+      const metadata: RecoveryMetadata = {
+        originalUri: session.uri.toString(),
+        recoveredAt: new Date().toISOString(),
+        projectName: projectJson.project.name,
+      };
+      await fs.writeFile(
+        path.join(recoveryDir, `${session.projectId}-${timestamp}.json`),
+        JSON.stringify(metadata, null, 2),
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.outputChannel.appendLine(`[recovery] backup skipped: ${message}`);
@@ -367,14 +559,97 @@ export class ProjectManager {
     }
     if (files.length === 0) return;
 
-    const selected = await vscode.window.showWarningMessage(
-      `VSDAW found ${files.length} recovery file(s). Restore a recovered project?`,
-      "Open recovery folder",
-      "Dismiss",
+    await this.cleanupStaleRecoveryFiles(recoveryDir, files);
+
+    // Re-read after cleanup.
+    try {
+      files = (await fs.readdir(recoveryDir)).filter((f) => f.endsWith(".vsdaw"));
+    } catch {
+      return;
+    }
+    if (files.length === 0) return;
+
+    const items = await Promise.all(
+      files.map(async (fileName) => {
+        const metaPath = path.join(recoveryDir, fileName.replace(/\.vsdaw$/, ".json"));
+        let metadata: RecoveryMetadata | undefined;
+        try {
+          const text = await fs.readFile(metaPath, "utf-8");
+          metadata = JSON.parse(text) as RecoveryMetadata;
+        } catch {
+          // ignore missing/invalid metadata
+        }
+        const label = metadata ? `${metadata.projectName} (${fileName})` : fileName;
+        return { fileName, label, metadata };
+      }),
     );
-    if (selected === "Open recovery folder") {
-      const uri = vscode.Uri.file(recoveryDir);
-      await vscode.commands.executeCommand("revealFileInOS", uri);
+
+    const selected = await vscode.window.showWarningMessage(
+      `VSDAW found ${items.length} recovery file(s). Select a project to restore.`,
+      { modal: false },
+      ...items.map((i) => i.label),
+    );
+
+    if (!selected) return;
+
+    const item = items.find((i) => i.label === selected);
+    if (!item) return;
+
+    await this.restoreRecoveryFile(recoveryDir, item.fileName, item.metadata);
+  }
+
+  private async cleanupStaleRecoveryFiles(recoveryDir: string, fileNames: string[]): Promise<void> {
+    const now = Date.now();
+    for (const fileName of fileNames) {
+      const filePath = path.join(recoveryDir, fileName);
+      try {
+        const stat = await fs.stat(filePath);
+        if (now - stat.mtimeMs > RECOVERY_MAX_AGE_MS) {
+          await fs.unlink(filePath);
+          try {
+            await fs.unlink(path.join(recoveryDir, fileName.replace(/\.vsdaw$/, ".json")));
+          } catch {
+            // ignore missing metadata
+          }
+        }
+      } catch {
+        // ignore stat failures
+      }
+    }
+  }
+
+  private async restoreRecoveryFile(
+    recoveryDir: string,
+    fileName: string,
+    metadata: RecoveryMetadata | undefined,
+  ): Promise<void> {
+    const recoveryPath = path.join(recoveryDir, fileName);
+    const defaultUri = metadata?.originalUri
+      ? vscode.Uri.parse(metadata.originalUri)
+      : vscode.Uri.file(path.join(os.homedir(), fileName));
+
+    const destination = await vscode.window.showSaveDialog({
+      defaultUri,
+      filters: { "VSDAW Project": ["vsdaw"] },
+      saveLabel: "Restore Project",
+    });
+
+    if (!destination) return;
+
+    try {
+      await fs.copyFile(recoveryPath, destination.fsPath);
+      await fs.unlink(recoveryPath);
+      try {
+        await fs.unlink(path.join(recoveryDir, fileName.replace(/\.vsdaw$/, ".json")));
+      } catch {
+        // ignore missing metadata
+      }
+      this.outputChannel.appendLine(`[recovery] restored ${destination.fsPath}`);
+      vscode.window.showInformationMessage(`VSDAW restored project to ${destination.fsPath}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`[recovery] restore failed: ${message}`);
+      vscode.window.showErrorMessage(`VSDAW could not restore project: ${message}`);
     }
   }
 
@@ -393,6 +668,23 @@ export class ProjectManager {
         : `Timeline (${session.projectId.slice(0, 8)})`;
     }
   }
+
+  private buildProjectJsonForSave(session: ProjectSession, targetUri: vscode.Uri): ProjectJson {
+    const base = session.projectJson ?? createEmptyProject("Untitled", 48000);
+    return {
+      ...base,
+      project: {
+        ...base.project,
+        name: path.basename(targetUri.fsPath, ".vsdaw"),
+      },
+    };
+  }
+
+  updateSessionUri(session: ProjectSession, newUri: vscode.Uri): void {
+    this.uriToProjectId.delete(session.uri.toString());
+    session.uri = newUri;
+    this.uriToProjectId.set(newUri.toString(), session.projectId);
+  }
 }
 
 export async function createNewProjectUri(
@@ -400,9 +692,10 @@ export async function createNewProjectUri(
 ): Promise<vscode.Uri | undefined> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
+    const defaultDir = context.globalStorageUri?.fsPath ?? os.homedir();
     const result = await vscode.window.showSaveDialog({
       title: "Create VSDAW Project",
-      defaultUri: vscode.Uri.file(path.join(vscode.env.appRoot, "Untitled.vsdaw")),
+      defaultUri: vscode.Uri.file(path.join(defaultDir, "Untitled.vsdaw")),
       filters: { "VSDAW Project": ["vsdaw"] },
     });
     return result;
