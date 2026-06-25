@@ -81,7 +81,6 @@ export const TimeDisplay: React.FC<TimeDisplayProps> = ({
           value={tempoValue}
           min={1}
           max={999}
-          autoFocus
           onChange={(e) => setTempoValue(e.target.value)}
           onBlur={() => {
             const value = Number.parseFloat(tempoValue);
@@ -142,7 +141,6 @@ const TimeSignatureEditor: React.FC<{
     <input
       aria-label="Time signature"
       value={text}
-      autoFocus
       onChange={(e) => setText(e.target.value)}
       onBlur={() => {
         const [num, den] = text.split("/").map((s) => Number.parseInt(s, 10));

@@ -119,7 +119,6 @@ export const PianoRollGrid: React.FC<PianoRollGridProps> = ({
   return (
     <svg
       ref={svgRef}
-      tabIndex={0}
       role="img"
       aria-label="Piano roll grid"
       onMouseMove={handleMouseMove}

@@ -201,8 +201,8 @@ export class MessageRouter {
       if (req) {
         if (!req.responseType || req.responseType === message.type) {
           clearTimeout(req.timeout);
-          map!.delete(message.requestId);
-          if (map!.size === 0) {
+          map?.delete(message.requestId);
+          if (map?.size === 0) {
             this.pending.delete(projectId);
           }
           req.resolve(message);

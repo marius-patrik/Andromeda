@@ -118,8 +118,8 @@ export const GraphView: React.FC<GraphViewProps> = ({ nodes, edges, onNodeMove, 
       })}
       {connecting && (
         <line
-          x1={nodes.find((n) => n.id === connecting.from)!.x + NODE_WIDTH}
-          y1={nodes.find((n) => n.id === connecting.from)!.y + NODE_HEIGHT / 2}
+          x1={nodes.find((n) => n.id === connecting.from)?.x + NODE_WIDTH}
+          y1={nodes.find((n) => n.id === connecting.from)?.y + NODE_HEIGHT / 2}
           x2={connecting.x}
           y2={connecting.y}
           stroke="var(--vsdaw-button-bg)"
