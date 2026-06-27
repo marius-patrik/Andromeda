@@ -138,6 +138,12 @@ export enum MessageType {
   NoteDelete = "note.delete",
   NoteSetVelocity = "note.setVelocity",
 
+  AutomationAddLane = "automation.addLane",
+  AutomationRemoveLane = "automation.removeLane",
+  AutomationAddPoint = "automation.addPoint",
+  AutomationMovePoint = "automation.movePoint",
+  AutomationDeletePoint = "automation.deletePoint",
+
   RecordingStart = "recording.start",
   RecordingStop = "recording.stop",
   RecordingComp = "recording.comp",
@@ -371,6 +377,39 @@ export interface MidiInputPayload {
   timestamp?: number;
 }
 
+export interface AutomationTarget {
+  type: "volume" | "pan" | "device";
+  trackId: string;
+  deviceId?: string;
+  parameter?: string;
+}
+
+export interface AutomationAddLanePayload {
+  laneId?: string;
+  trackId: string;
+  target: AutomationTarget;
+}
+
+export interface AutomationRemoveLanePayload {
+  laneId: string;
+}
+
+export interface AutomationAddPointPayload {
+  laneId: string;
+  position: number;
+  value: number;
+}
+
+export interface AutomationMovePointPayload {
+  pointId: string;
+  position?: number;
+  value?: number;
+}
+
+export interface AutomationDeletePointPayload {
+  pointId: string;
+}
+
 export interface RecordingStartPayload {
   trackIds?: string[];
   countIn?: boolean;
@@ -509,11 +548,26 @@ export interface TransportState {
   loopEnd: number;
 }
 
+export interface AutomationLaneState {
+  id: string;
+  trackId: string;
+  target: AutomationTarget;
+}
+
+export interface AutomationPointState {
+  id: string;
+  laneId: string;
+  position: number;
+  value: number;
+}
+
 export interface ProjectState {
   projectId: string;
   tracks: TrackState[];
   regions: RegionState[];
   notes: NoteState[];
+  automationLanes: AutomationLaneState[];
+  automationPoints: AutomationPointState[];
   transport: TransportState;
 }
 

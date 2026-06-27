@@ -24,6 +24,27 @@ export interface TimeSignature {
   denominator: number;
 }
 
+export interface AutomationTarget {
+  type: "volume" | "pan" | "device";
+  trackId: string;
+  deviceId?: string;
+  parameter?: string;
+}
+
+export interface AutomationPoint {
+  id: string;
+  laneId: string;
+  position: number;
+  value: number;
+}
+
+export interface AutomationLane {
+  id: string;
+  trackId: string;
+  target: AutomationTarget;
+  points: AutomationPoint[];
+}
+
 export interface TrackState {
   id: string;
   name: string;
@@ -36,6 +57,7 @@ export interface TrackState {
   height: number;
   inserts: ProtocolInsertState[];
   regions: RegionState[];
+  automationLanes: AutomationLane[];
 }
 
 export interface RegionState {
@@ -109,6 +131,11 @@ export type ViewMessage =
     }
   | { type: "timeline/selectRegion"; regionId: string | null }
   | { type: "timeline/moveRegion"; regionId: string; start: number }
+  | { type: "automation/addLane"; trackId: string; target: AutomationTarget }
+  | { type: "automation/removeLane"; laneId: string }
+  | { type: "automation/addPoint"; laneId: string; position: number; value: number }
+  | { type: "automation/movePoint"; pointId: string; position?: number; value?: number }
+  | { type: "automation/deletePoint"; pointId: string }
   | {
       type: "note/create";
       regionId: string;
