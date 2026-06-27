@@ -57,12 +57,15 @@ export const window = {
   showQuickPick: jest.fn().mockResolvedValue(undefined),
   showOpenDialog: jest.fn().mockResolvedValue(undefined),
   showSaveDialog: jest.fn().mockResolvedValue(undefined),
+  withProgress: jest.fn((_options, task) => task({ report: jest.fn() })),
   createStatusBarItem: jest.fn(() => ({
     show: jest.fn(),
     hide: jest.fn(),
     dispose: jest.fn(),
   })),
 };
+
+export const ProgressLocation = { Notification: 15, Window: 10, SourceControl: 1 };
 
 export const commands = {
   registerCommand: jest.fn((_command: string, _handler: () => unknown) => ({

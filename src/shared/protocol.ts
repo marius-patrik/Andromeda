@@ -148,6 +148,7 @@ export enum MessageType {
   AudioImport = "audio.import",
 
   ExportRender = "export.render",
+  ExportAudio = "export.audio",
 
   StateGet = "state.get",
   StateSet = "state.set",
@@ -408,6 +409,13 @@ export interface ExportRenderPayload {
   stems?: boolean;
 }
 
+export interface ExportAudioPayload {
+  format: ExportFormat;
+  start?: number;
+  end?: number;
+  stems?: boolean;
+}
+
 export type TrackType = "audio" | "midi" | "bus" | "master";
 
 export type ExportFormat = "wav" | "flac" | "ogg" | "mp3";
@@ -485,6 +493,13 @@ export interface PeaksResultPayload {
 }
 
 export interface ExportRenderResult {
+  format: ExportFormat;
+  data: string;
+  fileName: string;
+  message?: string;
+}
+
+export interface ExportAudioResult {
   format: ExportFormat;
   data: string;
   fileName: string;
