@@ -1,0 +1,28 @@
+[submodule "andromeda-engine"]
+	path = andromeda-engine
+	url = https://github.com/marius-patrik/andromeda-engine.git
+	branch = main
+[submodule "agent-manager"]
+	path = agent-manager
+	url = https://github.com/marius-patrik/agent-manager.git
+	branch = main
+[submodule "harnesses/rommie"]
+	path = harnesses/rommie
+	url = https://github.com/marius-patrik/rommie.git
+	branch = main
+[submodule "avatars/personal-assistant"]
+	path = avatars/personal-assistant
+	url = https://github.com/marius-patrik/personal-assistant.git
+	branch = main
+[submodule "avatars/leto-skye"]
+	path = avatars/leto-skye
+	url = https://github.com/marius-patrik/leto-skye.git
+	branch = main
+[submodule "avatars/vibe-bot"]
+	path = avatars/vibe-bot
+	url = https://github.com/marius-patrik/vibe-bot.git
+	branch = main
+[submodule "plugins/context-engine"]
+	path = plugins/context-engine
+	url = https://github.com/marius-patrik/memory-plugin.git
+	branch = master
