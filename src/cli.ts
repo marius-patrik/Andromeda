@@ -7,6 +7,7 @@ import {
   ensureSharedState,
   readInstalls,
   sharedState,
+  sharedStateFromEnv,
   writeInstalls,
   type InstallKind,
   type SharedState,
@@ -26,6 +27,10 @@ const packageKinds = new Map([
   ["cli", "clis"],
   ["private", "private"],
 ]);
+
+function runtimeState(): SharedState {
+  return sharedStateFromEnv(root);
+}
 
 function help(): void {
   console.log(`agents - Bun agent package manager
@@ -61,6 +66,10 @@ function parseArgs(args: string[]): { values: string[]; flags: Record<string, st
   const flags: Record<string, string | boolean> = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === "--") {
+      values.push(arg, ...args.slice(index + 1));
+      break;
+    }
     if (!arg.startsWith("--")) {
       values.push(arg);
       continue;
@@ -163,7 +172,7 @@ async function sync(): Promise<void> {
 }
 
 async function stateCommand(action: string | undefined): Promise<void> {
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   if (!action || action === "init") {
     console.log(`initialized ${path.relative(root, state.stateDir)}`);
@@ -182,7 +191,7 @@ function printEnv(env: Record<string, string>): void {
 
 async function cliCommand(args: string[]): Promise<void> {
   const [action, rawId, ...rest] = args;
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   if (!action || action === "list") {
     for (const id of adapterIds()) {
@@ -239,7 +248,7 @@ async function execAdapter(state: SharedState, id: CliId, args: string[]): Promi
 
 async function packageCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
   const [action, packagePath] = args;
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   if (!action || action === "list") {
     const registrations = await readPackageRegistrations(state);
@@ -266,7 +275,7 @@ async function packageCommand(args: string[], flags: Record<string, string | boo
 
 async function harnessCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
   const [action = "list", id, ...rest] = args;
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   const harnesses = await harnessesFromState(state);
   if (action === "list") {
@@ -335,11 +344,16 @@ async function runHarness(
 
 function sharedHarnessEnv(state: SharedState, harness: { id: string }): Record<string, string> {
   return {
+    AGENTS_BIN: process.execPath,
+    AGENTS_BIN_SCRIPT: Bun.argv[1] ? path.resolve(Bun.argv[1]) : "",
     AGENTS_HOME: state.stateDir,
+    AGENTS_ROOT: state.root,
     AGENTS_CLIS: state.clisDir,
+    AGENTS_HARNESSES: state.harnessesDir,
     AGENTS_SKILLS: state.skillsDir,
     AGENTS_PLUGINS: state.pluginsDir,
     AGENTS_HOOKS: state.hooksDir,
+    AGENTS_TEMPLATES: state.templatesDir,
     AGENTS_CREDITS: state.creditsFile,
     ROMMIE_HOME: path.join(state.harnessesDir, harness.id, "runtime"),
   };
@@ -352,7 +366,7 @@ async function install(values: string[]): Promise<void> {
   }
   if (!name || !source) throw new Error("install requires a name and source");
 
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   const targetBase =
     kind === "skill"
@@ -392,7 +406,7 @@ async function install(values: string[]): Promise<void> {
 }
 
 async function installs(flags: Record<string, string | boolean>): Promise<void> {
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   const records = await readInstalls(state);
   if (flags.json) console.log(JSON.stringify(records, null, 2));
@@ -400,7 +414,7 @@ async function installs(flags: Record<string, string | boolean>): Promise<void> 
 }
 
 async function credits(flags: Record<string, string | boolean>): Promise<void> {
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   const text = await Bun.file(state.creditsFile).text();
   if (flags.json) console.log(text.trim());
@@ -408,7 +422,7 @@ async function credits(flags: Record<string, string | boolean>): Promise<void> {
 }
 
 async function doctor(): Promise<void> {
-  const state = sharedState(root);
+  const state = runtimeState();
   await ensureSharedState(state);
   const missing: string[] = [];
   for (const item of await packages()) {

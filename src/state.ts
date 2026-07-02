@@ -54,8 +54,7 @@ export interface SharedState {
   envFile: string;
 }
 
-export function sharedState(root: string): SharedState {
-  const stateDir = path.join(root, ".agents");
+export function sharedStateAt(root: string, stateDir: string): SharedState {
   return {
     root,
     stateDir,
@@ -69,6 +68,27 @@ export function sharedState(root: string): SharedState {
     installsFile: path.join(stateDir, "installs.json"),
     packagesFile: path.join(stateDir, "packages.json"),
     envFile: path.join(stateDir, "env"),
+  };
+}
+
+export function sharedState(root: string): SharedState {
+  return sharedStateAt(root, path.join(root, ".agents"));
+}
+
+export function sharedStateFromEnv(cwd: string): SharedState {
+  const envHome = process.env.AGENTS_HOME?.trim();
+  if (!envHome) return sharedState(cwd);
+  const stateDir = path.resolve(envHome);
+  const root = path.dirname(stateDir);
+  return {
+    ...sharedStateAt(root, stateDir),
+    clisDir: process.env.AGENTS_CLIS?.trim() || path.join(stateDir, "clis"),
+    harnessesDir: process.env.AGENTS_HARNESSES?.trim() || path.join(stateDir, "harnesses"),
+    skillsDir: process.env.AGENTS_SKILLS?.trim() || path.join(stateDir, "skills"),
+    pluginsDir: process.env.AGENTS_PLUGINS?.trim() || path.join(stateDir, "plugins"),
+    hooksDir: process.env.AGENTS_HOOKS?.trim() || path.join(stateDir, "hooks"),
+    templatesDir: process.env.AGENTS_TEMPLATES?.trim() || path.join(stateDir, "templates"),
+    creditsFile: process.env.AGENTS_CREDITS?.trim() || path.join(stateDir, "credits.json"),
   };
 }
 
@@ -105,6 +125,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
     state.envFile,
     [
       `AGENTS_HOME=${state.stateDir}`,
+      `AGENTS_ROOT=${state.root}`,
       `AGENTS_CLIS=${state.clisDir}`,
       `AGENTS_HARNESSES=${state.harnessesDir}`,
       `AGENTS_SKILLS=${state.skillsDir}`,
