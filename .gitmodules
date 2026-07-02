@@ -1,14 +1,10 @@
-[submodule "andromeda-engine"]
-	path = andromeda-engine
-	url = https://github.com/marius-patrik/andromeda-engine.git
+[submodule "agents/andromeda"]
+	path = agents/andromeda
+	url = https://github.com/marius-patrik/andromeda.git
 	branch = main
 [submodule "agent-manager"]
 	path = agent-manager
 	url = https://github.com/marius-patrik/agent-manager.git
-	branch = main
-[submodule "agents/rommie"]
-	path = agents/rommie
-	url = https://github.com/marius-patrik/rommie.git
 	branch = main
 [submodule "avatars/personal-assistant"]
 	path = avatars/personal-assistant
@@ -49,4 +45,8 @@
 [submodule "templates/template-web"]
 	path = templates/template-web
 	url = https://github.com/marius-patrik/template-web.git
+	branch = main
+[submodule "avatars/rommie"]
+	path = avatars/rommie
+	url = https://github.com/marius-patrik/rommie.git
 	branch = main

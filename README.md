@@ -4,12 +4,11 @@ Workspace for agent projects.
 
 ## Core
 
-- `andromeda-engine`
 - `agent-manager`
 
 ## Agents
 
-- `agents/rommie`
+- `agents/andromeda`
 - `agents/README.md`
 
 ## Templates
@@ -22,6 +21,7 @@ Workspace for agent projects.
 
 ## Avatars
 
+- `avatars/rommie`
 - `avatars/skye`
 - `avatars/personal-assistant`
 - `avatars/vibe-bot`
