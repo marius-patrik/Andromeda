@@ -21,6 +21,10 @@ Workspace for agent projects.
 
 - `plugins/context-engine`
 
+## Private
+
+- `private`
+
 ## Wiki
 
 - `wiki/`
