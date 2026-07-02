@@ -75,8 +75,8 @@ Update this file when work is finished or paused so the next session can resume 
     $cacheLine = Get-MemoryStateLine -Path $cachePath -Label "cache.md"
     $shortLine = Get-MemoryStateLine -Path $shortPath -Label "SHORT.md"
     $receivedInput = if ([string]::IsNullOrWhiteSpace($hookInput)) { "no" } else { "yes" }
-    $begin = "<!-- context-engine:stop-handoff:start -->"
-    $end = "<!-- context-engine:stop-handoff:end -->"
+    $begin = "<!-- experience:stop-handoff:start -->"
+    $end = "<!-- experience:stop-handoff:end -->"
 
     $section = @"
 $begin
@@ -94,7 +94,7 @@ $end
 "@
 
     $existing = Get-Content -LiteralPath $handoffPath -Raw
-    $pattern = "(?s)<!-- (?:memory-plugin|context-engine):stop-handoff:start -->.*?<!-- (?:memory-plugin|context-engine):stop-handoff:end -->"
+    $pattern = "(?s)<!-- (?:memory-plugin|context-engine|experience):stop-handoff:start -->.*?<!-- (?:memory-plugin|context-engine|experience):stop-handoff:end -->"
 
     if ($existing -match $pattern) {
         $updated = [regex]::Replace($existing, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $section })

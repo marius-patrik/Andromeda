@@ -1,6 +1,6 @@
-# context-engine
+# experience
 
-Codex plugin for a layered local context and memory system.
+Codex plugin for a layered local experience and memory system.
 
 Layers:
 - `LONG.md`: stable general operating rules.

@@ -1,11 +1,11 @@
 {
-  "name": "context-engine",
+  "name": "experience",
   "interface": {
-    "displayName": "Context Engine"
+    "displayName": "Experience"
   },
   "plugins": [
     {
-      "name": "context-engine",
+      "name": "experience",
       "source": {
         "source": "local",
         "path": "."
