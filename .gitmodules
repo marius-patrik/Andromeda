@@ -1,16 +1,16 @@
-[submodule "agents/andromeda"]
-	path = agents/andromeda
+[submodule "packages/andromeda"]
+	path = packages/andromeda
 	url = https://github.com/marius-patrik/andromeda.git
 	branch = main
-[submodule "agents/personal-assistant"]
-	path = agents/personal-assistant
+[submodule "packages/personal-assistant"]
+	path = packages/personal-assistant
 	url = https://github.com/marius-patrik/personal-assistant.git
 	branch = main
-[submodule "agents/skye"]
-	path = agents/skye
+[submodule "packages/skye"]
+	path = packages/skye
 	url = https://github.com/marius-patrik/skye.git
 	branch = main
-[submodule "agents/vibe-bot"]
-	path = agents/vibe-bot
+[submodule "packages/vibe-bot"]
+	path = packages/vibe-bot
 	url = https://github.com/marius-patrik/vibe-bot.git
 	branch = main

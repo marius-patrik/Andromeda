@@ -4,15 +4,15 @@ import { parseGitmodules, serializeGitmodules } from "../src/gitmodules";
 describe("gitmodules", () => {
   test("parses submodule entries", () => {
     expect(
-      parseGitmodules(`[submodule "agents/skye"]
-\tpath = agents/skye
+      parseGitmodules(`[submodule "packages/skye"]
+\tpath = packages/skye
 \turl = https://github.com/marius-patrik/skye.git
 \tbranch = main
 `),
     ).toEqual([
       {
-        name: "agents/skye",
-        path: "agents/skye",
+        name: "packages/skye",
+        path: "packages/skye",
         url: "https://github.com/marius-patrik/skye.git",
         branch: "main",
       },
@@ -23,14 +23,14 @@ describe("gitmodules", () => {
     expect(
       serializeGitmodules([
         {
-          name: "agents/rommie",
-          path: "agents/rommie",
+          name: "packages/rommie",
+          path: "packages/rommie",
           url: "https://github.com/marius-patrik/andromeda.git",
           branch: "main",
         },
       ]),
-    ).toBe(`[submodule "agents/rommie"]
-\tpath = agents/rommie
+    ).toBe(`[submodule "packages/rommie"]
+\tpath = packages/rommie
 \turl = https://github.com/marius-patrik/andromeda.git
 \tbranch = main
 `);

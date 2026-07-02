@@ -12,10 +12,16 @@ agents list
 agents state init
 agents state env
 agents cli doctor
-agents packages register ../andromeda
+agents packages register packages/andromeda
 agents harness doctor andromeda
 agents doctor
 ```
+
+## Layout
+
+- `packages/agents-core` contains the `agents` CLI source and tests.
+- `packages/andromeda`, `packages/personal-assistant`, `packages/skye`, and
+  `packages/vibe-bot` are managed agent package submodules.
 
 ## Commands
 

@@ -22,7 +22,7 @@ import {
 const root = process.cwd();
 const gitmodulesPath = path.join(root, ".gitmodules");
 const packageKinds = new Map([
-  ["agent", "agents"],
+  ["agent", "packages"],
   ["harness", "harnesses"],
   ["cli", "clis"],
   ["private", "private"],
@@ -93,7 +93,7 @@ async function exists(file: string): Promise<boolean> {
 
 function inferKind(packagePath: string): string {
   const first = packagePath.split(/[\\/]/)[0];
-  if (first === "agents") return "agent";
+  if (first === "packages") return "agent";
   if (first === "harnesses") return "harness";
   if (first === "clis") return "cli";
   if (first === "private") return "private";

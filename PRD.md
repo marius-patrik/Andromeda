@@ -33,6 +33,8 @@
 - Harness: a managed runtime package, such as Andromeda, launched by `agents`.
 - CLI adapter: the shared rooting and credential contract for a vendor CLI.
 - Shared state: the root `.agents` directory.
+- Core package: the CLI implementation and tests under `packages/agents-core`.
+- Managed package checkout: a git-backed package under `packages/<name>`.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -53,6 +55,19 @@
 - `agents installs` lists shared installs.
 - `agents credits` locates or prints the shared credit store.
 - `agents doctor` validates package checkouts and shared state.
+
+## Workspace Layout
+
+```text
+packages/
+  agents-core/
+    src/
+    test/
+  andromeda/
+  personal-assistant/
+  skye/
+  vibe-bot/
+```
 
 ## State Layout
 
