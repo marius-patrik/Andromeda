@@ -2,9 +2,9 @@
 	path = agents/andromeda
 	url = https://github.com/marius-patrik/andromeda.git
 	branch = main
-[submodule "agent-manager"]
-	path = agent-manager
-	url = https://github.com/marius-patrik/agent-manager.git
+[submodule "agents-cli"]
+	path = agents-cli
+	url = https://github.com/marius-patrik/agents-cli.git
 	branch = main
 [submodule "avatars/personal-assistant"]
 	path = avatars/personal-assistant

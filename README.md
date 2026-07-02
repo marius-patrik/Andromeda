@@ -4,7 +4,7 @@ Workspace for agent projects.
 
 ## Core
 
-- `agent-manager`
+- `agents-cli`
 
 ## Agents
 
