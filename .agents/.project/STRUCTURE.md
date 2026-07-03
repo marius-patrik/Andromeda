@@ -5,12 +5,15 @@
 - `src/index.ts` - runtime entrypoint
 - `src/bot.ts` - GitHub App webhook handlers
 - `src/repository-setup.ts` - installed-repository setup enforcement
+- `src/managed-files.ts` - workspace-backed managed file discovery
 - `src/server.ts` - HTTP webhook server
 - `src/config.ts` - environment parsing
 - `tests/` - Node test suite
 - `package.json` - npm package metadata and scripts
 - `tsconfig.json` - TypeScript configuration
 - `.github/workflows/ci.yml` - GitHub Actions validation
+- `.github/workflows/sync-managed-repos.yml` - manual and release-triggered workspace-backed managed sync
+- `Dockerfile` - runtime image that bundles a checked-out `darkfactory-workspace/managed-repository`
 - `README.md` - template setup and usage notes
 
 ## Agent Files

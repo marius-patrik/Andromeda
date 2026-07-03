@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 export interface Config {
   appId: string;
   privateKey: string;
@@ -31,13 +34,21 @@ export function loadAppCredentials(env: NodeJS.ProcessEnv = process.env): AppCre
 }
 
 function requiredEnv(env: NodeJS.ProcessEnv, name: string): string {
-  const value = env[name]?.trim();
+  const value = env[name]?.trim() ?? readAgentosSecret(env, name)?.trim();
 
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
 
   return value;
+}
+
+function readAgentosSecret(env: NodeJS.ProcessEnv, name: string): string | null {
+  const secretsDir = env.AGENTS_SECRETS?.trim();
+  if (!secretsDir) return null;
+  const file = join(secretsDir, `${name}.secret`);
+  if (!existsSync(file)) return null;
+  return readFileSync(file, "utf8");
 }
 
 function parsePort(value: string | undefined): number {

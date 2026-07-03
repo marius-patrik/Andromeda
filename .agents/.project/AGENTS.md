@@ -1,6 +1,6 @@
 # Project Agent Rules
 
-These rules are specific to `vibe-bot`.
+These rules are specific to `darkfactory-agent`.
 
 ## Scope
 
@@ -8,9 +8,10 @@ This repository builds a TypeScript GitHub App bot that receives GitHub webhooks
 
 ## Managed Repository Setup
 
-- `.agents/.global/` is version-enforced by Vibe Bot in installed repositories.
-- `.github` is bootstrap-enforced by Vibe Bot in installed repositories.
-- Do not auto-mutate installed repositories yet; comment with precise missing or stale setup.
+- `.agents/.global/` is version-enforced by DarkFactory from `darkfactory-workspace`.
+- `.agents/.project/` is version-enforced only when a repo-specific workspace overlay exists.
+- `.github` is bootstrap-enforced by DarkFactory in installed repositories.
+- Open managed setup PRs instead of writing directly to default branches.
 - Keep runtime-generated `.agents` metadata out of git.
 
 ## Bot Boundary

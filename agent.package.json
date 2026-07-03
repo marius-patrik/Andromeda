@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "darkfactory-agent",
+  "name": "darkfactory",
+  "kind": "agent",
+  "description": "DarkFactory GitHub App automation agent CLI.",
+  "entry": "node dist/cli.js",
+  "requires": {
+    "state": [
+      "secrets",
+      "skills",
+      "plugins",
+      "hooks",
+      "credits"
+    ]
+  },
+  "provides": [
+    "cli:darkfactory"
+  ]
+}

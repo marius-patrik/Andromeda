@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { loadConfig } from "../src/config.js";
 
@@ -25,6 +28,23 @@ test("loadConfig accepts a valid PORT", () => {
   });
 
   assert.equal(config.port, 8080);
+});
+
+test("loadConfig reads missing values from AGENTS_SECRETS", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "darkfactory-secrets-"));
+  try {
+    await writeFile(path.join(root, "GITHUB_APP_ID.secret"), "12345\n");
+    await writeFile(path.join(root, "GITHUB_PRIVATE_KEY.secret"), "private-key\n");
+    await writeFile(path.join(root, "GITHUB_WEBHOOK_SECRET.secret"), "secret\n");
+
+    const config = loadConfig({ AGENTS_SECRETS: root });
+
+    assert.equal(config.appId, "12345");
+    assert.equal(config.privateKey, "private-key");
+    assert.equal(config.webhookSecret, "secret");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("loadConfig rejects missing required settings", () => {

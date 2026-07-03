@@ -4,11 +4,11 @@
 
 | Area | State |
 | --- | --- |
-| Repository | `marius-patrik/vibe-bot` |
-| Branch | `codex/managed-folder-enforcement` |
-| Issue | `#1` |
+| Repository | `marius-patrik/darkfactory-agent` |
+| Branch | `main` |
+| Issue | n/a |
 | Purpose | GitHub App bot for repository automation |
-| Managed setup | `.agents/.global` version enforcement, `.github` bootstrap enforcement, managed setup PRs |
+| Managed setup | Workspace-backed `.agents/.global`, optional repo-specific `.agents/.project`, GitHub bootstrap, and Codex Review workflow PRs |
 | Release | Tag-driven GitHub release and GHCR image workflow |
 | CI | GitHub Actions `validate` job |
 
@@ -23,7 +23,6 @@ Run before committing:
 
 ## Next Actions
 
-- Keep PR #2 updated.
-- Confirm GitHub Actions `validate` passes.
-- Configure `VIBE_BOT_APP_ID` and `VIBE_BOT_PRIVATE_KEY` secrets before using managed sync workflow.
+- Configure `DARK_FACTORY_APP_ID` and `DARK_FACTORY_PRIVATE_KEY` secrets before using managed sync or release workflows.
+- Configure `CODEX_AUTH_JSON` in every managed repository where Codex Review should approve pull requests.
 - Install the GitHub App on all repositories through GitHub's installation UI.

@@ -9,7 +9,7 @@ import {
 } from "../src/managed-sync.js";
 import type { ManagedFile } from "../src/managed-files.js";
 
-test("managedSetupPullRequestBody lists changed files and preserves project-specific state", () => {
+test("managedSetupPullRequestBody lists changed files and documents workspace-owned project state", () => {
   const body = managedSetupPullRequestBody([
     ".agents/.global/VERSION",
     ".github/workflows/dark-factory-bootstrap.yml"
@@ -17,7 +17,7 @@ test("managedSetupPullRequestBody lists changed files and preserves project-spec
 
   assert.match(body, /\.agents\/\.global\/VERSION/);
   assert.match(body, /\.github\/workflows\/dark-factory-bootstrap\.yml/);
-  assert.match(body, /Project-specific `.agents\/.project` files are not changed/);
+  assert.match(body, /\.agents\/.project` is managed only when a repo-specific workspace overlay exists/);
 });
 
 test("ensureManagedRepositorySetup creates a managed PR when files are missing", async () => {
@@ -70,7 +70,7 @@ test("ensureManagedRepositorySetup creates a managed PR when files are missing",
     }
   };
   const files: ManagedFile[] = [
-    { path: ".agents/.global/VERSION", content: "dark-factory@1.0.0\n" },
+    { path: ".agents/.global/VERSION", content: "darkfactory-agent@1.0.0\n" },
     { path: ".github/workflows/dark-factory-bootstrap.yml", content: "name: Dark Factory Bootstrap\n" }
   ];
 
@@ -94,4 +94,3 @@ test("ensureManagedRepositorySetup creates a managed PR when files are missing",
     )
   );
 });
-

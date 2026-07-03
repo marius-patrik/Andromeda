@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { GITHUB_BOOTSTRAP_WORKFLOW_PATH } from "./managed-files.js";
+import { CODEX_REVIEW_WORKFLOW_PATH, GITHUB_BOOTSTRAP_WORKFLOW_PATH, requiredManagedFilePaths } from "./managed-files.js";
 
 export const REPOSITORY_SETUP_COMMENT_MARKER = "<!-- dark-factory:repository-setup -->";
 
@@ -13,13 +13,13 @@ const VERSIONED_FOLDERS = [
   }
 ] as const;
 
-const BOOTSTRAP_PATHS = [
-  {
+const BOOTSTRAP_PATHS = requiredManagedFilePaths()
+  .filter((path) => path.startsWith(".github/"))
+  .map((path) => ({
     displayPath: ".github",
-    requiredPath: GITHUB_BOOTSTRAP_WORKFLOW_PATH,
-    reason: "Dark Factory bootstrap workflow"
-  }
-] as const;
+    requiredPath: path,
+    reason: path === CODEX_REVIEW_WORKFLOW_PATH ? "Codex review workflow" : "Dark Factory managed workflow support"
+  })) as Array<{ displayPath: string; requiredPath: string; reason: string }>;
 
 export interface GitHubRequester {
   request(route: string, parameters: Record<string, unknown>): Promise<{ data: unknown }>;
@@ -57,7 +57,7 @@ export interface BootstrapPathResult {
 }
 
 export function expectedManagedFolderVersion(packageVersion = readPackageVersion()): string {
-  return `dark-factory@${packageVersion}`;
+  return `darkfactory-agent@${packageVersion}`;
 }
 
 export async function checkRepositorySetup(
@@ -113,8 +113,9 @@ export function formatRepositorySetupComment(report: RepositorySetupReport): str
 
   lines.push(
     "",
-    "Update `.agents/.global` from the current Dark Factory template when the agent version is stale or missing.",
-    `Bootstrap \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\` when the GitHub workflow scaffold is missing.`
+    "Update `.agents` from the DarkFactory workspace when the managed version is stale or missing.",
+    `Bootstrap \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\` and \`${CODEX_REVIEW_WORKFLOW_PATH}\` when GitHub workflow scaffolding is missing.`,
+    "Configure the repository secret `CODEX_AUTH_JSON` so the Codex reviewer can run."
   );
 
   return lines.join("\n");
@@ -274,4 +275,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isRequestError(error: unknown): error is { status: number } {
   return isRecord(error) && typeof error.status === "number";
 }
-

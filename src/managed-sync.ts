@@ -30,13 +30,14 @@ export interface ManagedSetupSyncResult {
 export async function ensureManagedRepositorySetup(
   github: GitHubRequester,
   repository: ManagedRepository,
-  files = readManagedFiles()
+  files?: ManagedFile[]
 ): Promise<ManagedSetupSyncResult> {
   if (repository.archived) {
     return baseResult(repository, "skipped", [], "Repository is archived.");
   }
 
   const repoInfo = await getRepositoryInfo(github, repository);
+  const managedFiles = files ?? readManagedFiles(repository);
 
   if (repoInfo.archived) {
     return baseResult(repository, "skipped", [], "Repository is archived.");
@@ -45,7 +46,7 @@ export async function ensureManagedRepositorySetup(
   const baseRef = await getRef(github, repository, `heads/${repoInfo.defaultBranch}`);
   const setupRef = await getOptionalRef(github, repository, `heads/${MANAGED_SETUP_BRANCH}`);
   const sourceSha = setupRef?.sha ?? baseRef.sha;
-  const changedFiles = await changedManagedFiles(github, repository, sourceSha, files);
+  const changedFiles = await changedManagedFiles(github, repository, sourceSha, managedFiles);
 
   if (changedFiles.length === 0) {
     return baseResult(repository, "current", []);
@@ -341,9 +342,10 @@ export function managedSetupPullRequestBody(changedPaths: string[]): string {
     "",
     "## Notes",
     "",
-    "- `.agents/.global` is version-managed by Dark Factory.",
+    "- `.agents/.global` is version-managed by Dark Factory from the workspace repository.",
+    "- `.agents/.project` is managed only when a repo-specific workspace overlay exists.",
     `- \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\` is bootstrap-managed so repositories have a safe baseline workflow.`,
-    "- Project-specific `.agents/.project` files are not changed."
+    "- `.github/workflows/codex-review.yml` runs Codex autoreview with the repository secret `CODEX_AUTH_JSON`."
   ].join("\n");
 }
 
@@ -368,4 +370,3 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isRequestError(error: unknown): error is { status: number } {
   return isRecord(error) && typeof error.status === "number";
 }
-

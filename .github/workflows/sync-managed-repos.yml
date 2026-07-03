@@ -16,6 +16,21 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Create DarkFactory App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
+          private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Check out DarkFactory workspace
+        uses: actions/checkout@v4
+        with:
+          repository: marius-patrik/darkfactory-workspace
+          token: ${{ steps.app-token.outputs.token }}
+          path: darkfactory-workspace
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -27,6 +42,7 @@ jobs:
 
       - name: Sync installed repositories
         env:
-          GITHUB_APP_ID: ${{ secrets.VIBE_BOT_APP_ID }}
-          GITHUB_PRIVATE_KEY: ${{ secrets.VIBE_BOT_PRIVATE_KEY }}
+          GITHUB_APP_ID: ${{ secrets.DARK_FACTORY_APP_ID }}
+          GITHUB_PRIVATE_KEY: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
+          DARK_FACTORY_WORKSPACE_ROOT: ${{ github.workspace }}/darkfactory-workspace/managed-repository
         run: npm run sync:managed
