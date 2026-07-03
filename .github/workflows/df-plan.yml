@@ -1,0 +1,43 @@
+name: DarkFactory Plan
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: Target repository in owner/name form. Defaults to this repository.
+        required: false
+        type: string
+  push:
+    paths:
+      - PRD.md
+
+permissions:
+  contents: read
+
+jobs:
+  df-plan:
+    name: Reconcile PRD backlog
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout DarkFactory
+        uses: actions/checkout@v4
+
+      - name: Mint mp-agents installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
+          private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
+          owner: marius-patrik
+
+      - name: Run planner
+        env:
+          DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
+          DF_CONTROL_REPO: ${{ github.repository }}
+          DF_TARGET_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.repo || github.repository }}
+          DF_TRIGGER: ${{ github.event_name }}
+          DF_DATA_REPO: marius-patrik/darkfactory-data
+        run: node .github/scripts/df-plan.mjs

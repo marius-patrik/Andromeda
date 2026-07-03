@@ -54,4 +54,5 @@ jobs:
           DF_TARGET_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.repo || github.repository }}
           DF_TARGET_ISSUE_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.issue_number || github.event.issue.number }}
           DF_TRIGGER: ${{ github.event_name }}
+          DF_DATA_REPO: marius-patrik/darkfactory-data
         run: node .github/scripts/df-work.mjs

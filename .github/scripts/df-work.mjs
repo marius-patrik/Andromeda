@@ -3,8 +3,23 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import {
+  DEFAULT_DATA_REPO,
+  WORK_LABELS,
+  assertAllowedRepo,
+  cleanupTempRoot,
+  createGithubClient,
+  ensureLabels,
+  getRepository,
+  parseRepo,
+  repoName,
+  requiredEnv,
+  sanitize,
+  slug,
+  taskClassFromLabels,
+  writeRunLedger
+} from "./df-lib.mjs";
 
-const API_ROOT = "https://api.github.com";
 const TOKEN = requiredEnv("DARK_FACTORY_TOKEN");
 const CODEX_AUTH_JSON = process.env.CODEX_AUTH_JSON ?? "";
 const CONTROL_REPO = parseRepo(requiredEnv("DF_CONTROL_REPO"));
@@ -13,18 +28,12 @@ const TARGET_ISSUE_NUMBER = Number(requiredEnv("DF_TARGET_ISSUE_NUMBER"));
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
 const WORKER_IMAGE = process.env.DF_WORKER_IMAGE ?? "darkfactory-codex-worker";
 const CODEX_MODEL = process.env.DF_CODEX_MODEL ?? "gpt-5.5";
-const CODEX_EFFORT = process.env.DF_CODEX_EFFORT ?? "medium";
+const DATA_REPO = process.env.DF_DATA_REPO ?? DEFAULT_DATA_REPO;
 const GIT_BASIC_AUTH = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
-
-const LABELS = [
-  { name: "df:ready", color: "0E8A16", description: "DarkFactory work loop may pick up this issue" },
-  { name: "df:running", color: "1D76DB", description: "DarkFactory worker is running for this issue" },
-  { name: "df:blocked", color: "B60205", description: "DarkFactory worker is blocked on this issue" },
-  { name: "df:done", color: "5319E7", description: "DarkFactory worker completed this issue" }
-];
+const gh = createGithubClient(TOKEN, "darkfactory-worker");
 
 main().catch((error) => {
-  console.error(sanitize(error.stack || error.message || String(error)));
+  console.error(sanitize(error.stack || error.message || String(error), TOKEN));
   process.exitCode = 1;
 });
 
@@ -34,41 +43,71 @@ async function main() {
   }
 
   assertAllowedRepo(TARGET_REPO);
-  await ensureLabels(CONTROL_REPO);
+  await ensureLabels(gh, CONTROL_REPO, WORK_LABELS);
   if (repoName(CONTROL_REPO) !== repoName(TARGET_REPO)) {
-    await ensureLabels(TARGET_REPO);
+    await ensureLabels(gh, TARGET_REPO, WORK_LABELS);
   }
 
   const issue = await getIssue(TARGET_REPO, TARGET_ISSUE_NUMBER);
+  const taskRouting = taskClassFromLabels(issue.labels);
+  const codeEffort = taskRouting.effort;
   const target = `${repoName(TARGET_REPO)}#${TARGET_ISSUE_NUMBER}`;
   const branch = `df/${TARGET_ISSUE_NUMBER}-${slug(issue.title)}`;
+  const ledger = {
+    trigger: TRIGGER,
+    issue: target,
+    branch,
+    status: "started",
+    actions: [],
+    token_usage: {
+      codex_calls: 0,
+      model: CODEX_MODEL,
+      model_reasoning_effort: codeEffort,
+      input_tokens: null,
+      output_tokens: null,
+      note: "codex exec token counters are not exposed to this script yet"
+    }
+  };
   let tempRoot = "";
+  let pullRequest = null;
 
   try {
     await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:running"], ["df:ready", "df:blocked", "df:done"]);
+    const repo = await getRepository(gh, TARGET_REPO);
+    const workBaseBranch = await resolveWorkBaseBranch(TARGET_REPO, repo.default_branch);
+    const mergePolicy = await preflightMergePolicy(TARGET_REPO, workBaseBranch, repo);
+    ledger.actions.push({ action: "preflight-merge-policy", result: mergePolicy });
     await createIssueComment(
       TARGET_REPO,
       TARGET_ISSUE_NUMBER,
-      `DarkFactory worker started for \`${target}\` from \`${TRIGGER}\`.\n\nBranch: \`${branch}\``
+      [
+        `DarkFactory worker started for \`${target}\` from \`${TRIGGER}\`.`,
+        "",
+        `Branch: \`${branch}\``,
+        `Task class: \`${taskRouting.taskClass}\``,
+        `Codex reasoning effort: \`${codeEffort}\``,
+        `Merge policy: ${mergePolicy.summary}`
+      ].join("\n")
     );
 
     if (!CODEX_AUTH_JSON.trim()) {
       throw new Error("CODEX_AUTH_JSON is not configured for the worker.");
     }
 
-    const repo = await getRepository(TARGET_REPO);
     tempRoot = await mkdtemp(path.join(tmpdir(), "df-work-"));
     const worktree = path.join(tempRoot, "repo");
     const codexHome = path.join(tempRoot, "codex-home");
 
-    await cloneRepository(TARGET_REPO, worktree);
+    await cloneRepository(TARGET_REPO, worktree, workBaseBranch);
     await ensureNoRemoteBranch(TARGET_REPO, branch);
     runGit(["checkout", "-b", branch], worktree);
 
     await writeCodexAuth(codexHome);
-    await writeTaskBrief(worktree, issue, repo.default_branch);
+    const briefInfo = await writeTaskBrief(worktree, issue, workBaseBranch, taskRouting);
+    ledger.token_usage.input_brief_characters = briefInfo.characters;
     buildWorkerImage();
-    runCodexWorker(worktree, codexHome);
+    ledger.token_usage.codex_calls += 1;
+    runCodexWorker(worktree, codexHome, codeEffort);
 
     const summary = await readWorkerSummary(worktree);
     await removeWorkerScratch(worktree);
@@ -81,14 +120,16 @@ async function main() {
       runGit(["commit", "-m", `feat: implement issue #${TARGET_ISSUE_NUMBER}`], worktree);
     }
 
-    const ahead = Number(gitOutput(["rev-list", "--count", `origin/${repo.default_branch}..HEAD`], worktree));
+    const ahead = Number(gitOutput(["rev-list", "--count", `origin/${workBaseBranch}..HEAD`], worktree));
     if (!Number.isInteger(ahead) || ahead <= 0) {
       throw new Error("Worker completed without producing a commit.");
     }
 
     runGit(["push", "origin", `HEAD:refs/heads/${branch}`], worktree);
-    const pullRequest = await createPullRequest(TARGET_REPO, repo.default_branch, branch, issue, summary);
-    const automerge = await enableAutoMerge(pullRequest.node_id);
+    pullRequest = await createPullRequest(TARGET_REPO, workBaseBranch, branch, issue, summary);
+    const automerge = mergePolicy.useAutomerge
+      ? await enableAutoMerge(pullRequest.node_id)
+      : { enabled: false, reason: "Direct green-PR sweep will merge after checks because branch protection is not configured." };
 
     await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:done"], ["df:ready", "df:running", "df:blocked"]);
     await createIssueComment(
@@ -104,7 +145,12 @@ async function main() {
         truncate(summary, 5000)
       ].join("\n")
     );
+    ledger.status = "success";
+    ledger.pull_request = pullRequest.html_url;
+    ledger.actions.push({ action: "open-pr", url: pullRequest.html_url, automerge });
   } catch (error) {
+    ledger.status = "blocked";
+    ledger.error = sanitize(error.stack || error.message || String(error), TOKEN);
     await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:running"]);
     await createIssueComment(
       TARGET_REPO,
@@ -115,34 +161,25 @@ async function main() {
         "Blocker:",
         "",
         "```text",
-        truncate(sanitize(error.stack || error.message || String(error)), 6000),
+        truncate(ledger.error, 6000),
         "```"
       ].join("\n")
     );
     throw error;
   } finally {
-    if (tempRoot) {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
-  }
-}
-
-async function ensureLabels(repository) {
-  for (const label of LABELS) {
+    const cleanup = await cleanupTempRoot(tempRoot, (warning) => console.warn(sanitize(warning, TOKEN)));
+    ledger.cleanup = cleanup;
     try {
-      await ghRequest("POST", `/repos/${repoName(repository)}/labels`, label);
+      ledger.ledger = await writeRunLedger(gh, DATA_REPO, "df-work", repoName(TARGET_REPO), ledger);
+      console.log(`DarkFactory ledger written to ${ledger.ledger.repository}/${ledger.ledger.path}`);
     } catch (error) {
-      if (error.status !== 422) throw error;
-      await ghRequest("PATCH", `/repos/${repoName(repository)}/labels/${encodeURIComponent(label.name)}`, {
-        color: label.color,
-        description: label.description
-      });
+      console.warn(sanitize(`DarkFactory ledger warning: ${error.message || String(error)}`, TOKEN));
     }
   }
 }
 
 async function getIssue(repository, issueNumber) {
-  const issue = await ghRequest("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
+  const issue = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
   if (issue.pull_request) {
     throw new Error(`${repoName(repository)}#${issueNumber} is a pull request, not an issue.`);
   }
@@ -152,17 +189,50 @@ async function getIssue(repository, issueNumber) {
   return issue;
 }
 
-async function getRepository(repository) {
-  return await ghRequest("GET", `/repos/${repoName(repository)}`);
+async function preflightMergePolicy(repository, baseBranch, repo) {
+  const protection = await getBranchProtection(repository, baseBranch);
+  if (protection.protected && !repo.allow_auto_merge) {
+    throw new Error(
+      `${repoName(repository)} requires branch-protection automerge on ${baseBranch}, but repository auto-merge is disabled.`
+    );
+  }
+  if (protection.protected) {
+    return { useAutomerge: true, summary: `branch protection exists on \`${baseBranch}\`; GitHub automerge will be armed` };
+  }
+  return { useAutomerge: false, summary: `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly` };
+}
+
+async function resolveWorkBaseBranch(repository, defaultBranch) {
+  try {
+    await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent("dev")}`);
+    return "dev";
+  } catch (error) {
+    if (error.status === 404) return defaultBranch;
+    throw error;
+  }
+}
+
+async function getBranchProtection(repository, branch) {
+  try {
+    const data = await gh.request(
+      "GET",
+      `/repos/${repoName(repository)}/branches/${encodeURIComponent(branch)}/protection`
+    );
+    return { protected: true, data };
+  } catch (error) {
+    if (error.status === 404) return { protected: false, data: null };
+    if (error.status === 403 && /enable this feature/i.test(error.message || "")) return { protected: false, data: null };
+    throw error;
+  }
 }
 
 async function replaceIssueLabels(repository, issueNumber, add, remove) {
   if (add.length) {
-    await ghRequest("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: add });
+    await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: add });
   }
   for (const label of remove) {
     try {
-      await ghRequest("DELETE", `/repos/${repoName(repository)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
+      await gh.request("DELETE", `/repos/${repoName(repository)}/issues/${issueNumber}/labels/${encodeURIComponent(label)}`);
     } catch (error) {
       if (error.status !== 404) throw error;
     }
@@ -170,16 +240,16 @@ async function replaceIssueLabels(repository, issueNumber, add, remove) {
 }
 
 async function createIssueComment(repository, issueNumber, body) {
-  await ghRequest("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/comments`, { body });
+  await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/comments`, { body });
 }
 
-async function cloneRepository(repository, worktree) {
+async function cloneRepository(repository, worktree, branch) {
   const url = `https://github.com/${repoName(repository)}.git`;
-  runGitWithAuth(["clone", "--depth", "1", url, worktree], process.cwd());
+  runGitWithAuth(["clone", "--depth", "1", "--branch", branch, url, worktree], process.cwd());
 }
 
 async function ensureNoRemoteBranch(repository, branch) {
-  const refs = await ghRequest(
+  const refs = await gh.request(
     "GET",
     `/repos/${repoName(repository)}/git/matching-refs/heads/${encodeURIComponent(branch)}`
   );
@@ -193,7 +263,7 @@ async function writeCodexAuth(codexHome) {
   await writeFile(path.join(codexHome, "auth.json"), CODEX_AUTH_JSON, { mode: 0o600 });
 }
 
-async function writeTaskBrief(worktree, issue, defaultBranch) {
+async function writeTaskBrief(worktree, issue, defaultBranch, taskRouting) {
   const scratchDir = path.join(worktree, ".darkfactory");
   await mkdir(scratchDir, { recursive: true });
 
@@ -211,6 +281,8 @@ async function writeTaskBrief(worktree, issue, defaultBranch) {
     `Issue: #${TARGET_ISSUE_NUMBER}`,
     `Title: ${issue.title}`,
     `Labels: ${issueLabels || "(none)"}`,
+    `Task class: ${taskRouting.taskClass}`,
+    `Codex reasoning effort: ${taskRouting.effort}`,
     "",
     "## Contract",
     "",
@@ -237,13 +309,14 @@ async function writeTaskBrief(worktree, issue, defaultBranch) {
   ].join("\n");
 
   await writeFile(path.join(scratchDir, "df-task-brief.md"), `${brief}\n`);
+  return { characters: brief.length };
 }
 
 function buildWorkerImage() {
   runCommand("docker", ["build", "-f", ".github/codex-review.Dockerfile", "-t", WORKER_IMAGE, "."], process.cwd());
 }
 
-function runCodexWorker(worktree, codexHome) {
+function runCodexWorker(worktree, codexHome, codeEffort) {
   const script = [
     "set -euo pipefail",
     "git config --global --add safe.directory /workspace",
@@ -265,7 +338,7 @@ function runCodexWorker(worktree, codexHome) {
       "-e",
       `CODEX_MODEL=${CODEX_MODEL}`,
       "-e",
-      `CODEX_EFFORT=${CODEX_EFFORT}`,
+      `CODEX_EFFORT=${codeEffort}`,
       "-v",
       `${worktree}:/workspace`,
       "-v",
@@ -289,7 +362,7 @@ async function removeWorkerScratch(worktree) {
 }
 
 async function createPullRequest(repository, base, branch, issue, summary) {
-  return await ghRequest("POST", `/repos/${repoName(repository)}/pulls`, {
+  return await gh.request("POST", `/repos/${repoName(repository)}/pulls`, {
     title: issue.title,
     head: branch,
     base,
@@ -305,7 +378,7 @@ async function createPullRequest(repository, base, branch, issue, summary) {
 
 async function enableAutoMerge(pullRequestId) {
   try {
-    await ghGraphql(
+    await gh.graphql(
       `mutation EnableAutoMerge($pullRequestId: ID!) {
         enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
           pullRequest { url }
@@ -315,50 +388,8 @@ async function enableAutoMerge(pullRequestId) {
     );
     return { enabled: true, reason: "" };
   } catch (error) {
-    return { enabled: false, reason: sanitize(error.message || String(error)) };
+    return { enabled: false, reason: sanitize(error.message || String(error), TOKEN) };
   }
-}
-
-async function ghRequest(method, pathName, body) {
-  const response = await fetch(`${API_ROOT}${pathName}`, {
-    method,
-    headers: {
-      "Accept": "application/vnd.github+json",
-      "Authorization": `Bearer ${TOKEN}`,
-      "Content-Type": "application/json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "darkfactory-worker"
-    },
-    body: body === undefined ? undefined : JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    const error = new Error(`${method} ${pathName} failed with ${response.status}: ${sanitize(text)}`);
-    error.status = response.status;
-    throw error;
-  }
-
-  if (response.status === 204) return null;
-  return await response.json();
-}
-
-async function ghGraphql(query, variables) {
-  const response = await fetch(`${API_ROOT}/graphql`, {
-    method: "POST",
-    headers: {
-      "Accept": "application/vnd.github+json",
-      "Authorization": `Bearer ${TOKEN}`,
-      "Content-Type": "application/json",
-      "User-Agent": "darkfactory-worker"
-    },
-    body: JSON.stringify({ query, variables })
-  });
-  const payload = await response.json();
-  if (!response.ok || payload.errors?.length) {
-    throw new Error(JSON.stringify(payload.errors || payload));
-  }
-  return payload.data;
 }
 
 function runGit(args, cwd) {
@@ -385,7 +416,7 @@ function runCommand(command, args, cwd) {
     env: process.env
   });
   if (result.status !== 0) {
-    throw new Error(`${command} failed with exit ${result.status}\n${sanitize(result.stdout || "")}\n${sanitize(result.stderr || "")}`.trim());
+    throw new Error(`${command} failed with exit ${result.status}\n${sanitize(result.stdout || "", TOKEN)}\n${sanitize(result.stderr || "", TOKEN)}`.trim());
   }
   return result.stdout || "";
 }
@@ -393,32 +424,6 @@ function runCommand(command, args, cwd) {
 async function readOptional(filePath) {
   if (!existsSync(filePath)) return "";
   return await readFile(filePath, "utf8");
-}
-
-function parseRepo(value) {
-  const match = value.trim().match(/^([^/\s]+)\/([^/\s]+)$/);
-  if (!match) throw new Error(`Invalid repository name: ${value}`);
-  return { owner: match[1], repo: match[2] };
-}
-
-function repoName(repository) {
-  return `${repository.owner}/${repository.repo}`;
-}
-
-function assertAllowedRepo(repository) {
-  const name = repoName(repository).toLowerCase();
-  const repo = repository.repo.toLowerCase();
-  if (name === "marius-patrik/fabrica" || repo === "fabrica" || name === "marius-patrik/skyblock-agent" || repo === "skyblock-agent") {
-    throw new Error(`Refusing to run on parked repository: ${repoName(repository)}`);
-  }
-}
-
-function slug(value) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60) || "issue";
 }
 
 function extractAcceptanceCriteria(body) {
@@ -436,14 +441,4 @@ function extractAcceptanceCriteria(body) {
 function truncate(value, maxLength) {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength)}\n\n[truncated from ${value.length} characters]`;
-}
-
-function sanitize(value) {
-  return value.split(TOKEN).join("***").split(GIT_BASIC_AUTH).join("***");
-}
-
-function requiredEnv(name) {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`Missing required environment variable ${name}`);
-  return value;
 }
