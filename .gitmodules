@@ -22,10 +22,6 @@
 	path = apps/singularity
 	url = https://github.com/marius-patrik/singularity.git
 	branch = main
-[submodule "agents/rommie-agent"]
-	path = agents/rommie-agent
-	url = https://github.com/marius-patrik/rommie-agent.git
-	branch = main
 [submodule "data/data-agentos"]
 	path = data/data-agentos
 	url = https://github.com/marius-patrik/agentos-data.git
@@ -46,4 +42,20 @@
 [submodule "os/agents-manager"]
 	path = os/agents-manager
 	url = https://github.com/marius-patrik/agents-manager.git
+	branch = main
+[submodule "llm-gateway"]
+	path = llm-gateway
+	url = https://github.com/marius-patrik/llm-gateway.git
+	branch = main
+[submodule "inference-engine"]
+	path = inference-engine
+	url = https://github.com/marius-patrik/inference-engine.git
+	branch = main
+[submodule "plugins/dream"]
+	path = plugins/dream
+	url = https://github.com/marius-patrik/dream.git
+	branch = main
+[submodule "plugins/andromeda"]
+	path = plugins/andromeda
+	url = https://github.com/marius-patrik/andromeda-plugin.git
 	branch = main
