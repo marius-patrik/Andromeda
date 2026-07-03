@@ -153,7 +153,11 @@ def _walk_files(path: Path) -> Iterator[tuple[Path, str]]:
             fpath = root_p / name
             if not fpath.exists():  # skip broken symlinks
                 continue
-            yield fpath, str(rel_root / name).lstrip("./")
+            yield fpath, _rel_posix(rel_root / name)
+
+
+def _rel_posix(path: Path) -> str:
+    return path.as_posix().lstrip("./")
 
 
 def classify_hermes(path: Path) -> Iterator[Operation]:
@@ -162,12 +166,13 @@ def classify_hermes(path: Path) -> Iterator[Operation]:
         root_p = Path(root)
         rel_root = root_p.relative_to(path)
         for name in files:
-            rel_src = f"hermes-agent/{rel_root / name}".lstrip("./")
+            rel_file = _rel_posix(rel_root / name)
+            rel_src = f"hermes-agent/{rel_file}".lstrip("./")
             if name.endswith(".md") or "memory" in name.lower():
-                dst = f"global/memories/hermes/{rel_root / name}".lstrip("./")
+                dst = f"global/memories/hermes/{rel_file}".lstrip("./")
                 yield Operation(rel_src, dst, "active", False, note="mined memory")
             else:
-                dst = f"archive/hermes-agent/{rel_root / name}".lstrip("./")
+                dst = f"archive/hermes-agent/{rel_file}".lstrip("./")
                 yield Operation(rel_src, dst, "archive", False)
 
 
@@ -394,7 +399,7 @@ def _execute(op: Operation, root: Path, mf: TextIO) -> None:
     quarantine = root / "quarantine" / f"oddity-{src.name}"
     quarantine.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(quarantine))
-    _write_manifest(mf, op.rel_src, str(quarantine.relative_to(root)), "quarantine")
+    _write_manifest(mf, op.rel_src, _rel_posix(quarantine.relative_to(root)), "quarantine")
 
 
 def _count_files(path: Path) -> int:
@@ -574,8 +579,8 @@ def _tag_sessions(root: Path, mf: TextIO) -> None:
     meta.write_text("agent: rommie\n", encoding="utf-8")
     _write_manifest(
         mf,
-        str(meta.relative_to(root)),
-        str(meta.relative_to(root)),
+        _rel_posix(meta.relative_to(root)),
+        _rel_posix(meta.relative_to(root)),
         "seed",
         sha256_file(meta),
         meta.stat().st_size,

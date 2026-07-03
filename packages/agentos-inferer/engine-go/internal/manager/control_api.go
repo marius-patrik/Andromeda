@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -213,7 +214,7 @@ func appendQFTTaskViaQueueStore(ctx context.Context, helper, queue string, recor
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "python3", helper, "append", "--queue", queue, "--json", string(data))
+	cmd := exec.CommandContext(ctx, pythonExecutable(), helper, "append", "--queue", queue, "--json", string(data))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
@@ -224,6 +225,21 @@ func appendQFTTaskViaQueueStore(ctx context.Context, helper, queue string, recor
 		return fmt.Errorf("queue append failed: %s", message)
 	}
 	return nil
+}
+
+func pythonExecutable() string {
+	if explicit := os.Getenv("PYTHON"); explicit != "" {
+		return explicit
+	}
+	if runtime.GOOS == "windows" {
+		if path, err := exec.LookPath("python"); err == nil {
+			return path
+		}
+	}
+	if path, err := exec.LookPath("python3"); err == nil {
+		return path
+	}
+	return "python3"
 }
 
 type controlRunDTO struct {

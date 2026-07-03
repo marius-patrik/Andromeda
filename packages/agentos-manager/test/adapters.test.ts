@@ -9,6 +9,7 @@ describe("CLI adapters", () => {
 
     expect(Object.keys(adapters).sort()).toEqual(["agy", "claude", "codex", "kimi"]);
     expect(adapterEnv(state, "codex").CODEX_HOME).toBe(path.join(state.clisDir, "codex"));
+    expect(adapterEnv(state, "codex").AGENTS_SECRETS).toBe(path.join(state.stateDir, "secrets"));
     expect(adapterEnv(state, "claude").CLAUDE_CONFIG_DIR).toBe(path.join(state.clisDir, "claude"));
     expect(adapterEnv(state, "kimi").KIMI_CODE_HOME).toBe(path.join(state.clisDir, "kimi"));
     expect(adapterEnv(state, "agy").HOME).toBe(path.join(state.clisDir, "agy"));

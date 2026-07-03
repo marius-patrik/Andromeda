@@ -18,14 +18,18 @@ import {
   upsertPackageRegistration,
   type AgentsPackageManifest,
 } from "./packages";
+import { listSecrets, secretPath, syncGitHubSecret, writeSecret } from "./secrets";
 
 const root = process.cwd();
 const gitmodulesPath = path.join(root, ".gitmodules");
 const packageKinds = new Map([
   ["agent", "packages"],
+  ["app", "packages"],
+  ["package", "packages"],
+  ["template", "packages"],
+  ["workspace", "packages"],
   ["harness", "harnesses"],
   ["cli", "clis"],
-  ["private", "private"],
 ]);
 
 function runtimeState(): SharedState {
@@ -38,7 +42,7 @@ function help(): void {
 Usage:
   agents list [--json]
   agents info <name-or-path> [--json]
-  agents add <name> <git-url> [--kind agent|cli|private] [--branch main] [--path path]
+  agents add <name> <git-url> [--kind agent|app|package|template|workspace|harness|cli] [--branch main] [--path path]
   agents remove <name-or-path>
   agents sync
   agents state init
@@ -54,6 +58,10 @@ Usage:
   agents harness run <name> -- <args...>
   agents install <skill|plugin|hook|template|cli|harness> <name> <source-path-or-url>
   agents installs [--json]
+  agents secrets list [--json]
+  agents secrets set <NAME> [--from-file path]
+  agents secrets path <NAME>
+  agents secrets github sync <NAME> [--as SECRET_NAME] [--owner owner] [--repo owner/name]
   agents credits [--json]
   agents doctor
 
@@ -93,10 +101,16 @@ async function exists(file: string): Promise<boolean> {
 
 function inferKind(packagePath: string): string {
   const first = packagePath.split(/[\\/]/)[0];
-  if (first === "packages") return "agent";
+  const base = path.basename(packagePath);
+  if (first === "packages") {
+    if (base.includes("workspace")) return "workspace";
+    if (base.includes("template")) return "template";
+    if (base === "singularity") return "app";
+    if (["darkfactory-agent", "life-support", "rommie-agent", "skyblock-agent"].includes(base)) return "agent";
+    return "package";
+  }
   if (first === "harnesses") return "harness";
   if (first === "clis") return "cli";
-  if (first === "private") return "private";
   return "package";
 }
 
@@ -143,7 +157,7 @@ async function add(values: string[], flags: Record<string, string | boolean>): P
   const kind = String(flags.kind ?? "agent");
   const base = packageKinds.get(kind);
   if (!base) throw new Error(`unsupported package kind: ${kind}`);
-  const packagePath = String(flags.path ?? (kind === "private" ? name : path.posix.join(base, name)));
+  const packagePath = String(flags.path ?? path.posix.join(base, name));
   const branch = String(flags.branch ?? "main");
 
   await Bun.$`git submodule add -b ${branch} ${url} ${packagePath}`;
@@ -354,6 +368,7 @@ function sharedHarnessEnv(state: SharedState, harness: { id: string }): Record<s
     AGENTS_PLUGINS: state.pluginsDir,
     AGENTS_HOOKS: state.hooksDir,
     AGENTS_TEMPLATES: state.templatesDir,
+    AGENTS_SECRETS: state.secretsDir,
     AGENTS_CREDITS: state.creditsFile,
     ROMMIE_HOME: path.join(state.harnessesDir, harness.id, "runtime"),
   };
@@ -421,6 +436,51 @@ async function credits(flags: Record<string, string | boolean>): Promise<void> {
   else console.log(`shared credit store: ${path.relative(root, state.creditsFile)}`);
 }
 
+async function secretsCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
+  const [action = "list", name, ...rest] = args;
+  const state = runtimeState();
+  await ensureSharedState(state);
+
+  if (action === "list") {
+    const names = await listSecrets(state);
+    if (flags.json) console.log(JSON.stringify(names, null, 2));
+    else for (const item of names) console.log(item);
+    return;
+  }
+
+  if (action === "set") {
+    if (!name) throw new Error("secrets set requires a name");
+    const fromFile = typeof flags["from-file"] === "string" ? flags["from-file"] : undefined;
+    const value = fromFile ? await Bun.file(fromFile).text() : await new Response(Bun.stdin.stream()).text();
+    await writeSecret(state, name, value);
+    console.log(`stored secret ${name}`);
+    return;
+  }
+
+  if (action === "path") {
+    if (!name) throw new Error("secrets path requires a name");
+    console.log(secretPath(state, name));
+    return;
+  }
+
+  if (action === "github") {
+    const [githubAction, secretName] = [name, rest[0]];
+    if (githubAction !== "sync") throw new Error(`unknown secrets github action: ${githubAction ?? "(missing)"}`);
+    if (!secretName) throw new Error("secrets github sync requires a secret name");
+    const results = await syncGitHubSecret(state, {
+      name: secretName,
+      targetName: typeof flags.as === "string" ? flags.as : undefined,
+      owner: typeof flags.owner === "string" ? flags.owner : undefined,
+      repo: typeof flags.repo === "string" ? flags.repo : undefined,
+      includeArchived: Boolean(flags["include-archived"]),
+    });
+    for (const result of results) console.log(`${result.status} ${result.repo}`);
+    return;
+  }
+
+  throw new Error(`unknown secrets action: ${action}`);
+}
+
 async function doctor(): Promise<void> {
   const state = runtimeState();
   await ensureSharedState(state);
@@ -453,6 +513,7 @@ async function main(): Promise<void> {
   if (command === "harness") return harnessCommand(values, flags);
   if (command === "install") return install(values);
   if (command === "installs") return installs(flags);
+  if (command === "secrets") return secretsCommand(values, flags);
   if (command === "credits") return credits(flags);
   if (command === "doctor") return doctor();
   throw new Error(`unknown command: ${command}`);

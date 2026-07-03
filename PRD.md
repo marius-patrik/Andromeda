@@ -37,7 +37,7 @@
 - Gateway package: OpenAI-format model gateway and registry routing under `packages/agentos-gateway`.
 - Inferer package: agent loop, runtime services, engine work, and deploy assets under `packages/agentos-inferer`.
 - Manager package: the CLI implementation and tests under `packages/agentos-manager`.
-- Managed checkout: a git-backed package under `packages/<name>`, harness under `harnesses/<name>`, agent under `agents/<name>`, app under `apps/<name>`, template under `templates/<name>`, or private workspace under `workspace`.
+- Managed checkout: a git-backed package under `packages/<name>` or a harness under `harnesses/<name>`. Agents, apps, templates, and workspace repositories all live under `packages/`.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -69,22 +69,16 @@ packages/
   agentos-manager/
     src/
     test/
-harnesses/
-  andromeda-harness/
-agents/
-  dark-factory/
+  darkfactory-agent/
+  darkfactory-templates/
+  darkfactory-workspace/
+  fabrica/
   life-support/
   rommie-agent/
-  skyblock-agent/
-apps/
   singularity/
-templates/
-  template-bot/
-  template-cli/
-  template-mono/
-  template-repo/
-  template-web/
-workspace/
+  skyblock-agent/
+harnesses/
+  andromeda-harness/
 ```
 
 ## State Layout

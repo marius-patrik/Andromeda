@@ -89,6 +89,7 @@ export function adapterEnv(state: SharedState, id: CliId): Record<string, string
     AGENTS_PLUGINS: state.pluginsDir,
     AGENTS_HOOKS: state.hooksDir,
     AGENTS_TEMPLATES: state.templatesDir,
+    AGENTS_SECRETS: state.secretsDir,
     AGENTS_CREDITS: state.creditsFile,
   };
   for (const [name, dir] of Object.entries(spec.homeEnv)) env[name] = path.join(state.clisDir, dir);

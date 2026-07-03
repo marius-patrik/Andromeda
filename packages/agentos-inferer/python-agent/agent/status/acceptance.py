@@ -23,7 +23,9 @@ user may tighten acceptance later by adding a schema.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
@@ -205,7 +207,7 @@ def _run_command(cmd: list[str], cwd: Path | None, timeout: float = 600.0) -> tu
     """
     try:
         result = subprocess.run(
-            cmd,
+            _portable_command(cmd),
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
@@ -217,6 +219,15 @@ def _run_command(cmd: list[str], cwd: Path | None, timeout: float = 600.0) -> tu
         return False, f"timeout after {timeout}s"
     except Exception as exc:  # pragma: no cover - defensive
         return False, str(exc)
+
+
+def _portable_command(cmd: list[str]) -> list[str]:
+    if os.name == "nt" and len(cmd) == 1:
+        if cmd[0] == "true":
+            return [sys.executable, "-c", "import sys; sys.exit(0)"]
+        if cmd[0] == "false":
+            return [sys.executable, "-c", "import sys; sys.exit(1)"]
+    return cmd
 
 
 class GenericArtifactValidator:

@@ -181,6 +181,8 @@ def scan_repo_for_plaintext(repo_root: str | Path, redactor: Redactor | None = N
 
 
 def _require_mode(path: Path, expected: int, violations: list[str]) -> None:
+    if os.name == "nt":
+        return
     mode = path.stat().st_mode & 0o777
     if mode != expected:
         violations.append(f"{path}: mode {mode:03o}, expected {expected:03o}")

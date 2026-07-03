@@ -25,17 +25,18 @@ agents doctor
 - `packages/agentos-inferer` contains the Python agent loop, Go runtime services, engine work, deploy assets, and inference architecture.
 - `packages/agentos-manager` contains the `agents` CLI source and tests.
 - `harnesses/andromeda-harness` contains the managed Rommie runtime harness.
-- `agents/life-support`, `agents/dark-factory`, `agents/rommie-agent`, and
-  `agents/skyblock-agent` are managed agent submodules.
-- `apps/singularity` contains the managed Singularity app.
-- `templates/*` contains managed repository templates.
-- `workspace` contains the private `agentos-workspace` repository, including migrated Andromeda wiki and research material.
+- `packages/darkfactory-agent`, `packages/life-support`, `packages/rommie-agent`, and
+  `packages/skyblock-agent` are managed agent submodules.
+- `packages/singularity` contains the managed Singularity app.
+- `packages/fabrica` contains the managed Fabrica app workspace.
+- `packages/darkfactory-templates` contains the Bun templates monorepo and nested template submodules.
+- `packages/darkfactory-workspace` contains the private DarkFactory workspace repository, including managed `.agents` source files and migrated Andromeda wiki/research material.
 
 ## Commands
 
 - `agents list [--json]` lists registered packages from `.gitmodules`.
 - `agents info <name-or-path> [--json]` shows package metadata.
-- `agents add <name> <git-url> [--kind agent|cli|private] [--branch main]` adds a git-backed package.
+- `agents add <name> <git-url> [--kind agent|app|package|template|workspace|harness|cli] [--branch main]` adds a git-backed package.
 - `agents remove <name-or-path>` removes a package submodule.
 - `agents sync` syncs and initializes submodules.
 - `agents state init` initializes shared runtime state.

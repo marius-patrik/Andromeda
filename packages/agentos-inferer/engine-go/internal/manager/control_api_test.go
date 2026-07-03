@@ -3,7 +3,6 @@ package manager
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -301,40 +300,32 @@ func TestBuildControlQFTTaskRecordValidation(t *testing.T) {
 
 func installQFTQueueStoreHelper(t *testing.T, agentsRoot string) {
 	t.Helper()
-	source, err := findRepoQFTQueueStoreHelper()
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(source)
-	if err != nil {
-		t.Fatalf("read queue helper: %v", err)
-	}
 	target := filepath.Join(agentsRoot, ".user", "projects", "qft", "queue_store.py")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatalf("create qft helper dir: %v", err)
 	}
-	if err := os.WriteFile(target, data, 0o755); err != nil {
+	if err := os.WriteFile(target, []byte(qftQueueStoreFixture), 0o755); err != nil {
 		t.Fatalf("write qft helper: %v", err)
 	}
 }
 
-func findRepoQFTQueueStoreHelper() (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		candidate := filepath.Join(wd, ".user", "projects", "qft", "queue_store.py")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-		parent := filepath.Dir(wd)
-		if parent == wd {
-			return "", fmt.Errorf("repo queue_store.py not found from %s", wd)
-		}
-		wd = parent
-	}
-}
+const qftQueueStoreFixture = `#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("command", choices=["append"])
+parser.add_argument("--queue", required=True)
+parser.add_argument("--json", required=True)
+args = parser.parse_args()
+
+record = json.loads(args.json)
+queue = Path(args.queue)
+queue.parent.mkdir(parents=True, exist_ok=True)
+with queue.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+`
 
 func assertControlRunDTO(t *testing.T, got controlRunDTO) {
 	t.Helper()

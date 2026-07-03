@@ -40,7 +40,7 @@ async function exists(file: string): Promise<boolean> {
 }
 
 function validateKind(kind: string): PackageKind {
-  const allowed = new Set(["agent", "harness", "cli", "skill", "plugin", "hook", "template"]);
+  const allowed = new Set(["agent", "app", "package", "workspace", "harness", "cli", "skill", "plugin", "hook", "template"]);
   if (!allowed.has(kind)) throw new Error(`unsupported package kind: ${kind}`);
   return kind as PackageKind;
 }

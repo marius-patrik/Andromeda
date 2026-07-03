@@ -1,7 +1,7 @@
 import path from "node:path";
 import { mkdir } from "node:fs/promises";
 
-export type InstallKind = "agent" | "harness" | "cli" | "skill" | "plugin" | "hook" | "template";
+export type InstallKind = "agent" | "app" | "package" | "workspace" | "harness" | "cli" | "skill" | "plugin" | "hook" | "template";
 
 export interface InstallRecord {
   name: string;
@@ -48,6 +48,7 @@ export interface SharedState {
   pluginsDir: string;
   hooksDir: string;
   templatesDir: string;
+  secretsDir: string;
   creditsFile: string;
   installsFile: string;
   packagesFile: string;
@@ -64,6 +65,7 @@ export function sharedStateAt(root: string, stateDir: string): SharedState {
     pluginsDir: path.join(stateDir, "plugins"),
     hooksDir: path.join(stateDir, "hooks"),
     templatesDir: path.join(stateDir, "templates"),
+    secretsDir: path.join(stateDir, "secrets"),
     creditsFile: path.join(stateDir, "credits.json"),
     installsFile: path.join(stateDir, "installs.json"),
     packagesFile: path.join(stateDir, "packages.json"),
@@ -88,6 +90,7 @@ export function sharedStateFromEnv(cwd: string): SharedState {
     pluginsDir: process.env.AGENTS_PLUGINS?.trim() || path.join(stateDir, "plugins"),
     hooksDir: process.env.AGENTS_HOOKS?.trim() || path.join(stateDir, "hooks"),
     templatesDir: process.env.AGENTS_TEMPLATES?.trim() || path.join(stateDir, "templates"),
+    secretsDir: process.env.AGENTS_SECRETS?.trim() || path.join(stateDir, "secrets"),
     creditsFile: process.env.AGENTS_CREDITS?.trim() || path.join(stateDir, "credits.json"),
   };
 }
@@ -100,6 +103,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
     mkdir(state.pluginsDir, { recursive: true }),
     mkdir(state.hooksDir, { recursive: true }),
     mkdir(state.templatesDir, { recursive: true }),
+    mkdir(state.secretsDir, { recursive: true }),
   ]);
 
   if (!(await Bun.file(state.installsFile).exists())) {
@@ -132,6 +136,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
       `AGENTS_PLUGINS=${state.pluginsDir}`,
       `AGENTS_HOOKS=${state.hooksDir}`,
       `AGENTS_TEMPLATES=${state.templatesDir}`,
+      `AGENTS_SECRETS=${state.secretsDir}`,
       `AGENTS_CREDITS=${state.creditsFile}`,
       "",
     ].join("\n"),

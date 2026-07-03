@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"path/filepath"
+	pathpkg "path"
 	"regexp"
 	"sort"
 	"strings"
@@ -323,10 +323,10 @@ func BuildJobManifestWithOptions(name, image string, cmd []string, env, labels m
 }
 
 func hostPathMount(path string) string {
-	if path == "" || !filepath.IsAbs(path) {
+	if path == "" || !strings.HasPrefix(path, "/") {
 		return ""
 	}
-	clean := filepath.Clean(path)
+	clean := pathpkg.Clean(path)
 	if clean == "/" || clean == "." {
 		return ""
 	}

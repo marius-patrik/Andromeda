@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -151,12 +152,25 @@ func (e *Executor) bash(ctx context.Context, args map[string]any) Result {
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "bash", "-lc", command)
+	cmd := exec.Command(bashExecutable(), "-lc", command)
 	cmd.Dir = e.root
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return errResult(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-cctx.Done():
+		killProcessTree(cmd)
+		err = <-done
+	}
 	output := out.String()
 	if cctx.Err() == context.DeadlineExceeded {
 		return Result{Output: fmt.Sprintf("timeout after %gs", timeout.Seconds()), Error: true}
@@ -170,6 +184,37 @@ func (e *Executor) bash(ctx context.Context, args map[string]any) Result {
 		return Result{Output: fmt.Sprintf("exit_code=%d\n%s", code, output), Error: true}
 	}
 	return Result{Output: output}
+}
+
+func killProcessTree(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+		return
+	}
+	_ = cmd.Process.Kill()
+}
+
+func bashExecutable() string {
+	if explicit := os.Getenv("AGENTOS_BASH"); explicit != "" {
+		return explicit
+	}
+	if runtime.GOOS == "windows" {
+		for _, candidate := range []string{
+			`C:\Program Files\Git\bin\bash.exe`,
+			`C:\Program Files\Git\usr\bin\bash.exe`,
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	if path, err := exec.LookPath("bash"); err == nil {
+		return path
+	}
+	return "bash"
 }
 
 func (e *Executor) ls(args map[string]any) Result {

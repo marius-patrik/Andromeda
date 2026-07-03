@@ -15,9 +15,10 @@ def test_materialize_writes_secure_files_and_resolves_refs(tmp_path):
     paths = materialize({"PROVIDER": value}, root=root)
 
     assert paths == [root / "credentials" / "PROVIDER"]
-    assert (root.stat().st_mode & 0o777) == 0o700
-    assert ((root / "credentials").stat().st_mode & 0o777) == 0o700
-    assert (paths[0].stat().st_mode & 0o777) == 0o600
+    if os.name != "nt":
+        assert (root.stat().st_mode & 0o777) == 0o700
+        assert ((root / "credentials").stat().st_mode & 0o777) == 0o700
+        assert (paths[0].stat().st_mode & 0o777) == 0o600
     assert resolve_ref("secret:PROVIDER", root=root) == value
     assert not list((root / "credentials").glob("*.tmp.*"))
 
@@ -31,6 +32,11 @@ def test_audit_ok_and_flags_bad_file_without_contents(tmp_path):
     os.chmod(bad, 0o644)
 
     report = audit(root=root)
+
+    if os.name == "nt":
+        assert report.ok
+        assert secret_value not in repr(report)
+        return
 
     assert not report.ok
     assert str(bad) in report.violations[0]

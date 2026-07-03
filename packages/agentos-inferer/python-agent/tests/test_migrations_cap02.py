@@ -209,7 +209,7 @@ def test_apply_produces_final_schema_and_manifest(tmp_path: Path) -> None:
             moved_sources.add(op.rel_src)
         elif src.is_dir():
             moved_sources.update(
-                str(p.relative_to(tmp_path))
+                p.relative_to(tmp_path).as_posix()
                 for p in src.rglob("*")
                 if p.is_file()
             )
