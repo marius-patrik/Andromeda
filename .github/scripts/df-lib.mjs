@@ -195,8 +195,9 @@ export function parsePrdItems(markdown) {
     const acceptanceMatch = detail.match(/\bAcceptance:\s*(.+)$/i);
     const description = acceptanceMatch ? detail.slice(0, acceptanceMatch.index).trim() : detail;
     const acceptance = acceptanceMatch ? acceptanceMatch[1].trim() : "";
+    const stableId = name.match(/^(M\d+|L\d+)\b/i)?.[1]?.toLowerCase() || slug(name);
     const priority = /^M[1-3]\b/i.test(name) || /^L[0-4]\b/i.test(name) ? "P1" : "P2";
-    const marker = `df-prd:${slug(`${section}-${name}`)}`;
+    const marker = `df-prd:${slug(`${section}-${stableId}`)}`;
 
     items.push({
       marker,

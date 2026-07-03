@@ -26,8 +26,8 @@ test("parsePrdItems creates stable df-prd markers from PRD milestones and loops"
   ].join("\n"));
 
   assert.deepEqual(items.map((item: { marker: string }) => item.marker), [
-    "df-prd:core-loops-l4-planning",
-    "df-prd:milestones-m2-planning-loop-prd-enforcement"
+    "df-prd:core-loops-l4",
+    "df-prd:milestones-m2"
   ]);
   assert.equal(items[0].priority, "P1");
   assert.equal(items[1].acceptance, "drift report issue when code contradicts PRD.");
@@ -53,7 +53,7 @@ test("prdIssueBody records deterministic Blocked-by sequencing", () => {
   const body = prdIssueBody(item, [10]);
 
   assert.match(body, /Blocked-by: #10/);
-  assert.match(body, /df-prd:milestones-m2-planning/);
+  assert.match(body, /df-prd:milestones-m2/);
 });
 
 test("cleanupTempRoot reports cleanup failures without throwing", async () => {

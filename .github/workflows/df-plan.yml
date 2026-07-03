@@ -10,6 +10,8 @@ on:
         required: false
         type: string
   push:
+    branches:
+      - dev
     paths:
       - PRD.md
 
@@ -20,10 +22,17 @@ jobs:
   df-plan:
     name: Reconcile PRD backlog
     runs-on: ubuntu-latest
+    if: >-
+      ${{
+        github.event_name != 'workflow_dispatch' ||
+        github.ref == 'refs/heads/dev'
+      }}
 
     steps:
       - name: Checkout DarkFactory
         uses: actions/checkout@v4
+        with:
+          ref: dev
 
       - name: Mint mp-agents installation token
         id: app-token
