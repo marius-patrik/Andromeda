@@ -295,7 +295,7 @@ if ($toProcess.Count -eq 0) {
 
         Update-Block -Path $cachePath -Start "<!-- rommie:dream:cache:start -->" -End "<!-- rommie:dream:cache:end -->" -Section @"
 <!-- rommie:dream:cache:start -->
-## Rommie Dream Cache
+## Andromeda Dream Cache
 Updated: $nowPretty
 - No new sessions since last cursor ($cursor).
 - Total processed: $($storedState.processed_total)
@@ -384,7 +384,7 @@ if ($VerboseRun) {
 
 Update-Block -Path $cachePath -Start "<!-- rommie:dream:cache:start -->" -End "<!-- rommie:dream:cache:end -->" -Section @"
 <!-- rommie:dream:cache:start -->
-## Rommie Dream Cache
+## Andromeda Dream Cache
 Updated: $nowPretty
 - Sessions evaluated: $($toProcess.Count)
 - Processed this run: $($toProcess.Count)
@@ -401,7 +401,7 @@ $($openPreview -join "`r`n")
 
 Update-Block -Path $shortPath -Start "<!-- rommie:dream:short:start -->" -End "<!-- rommie:dream:short:end -->" -Section @"
 <!-- rommie:dream:short:start -->
-## Rommie Dream Retrospective Snapshot
+## Andromeda Dream Retrospective Snapshot
 Updated: $nowPretty
 State: $statusLabel
 Current objective: Keep unresolved and deferred work visible across sessions.
@@ -427,7 +427,7 @@ $($nextWorkPreview -join "`r`n")
 
 Update-Block -Path $handoffPath -Start "<!-- rommie:dream:handoff:start -->" -End "<!-- rommie:dream:handoff:end -->" -Section @"
 <!-- rommie:dream:handoff:start -->
-## Rommie Dream Retrospective
+## Andromeda Dream Retrospective
 Updated: $nowPretty
 Processed this run:
 $($sessionNames | ForEach-Object { "- $_" } | Out-String -Width 4096).Trim()
@@ -450,3 +450,4 @@ Write-Output "Dream workflow complete."
 Write-Output ("Processed sessions: " + $toProcess.Count)
 Write-Output ("Attention-needed items: " + $openItems.Count)
 Write-Output ("Next cursor: " + $nextCursor)
+

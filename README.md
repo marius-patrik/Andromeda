@@ -39,3 +39,4 @@ agents install plugin dream plugins/dream
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\skills\dream\scripts\run_dream.ps1
 ```
 
+
