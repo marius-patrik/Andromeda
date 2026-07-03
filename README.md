@@ -58,6 +58,8 @@ Important paths:
 - `.agents/installs.json` records installed skills, plugins, hooks, templates, CLIs, and harnesses.
 - `.agents/packages.json` records package registrations.
 
+Harness runtime data lives under `.agents/harnesses/<id>/runtime`; this repo does not use a separate `.agents/harness-runtimes` directory.
+
 ## Command Surface
 
 ```text
@@ -119,3 +121,13 @@ Provider and consumer names must be simple identifiers made from letters, number
 `agents secrets github sync` mutates GitHub repository secrets through `gh secret set`. Prefer tests and dry runs around command construction; reserve live sync for explicit operational use.
 
 Secret sync requires an explicit target. Use `--repo owner/name` for a single repository, or `--owner owner` when intentionally syncing to that owner's non-archived repositories. Add `--dry-run` to validate the local secret and target mapping without calling `gh secret set`.
+
+## Roadmap Mandates
+
+The current CLI surface is intentionally local and file-backed. The next roadmap slices are:
+
+- TUI and OS launcher work from #8: expose the same management surface through an operator-friendly launcher without creating a separate control plane.
+- Single management surface from #7: keep packages, environments, secrets, providers, harnesses, and launcher operations under `agents` rather than sidecar tools.
+- Real OS/container packages and environments from #10: add distro package, container image, and named environment management after the agents-mono architecture and base-image contracts land.
+
+Until the #10 implementation lands, `agents packages` remains the local package registration and runnable manifest surface. It does not yet install OS packages, pull container images, or switch environments.
