@@ -32,6 +32,7 @@ jobs:
       - name: Checkout DarkFactory
         uses: actions/checkout@v4
         with:
+          repository: marius-patrik/darkfactory-agent
           ref: dev
 
       - name: Mint mp-agents installation token

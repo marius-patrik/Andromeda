@@ -39,6 +39,7 @@ jobs:
         if: ${{ github.event_name != 'pull_request_target' }}
         uses: actions/checkout@v4
         with:
+          repository: marius-patrik/darkfactory-agent
           ref: dev
 
       - name: Mint mp-agents installation token
