@@ -20,8 +20,9 @@ agents doctor
 ## Layout
 
 - `packages/agent-package-manager` contains the `agents` CLI source and tests.
-- `packages/agent-harness`, `packages/agi`, `packages/skyblock-agent`, and
-  `packages/vibe-bot` are managed agent package submodules.
+- `packages/agent-harness`, `packages/agi`, `packages/skyblock-agent`,
+  `packages/singularity`, and `packages/vibe-bot` are managed package
+  submodules.
 - `packages/templates/*` contains managed repository templates.
 
 ## Commands

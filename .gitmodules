@@ -34,3 +34,7 @@
 	path = packages/templates/template-web
 	url = https://github.com/marius-patrik/template-web.git
 	branch = main
+[submodule "packages/singularity"]
+	path = packages/singularity
+	url = https://github.com/marius-patrik/singularity.git
+	branch = main

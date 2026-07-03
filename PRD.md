@@ -65,6 +65,7 @@ packages/
     test/
   agi/
   agent-harness/
+  singularity/
   skyblock-agent/
   templates/
     template-bot/
