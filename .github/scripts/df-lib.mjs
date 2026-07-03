@@ -301,10 +301,15 @@ export function checksSummary(statusCheckRollup) {
   }).join(", ");
 }
 
-export function extractClosingIssueNumbers(body) {
+export function extractClosingIssueNumbers(body, repositoryName = "") {
   const refs = new Set();
-  const matches = body?.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi) ?? [];
-  for (const match of matches) refs.add(Number(match[1]));
+  const matches = body?.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#|#)(\d+)\b/gi) ?? [];
+  const expectedRepo = repositoryName.toLowerCase();
+  for (const match of matches) {
+    const qualifiedRepo = match[1]?.toLowerCase() || "";
+    if (qualifiedRepo && qualifiedRepo !== expectedRepo) continue;
+    refs.add(Number(match[2]));
+  }
   return [...refs].filter((number) => Number.isInteger(number) && number > 0);
 }
 

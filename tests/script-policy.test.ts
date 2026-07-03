@@ -73,7 +73,13 @@ test("checksAreGreen allows no checks and rejects pending or failing checks", ()
 });
 
 test("extractClosingIssueNumbers deduplicates close references", () => {
-  assert.deepEqual(extractClosingIssueNumbers("Closes #10, fixes #10 and resolves #22."), [10, 22]);
+  assert.deepEqual(
+    extractClosingIssueNumbers(
+      "Closes #10, fixes marius-patrik/example#10, resolves marius-patrik/example#22, closes other/repo#99.",
+      "marius-patrik/example"
+    ),
+    [10, 22]
+  );
 });
 
 test("parked repositories include the current owner exclusions", () => {

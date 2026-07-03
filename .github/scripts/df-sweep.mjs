@@ -189,7 +189,7 @@ async function closeIssuesIfDevMerge(repository, pull) {
     return { repo: repoName(repository), pr: pull.url, action: "skip-dev-closure", reason: `base-${pull.baseRefName}` };
   }
 
-  const issueNumbers = extractClosingIssueNumbers(pull.body || "");
+  const issueNumbers = extractClosingIssueNumbers(pull.body || "", repoName(repository));
   const closed = [];
   for (const issue_number of issueNumbers) {
     if (!await issueWasOpenedByDarkFactoryWorker(repository, issue_number, pull.url)) {
