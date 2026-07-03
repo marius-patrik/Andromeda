@@ -88,12 +88,29 @@ jobs:
             )].filter((number) => Number.isInteger(number) && number > 0);
 
             for (const issue_number of issueNumbers) {
+              const issue = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+              });
+              const labels = new Set(issue.data.labels.map((label) => typeof label === "string" ? label : label.name));
+              if (!["df:done", "df:running", "df:ready"].some((label) => labels.has(label))) {
+                core.info(`Skipping #${issue_number}: missing DarkFactory work label.`);
+                continue;
+              }
               const comments = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number,
                 per_page: 100,
               });
+              const workerOpened = comments.data.some((comment) => {
+                return comment.body?.includes("DarkFactory worker opened") && comment.body.includes(pull.html_url);
+              });
+              if (!workerOpened) {
+                core.info(`Skipping #${issue_number}: no DarkFactory worker comment links this PR.`);
+                continue;
+              }
               const marker = `merged to dev in ${pull.html_url}`;
               if (!comments.data.some((comment) => comment.body?.includes(marker))) {
                 await github.rest.issues.createComment({

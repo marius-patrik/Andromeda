@@ -192,6 +192,9 @@ async function closeIssuesIfDevMerge(repository, pull) {
   const issueNumbers = extractClosingIssueNumbers(pull.body || "");
   const closed = [];
   for (const issue_number of issueNumbers) {
+    if (!await issueWasOpenedByDarkFactoryWorker(repository, issue_number, pull.url)) {
+      continue;
+    }
     if (await hasDevMergeComment(repository, issue_number, pull.url)) {
       continue;
     }
@@ -202,6 +205,22 @@ async function closeIssuesIfDevMerge(repository, pull) {
     closed.push(issue_number);
   }
   return { repo: repoName(repository), pr: pull.url, action: "close-dev-merge-issues", issues: closed };
+}
+
+async function issueWasOpenedByDarkFactoryWorker(repository, issueNumber, pullUrl) {
+  const issue = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
+  const labels = new Set((issue.labels || []).map((label) => typeof label === "string" ? label : label.name));
+  if (!["df:done", "df:running", "df:ready"].some((label) => labels.has(label))) {
+    return false;
+  }
+
+  const comments = await gh.request(
+    "GET",
+    `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100`
+  );
+  return Array.isArray(comments) && comments.some((comment) => {
+    return typeof comment.body === "string" && comment.body.includes("DarkFactory worker opened") && comment.body.includes(pullUrl);
+  });
 }
 
 async function closeRecentlyMergedDevIssues(repository) {
