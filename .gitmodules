@@ -3,23 +3,23 @@
 	url = https://github.com/marius-patrik/andromeda-harness.git
 	branch = main
 [submodule "packages/life-support"]
-	path = packages/life-support
+	path = packages/agent-life
 	url = https://github.com/marius-patrik/life-support.git
 	branch = main
 [submodule "packages/skyblock-agent"]
-	path = packages/skyblock-agent
+	path = packages/agent-skyblock
 	url = https://github.com/marius-patrik/skyblock-agent.git
 	branch = main
 [submodule "packages/darkfactory-agent"]
-	path = packages/darkfactory-agent
+	path = packages/agent-darkfactory
 	url = https://github.com/marius-patrik/darkfactory-agent.git
 	branch = main
 [submodule "packages/darkfactory-templates"]
-	path = packages/darkfactory-templates
+	path = packages/templates-darkfactory
 	url = https://github.com/marius-patrik/darkfactory-templates.git
 	branch = main
 [submodule "packages/singularity"]
-	path = packages/singularity
+	path = packages/app-singularity
 	url = https://github.com/marius-patrik/singularity.git
 	branch = main
 [submodule "packages/rommie-agent"]
@@ -27,14 +27,14 @@
 	url = https://github.com/marius-patrik/rommie-agent.git
 	branch = main
 [submodule "packages/agentos-data"]
-	path = packages/agentos-data
+	path = packages/data-agentos
 	url = https://github.com/marius-patrik/agentos-data.git
 	branch = main
 [submodule "packages/fabrica"]
-	path = packages/fabrica
+	path = packages/app-fabrica
 	url = https://github.com/marius-patrik/Fabrica.git
 	branch = dev
 [submodule "packages/darkfactory-workspace"]
-	path = packages/darkfactory-workspace
+	path = packages/workspace-darkfactory
 	url = https://github.com/marius-patrik/darkfactory-workspace.git
 	branch = main
