@@ -146,12 +146,16 @@ async function reconcileTargetRepository() {
 
 async function targetRepositories() {
   try {
-    const data = await gh.request("GET", "/installation/repositories?per_page=100");
-    if (Array.isArray(data.repositories)) {
-      return data.repositories
-        .map((repo) => parseRepo(repo.full_name))
-        .filter((repo) => repo.owner === CONTROL_REPO.owner);
+    const repositories = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const data = await gh.request("GET", `/installation/repositories?per_page=100&page=${page}`);
+      if (!Array.isArray(data.repositories) || data.repositories.length === 0) break;
+      repositories.push(...data.repositories);
+      if (data.repositories.length < 100) break;
     }
+    return repositories
+      .map((repo) => parseRepo(repo.full_name))
+      .filter((repo) => repo.owner === CONTROL_REPO.owner);
   } catch {
     return [CONTROL_REPO];
   }

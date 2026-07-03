@@ -70,6 +70,19 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+            const pull = context.payload.pull_request;
+            const provenance = `${pull.title || ""}\n${pull.body || ""}`;
+            const isDarkFactoryPr = pull.head.ref.startsWith("df/") && (
+              /DarkFactory Worker Summary/.test(provenance) ||
+              /<!--\s*dark-factory:/i.test(provenance) ||
+              /\bDarkFactory\b/i.test(provenance) ||
+              /\bDark Factory\b/i.test(provenance)
+            );
+            if (!isDarkFactoryPr) {
+              core.info("Skipping dev issue closure because the merged PR lacks DarkFactory provenance.");
+              return;
+            }
+
             const body = context.payload.pull_request.body || "";
             const issueNumbers = [...new Set(
               Array.from(
