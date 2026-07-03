@@ -8,11 +8,20 @@
   "requires": {
     "state": [
       "secrets",
+      "data-repos",
       "skills",
       "plugins",
       "hooks",
       "credits"
     ]
+  },
+  "dataRepo": {
+    "id": "darkfactory-workspace",
+    "repo": "marius-patrik/agentos-data",
+    "path": "packages/agentos-data",
+    "branch": "main",
+    "managedPath": "managed-repository",
+    "env": "DARK_FACTORY_WORKSPACE_ROOT"
   },
   "provides": [
     "cli:darkfactory"

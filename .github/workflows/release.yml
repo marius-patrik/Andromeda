@@ -25,12 +25,12 @@ jobs:
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
 
-      - name: Check out DarkFactory workspace
+      - name: Check out AgentOS data repo
         uses: actions/checkout@v4
         with:
-          repository: marius-patrik/darkfactory-workspace
+          repository: marius-patrik/agentos-data
           token: ${{ steps.app-token.outputs.token }}
-          path: darkfactory-workspace
+          path: agentos-data
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

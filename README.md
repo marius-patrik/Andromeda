@@ -11,9 +11,9 @@ TypeScript GitHub App bot that receives GitHub webhooks, verifies signatures, an
 - Comments on newly opened pull requests.
 - Checks pull requests in installed repositories for shared repository setup:
   - `.agents/.global/VERSION` must match the current Dark Factory version.
-  - `.github/workflows/dark-factory-bootstrap.yml` should exist as the baseline GitHub Actions scaffold.
+  - DarkFactory installer, auto-update, release, and review workflows should exist as the baseline GitHub Actions scaffold.
 - Installs the managed Codex Review workflow, Dockerfile, runner script, and output schema used to run `codex exec` in a container for pull request review.
-- Reads managed `.agents` and `.github` files from the `darkfactory-workspace` repository.
+- Reads managed `.agents`, `.darkfactory`, and `.github` files from the `agentos-data` repository.
 - Opens managed setup PRs when the app is installed on a repository or when repositories are added to an installation.
 - Can sync all installed repositories from the `Sync Managed Repositories` workflow.
 
@@ -51,7 +51,9 @@ To install the app on every repository, use the GitHub App installation UI and c
 ```powershell
 npm ci
 npm run build
+agents packages register packages/darkfactory-workspace
 agents packages register packages/darkfactory-agent
+agents data repo path darkfactory-workspace
 ```
 
 Store local secrets through Agentos. Secret values are not printed by the manager:
@@ -87,7 +89,7 @@ darkfactory sync-managed
 Build and run with Docker:
 
 ```powershell
-git clone https://github.com/marius-patrik/darkfactory-workspace.git darkfactory-workspace
+git clone https://github.com/marius-patrik/agentos-data.git agentos-data
 docker build -t darkfactory-agent .
 docker run --rm -p 3000:3000 --env-file .env darkfactory-agent
 ```
@@ -97,7 +99,7 @@ Production hosts must provide these environment variables:
 - `GITHUB_APP_ID`
 - `GITHUB_PRIVATE_KEY`
 - `GITHUB_WEBHOOK_SECRET`
-- `DARK_FACTORY_WORKSPACE_ROOT`, optional when the image bundles `darkfactory-workspace/managed-repository`
+- `DARK_FACTORY_WORKSPACE_ROOT`, optional when the image bundles `agentos-data/managed-repository`
 - `PORT`, optional and defaults to `3000`
 
 Use `GET /healthz` as the health check endpoint.
@@ -109,19 +111,27 @@ Dark Factory manages shared setup through pull requests. It does not write direc
 Managed files:
 
 - `.agents/.global/**`
-- `.agents/.project/**`, only when `darkfactory-workspace/managed-repository/repositories/<owner>/<repo>/.agents/.project/**` exists
+- `.agents/.project/**`, only when `agentos-data/managed-repository/repositories/<owner>/<repo>/.agents/.project/**` exists
+- `.darkfactory/managed-repository.json`
+- `.darkfactory/installer-policy.json`
+- `.darkfactory/release-policy.json`
 - `.github/workflows/dark-factory-bootstrap.yml`
+- `.github/workflows/dark-factory-autoupdate.yml`
+- `.github/workflows/dark-factory-release.yml`
 - `.github/workflows/codex-review.yml`
 - `.github/codex-review.Dockerfile`
 - `.github/codex-review.schema.json`
 - `.github/scripts/run-codex-review.sh`
+- `.github/scripts/dark-factory-release-check.mjs`
 
-The workspace repository is the single source of truth for managed setup. Keep reusable policy in `managed-repository/.agents/.global/` and per-repository context in `managed-repository/repositories/<owner>/<repo>/.agents/.project/`.
+The `agentos-data` repository is the single source of truth for managed setup. Keep reusable policy in `managed-repository/.agents/.global/` and `managed-repository/.darkfactory/`, and per-repository context in `managed-repository/repositories/<owner>/<repo>/.agents/.project/`.
 
 Managed sync runs automatically when:
 
 - the GitHub App is installed on repositories
 - repositories are added to an existing GitHub App installation
+- the scheduled `Sync Managed Repositories` workflow runs
+- a DarkFactory release is published
 
 Managed sync can also be run manually from the `Sync Managed Repositories` workflow.
 
@@ -174,7 +184,7 @@ ghcr.io/marius-patrik/darkfactory-agent
 ## Development notes
 
 - Keep webhook handlers registered in `src/bot.ts`.
-- Keep managed file templates in `darkfactory-workspace/managed-repository/`.
+- Keep managed file templates in `agentos-data/managed-repository/`.
 - Keep managed sync logic in `src/managed-sync.ts`.
 - Keep installed-repository setup enforcement in `src/repository-setup.ts`.
 - Keep HTTP routing and signature handoff behavior in `src/server.ts`.

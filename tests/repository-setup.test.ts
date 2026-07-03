@@ -18,10 +18,16 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
     createRequester({
       ".agents/.global/VERSION": "darkfactory-agent@1.2.3\n",
       ".github/workflows/dark-factory-bootstrap.yml": "name: Dark Factory Bootstrap\n",
+      ".github/workflows/dark-factory-autoupdate.yml": "name: DarkFactory Auto Update\n",
+      ".github/workflows/dark-factory-release.yml": "name: DarkFactory Release\n",
       ".github/workflows/codex-review.yml": "name: Codex Review\n",
       ".github/codex-review.Dockerfile": "FROM node:22-bookworm-slim\n",
       ".github/codex-review.schema.json": "{}\n",
-      ".github/scripts/run-codex-review.sh": "#!/usr/bin/env bash\n"
+      ".github/scripts/run-codex-review.sh": "#!/usr/bin/env bash\n",
+      ".github/scripts/dark-factory-release-check.mjs": "#!/usr/bin/env node\n",
+      ".darkfactory/managed-repository.json": "{}\n",
+      ".darkfactory/installer-policy.json": "{}\n",
+      ".darkfactory/release-policy.json": "{}\n"
     }),
     { owner: "marius-patrik", repo: "example", ref: "abc123" },
     "darkfactory-agent@1.2.3"
@@ -48,7 +54,10 @@ test("checkRepositorySetup reports stale agents and missing github bootstrap", a
   assert.ok(comment?.includes("darkfactory-agent@1.2.3"));
   assert.ok(comment?.includes(".agents/.global/VERSION"));
   assert.ok(comment?.includes(".github/workflows/dark-factory-bootstrap.yml"));
+  assert.ok(comment?.includes(".github/workflows/dark-factory-autoupdate.yml"));
+  assert.ok(comment?.includes(".github/workflows/dark-factory-release.yml"));
   assert.ok(comment?.includes(".github/workflows/codex-review.yml"));
+  assert.ok(comment?.includes(".darkfactory/managed-repository.json"));
 });
 
 function createRequester(files: Record<string, string>): GitHubRequester {

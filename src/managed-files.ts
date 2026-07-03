@@ -4,10 +4,16 @@ import { fileURLToPath } from "node:url";
 
 export const AGENTS_GLOBAL_VERSION_PATH = ".agents/.global/VERSION";
 export const GITHUB_BOOTSTRAP_WORKFLOW_PATH = ".github/workflows/dark-factory-bootstrap.yml";
+export const DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH = ".github/workflows/dark-factory-autoupdate.yml";
+export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/dark-factory-release.yml";
 export const CODEX_REVIEW_WORKFLOW_PATH = ".github/workflows/codex-review.yml";
 export const CODEX_REVIEW_DOCKERFILE_PATH = ".github/codex-review.Dockerfile";
 export const CODEX_REVIEW_SCHEMA_PATH = ".github/codex-review.schema.json";
 export const CODEX_REVIEW_SCRIPT_PATH = ".github/scripts/run-codex-review.sh";
+export const DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH = ".github/scripts/dark-factory-release-check.mjs";
+export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository.json";
+export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
+export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
 
 export interface ManagedFile {
   path: string;
@@ -19,7 +25,7 @@ export interface ManagedRepositoryRef {
   repo: string;
 }
 
-const MANAGED_COMMON_DIRS = [".agents/.global", ".github"] as const;
+const MANAGED_COMMON_DIRS = [".agents/.global", ".github", ".darkfactory"] as const;
 
 export function readManagedFiles(repository?: ManagedRepositoryRef, root = resolveManagedWorkspaceRoot()): ManagedFile[] {
   const files = new Map<string, ManagedFile>();
@@ -51,10 +57,16 @@ export function requiredManagedFilePaths(): string[] {
   return [
     AGENTS_GLOBAL_VERSION_PATH,
     GITHUB_BOOTSTRAP_WORKFLOW_PATH,
+    DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH,
+    DARK_FACTORY_RELEASE_WORKFLOW_PATH,
     CODEX_REVIEW_WORKFLOW_PATH,
     CODEX_REVIEW_DOCKERFILE_PATH,
     CODEX_REVIEW_SCHEMA_PATH,
-    CODEX_REVIEW_SCRIPT_PATH
+    CODEX_REVIEW_SCRIPT_PATH,
+    DARK_FACTORY_RELEASE_CHECK_SCRIPT_PATH,
+    DARK_FACTORY_MANAGED_CONFIG_PATH,
+    DARK_FACTORY_INSTALLER_POLICY_PATH,
+    DARK_FACTORY_RELEASE_POLICY_PATH
   ];
 }
 
@@ -95,13 +107,28 @@ function toPosix(filePath: string): string {
 function resolveManagedWorkspaceRoot(): string {
   const configured = process.env.DARK_FACTORY_WORKSPACE_ROOT?.trim();
   if (configured) {
-    return resolve(configured);
+    return resolveManagedRepositoryRoot(configured);
+  }
+
+  const dataRepoRoot = resolveAgentosDataRepoRoot();
+  if (dataRepoRoot) {
+    return dataRepoRoot;
   }
 
   const projectRoot = resolveProjectRoot();
+  const siblingDataRepo = resolve(projectRoot, "..", "agentos-data", "managed-repository");
+  if (existsSync(siblingDataRepo)) {
+    return siblingDataRepo;
+  }
+
   const siblingWorkspace = resolve(projectRoot, "..", "darkfactory-workspace", "managed-repository");
   if (existsSync(siblingWorkspace)) {
     return siblingWorkspace;
+  }
+
+  const bundledDataRepo = resolve(projectRoot, "agentos-data", "managed-repository");
+  if (existsSync(bundledDataRepo)) {
+    return bundledDataRepo;
   }
 
   const bundledWorkspace = resolve(projectRoot, "darkfactory-workspace", "managed-repository");
@@ -114,4 +141,49 @@ function resolveManagedWorkspaceRoot(): string {
 
 function resolveProjectRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..");
+}
+
+function resolveAgentosDataRepoRoot(): string | null {
+  const dataReposFile = process.env.AGENTS_DATA_REPOS?.trim();
+  if (!dataReposFile || !existsSync(dataReposFile)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(dataReposFile, "utf8")) as unknown;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+
+    const agentosRoot = process.env.AGENTS_ROOT?.trim() ?? resolve(dirname(dataReposFile), "..");
+    const dataRepo = parsed.find((item) => {
+      return isRecord(item) && (item.id === "darkfactory-workspace" || item.repo === "marius-patrik/agentos-data");
+    });
+    if (!isRecord(dataRepo) || typeof dataRepo.path !== "string") {
+      return null;
+    }
+
+    const managedPath = typeof dataRepo.managedPath === "string" ? dataRepo.managedPath : "managed-repository";
+    return resolveManagedRepositoryRoot(resolve(agentosRoot, dataRepo.path, managedPath));
+  } catch {
+    return null;
+  }
+}
+
+function resolveManagedRepositoryRoot(candidate: string): string {
+  const root = resolve(candidate);
+  if (existsSync(resolve(root, ".agents")) || existsSync(resolve(root, ".github")) || existsSync(resolve(root, ".darkfactory"))) {
+    return root;
+  }
+
+  const nested = resolve(root, "managed-repository");
+  if (existsSync(nested)) {
+    return nested;
+  }
+
+  return root;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -18,6 +18,8 @@ test("managedSetupPullRequestBody lists changed files and documents workspace-ow
   assert.match(body, /\.agents\/\.global\/VERSION/);
   assert.match(body, /\.github\/workflows\/dark-factory-bootstrap\.yml/);
   assert.match(body, /\.agents\/.project` is managed only when a repo-specific workspace overlay exists/);
+  assert.match(body, /dark-factory-autoupdate\.yml/);
+  assert.match(body, /dark-factory-release\.yml/);
 });
 
 test("ensureManagedRepositorySetup creates a managed PR when files are missing", async () => {

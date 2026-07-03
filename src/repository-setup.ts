@@ -2,7 +2,13 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CODEX_REVIEW_WORKFLOW_PATH, GITHUB_BOOTSTRAP_WORKFLOW_PATH, requiredManagedFilePaths } from "./managed-files.js";
+import {
+  CODEX_REVIEW_WORKFLOW_PATH,
+  DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH,
+  DARK_FACTORY_RELEASE_WORKFLOW_PATH,
+  GITHUB_BOOTSTRAP_WORKFLOW_PATH,
+  requiredManagedFilePaths
+} from "./managed-files.js";
 
 export const REPOSITORY_SETUP_COMMENT_MARKER = "<!-- dark-factory:repository-setup -->";
 
@@ -14,11 +20,11 @@ const VERSIONED_FOLDERS = [
 ] as const;
 
 const BOOTSTRAP_PATHS = requiredManagedFilePaths()
-  .filter((path) => path.startsWith(".github/"))
+  .filter((path) => !path.startsWith(".agents/.global/"))
   .map((path) => ({
-    displayPath: ".github",
+    displayPath: path.startsWith(".github/") ? ".github" : ".darkfactory",
     requiredPath: path,
-    reason: path === CODEX_REVIEW_WORKFLOW_PATH ? "Codex review workflow" : "Dark Factory managed workflow support"
+    reason: managedPathReason(path)
   })) as Array<{ displayPath: string; requiredPath: string; reason: string }>;
 
 export interface GitHubRequester {
@@ -114,11 +120,21 @@ export function formatRepositorySetupComment(report: RepositorySetupReport): str
   lines.push(
     "",
     "Update `.agents` from the DarkFactory workspace when the managed version is stale or missing.",
-    `Bootstrap \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\` and \`${CODEX_REVIEW_WORKFLOW_PATH}\` when GitHub workflow scaffolding is missing.`,
+    `Bootstrap \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\`, \`${DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH}\`, \`${DARK_FACTORY_RELEASE_WORKFLOW_PATH}\`, and \`${CODEX_REVIEW_WORKFLOW_PATH}\` when GitHub workflow scaffolding is missing.`,
+    "Keep `.darkfactory` policy files from the AgentOS data repo so installer, updater, and release expectations stay consistent.",
     "Configure the repository secret `CODEX_AUTH_JSON` so the Codex reviewer can run."
   );
 
   return lines.join("\n");
+}
+
+function managedPathReason(path: string): string {
+  if (path === CODEX_REVIEW_WORKFLOW_PATH) return "Codex review workflow";
+  if (path === GITHUB_BOOTSTRAP_WORKFLOW_PATH) return "DarkFactory installer workflow";
+  if (path === DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH) return "DarkFactory auto-update sentinel workflow";
+  if (path === DARK_FACTORY_RELEASE_WORKFLOW_PATH) return "DarkFactory release workflow";
+  if (path.startsWith(".darkfactory/")) return "DarkFactory managed policy";
+  return "DarkFactory managed workflow support";
 }
 
 async function checkVersionedFolder(

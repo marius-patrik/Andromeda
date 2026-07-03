@@ -342,9 +342,12 @@ export function managedSetupPullRequestBody(changedPaths: string[]): string {
     "",
     "## Notes",
     "",
-    "- `.agents/.global` is version-managed by Dark Factory from the workspace repository.",
+    "- `.agents/.global` is version-managed by Dark Factory from the AgentOS data repo.",
     "- `.agents/.project` is managed only when a repo-specific workspace overlay exists.",
+    "- `.darkfactory` policy files define the installer, auto-updater, and release baseline.",
     `- \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\` is bootstrap-managed so repositories have a safe baseline workflow.`,
+    "- `.github/workflows/dark-factory-autoupdate.yml` verifies managed setup on a schedule while DarkFactory performs centralized sync.",
+    "- `.github/workflows/dark-factory-release.yml` provides a tag-driven GitHub release baseline.",
     "- `.github/workflows/codex-review.yml` runs Codex autoreview with the repository secret `CODEX_AUTH_JSON`."
   ].join("\n");
 }
