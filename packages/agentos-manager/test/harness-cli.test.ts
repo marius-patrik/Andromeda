@@ -77,6 +77,49 @@ describe("harness CLI", () => {
     }
   });
 
+  test("runs packages with shared Agentos environment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-package-run-"));
+    try {
+      const pkg = path.join(root, "probe-package");
+      await mkdir(pkg, { recursive: true });
+      await Bun.write(
+        path.join(pkg, "agent.package.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          id: "probe-package",
+          kind: "agent",
+          entry: `${process.execPath} cli.ts`,
+          requires: { state: ["secrets", "credits"] },
+        }),
+      );
+      await Bun.write(
+        path.join(pkg, "cli.ts"),
+        [
+          "const out = Bun.argv[2];",
+          "await Bun.write(out, JSON.stringify({",
+          "  AGENTS_HOME: process.env.AGENTS_HOME,",
+          "  AGENTS_SECRETS: process.env.AGENTS_SECRETS,",
+          "  args: Bun.argv.slice(3),",
+          "}));",
+        ].join("\n"),
+      );
+
+      const register = await runAgents(root, ["packages", "register", pkg]);
+      expect(register.code).toBe(0);
+
+      const output = path.join(root, "package-env.json");
+      const run = await runAgents(root, ["packages", "run", "probe-package", "--", output, "--probe"]);
+      expect(run.code).toBe(0);
+
+      const env = JSON.parse(await Bun.file(output).text()) as Record<string, unknown>;
+      expect(env.AGENTS_HOME).toBe(path.join(root, ".agents"));
+      expect(env.AGENTS_SECRETS).toBe(path.join(root, ".agents", "secrets"));
+      expect(JSON.stringify(env.args)).toBe(JSON.stringify(["--probe"]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("cli exec honors inherited AGENTS_HOME from non-root cwd", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-cli-env-"));
     try {

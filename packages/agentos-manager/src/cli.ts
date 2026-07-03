@@ -53,6 +53,7 @@ Usage:
   agents cli exec <codex|claude|kimi|agy> -- <args...>
   agents packages register <path>
   agents packages list [--json]
+  agents packages run <name-or-path> -- <args...>
   agents harness list [--json]
   agents harness doctor <name>
   agents harness run <name> -- <args...>
@@ -284,7 +285,71 @@ async function packageCommand(args: string[], flags: Record<string, string | boo
     console.log(`registered ${packageManifest.kind} ${packageManifest.id}`);
     return;
   }
+  if (action === "run") {
+    if (!packagePath) throw new Error("packages run requires a package name or path");
+    const separator = args.indexOf("--");
+    const execArgs = separator === -1 ? args.slice(2) : args.slice(separator + 1);
+    const runnable = await findRunnablePackage(state, packagePath);
+    if (!runnable) throw new Error(`package not found or missing manifest: ${packagePath}`);
+    await runPackage(state, runnable, execArgs);
+    return;
+  }
   throw new Error(`unknown packages action: ${action}`);
+}
+
+async function findRunnablePackage(
+  state: SharedState,
+  query: string,
+): Promise<{ id: string; path: string; manifest: AgentsPackageManifest } | null> {
+  for (const registration of await readPackageRegistrations(state)) {
+    const packageManifest = await readPackageManifest(registration.path);
+    if (!packageManifest) continue;
+    if (
+      registration.id === query ||
+      registration.path === query ||
+      path.basename(registration.path) === query ||
+      packageManifest.name === query
+    ) {
+      return { id: registration.id, path: registration.path, manifest: packageManifest };
+    }
+  }
+
+  for (const item of await packages()) {
+    if (!item.path) continue;
+    const packageManifest = item.manifest as AgentsPackageManifest | null;
+    if (!packageManifest) continue;
+    if (
+      item.name === query ||
+      item.path === query ||
+      path.basename(item.path) === query ||
+      packageManifest.id === query ||
+      packageManifest.name === query
+    ) {
+      return { id: packageManifest.id, path: path.join(root, item.path), manifest: packageManifest };
+    }
+  }
+
+  return null;
+}
+
+async function runPackage(
+  state: SharedState,
+  item: { id: string; path: string; manifest: AgentsPackageManifest },
+  args: string[],
+): Promise<void> {
+  const entry = item.manifest.entry ?? "";
+  if (!entry) throw new Error(`package ${item.id} has no entry command`);
+  const command = entry.split(" ").filter(Boolean);
+  const cwd = item.manifest.workingDirectory ? path.join(item.path, item.manifest.workingDirectory) : item.path;
+  const child = Bun.spawn([...command, ...args], {
+    cwd,
+    env: { ...process.env, ...sharedPackageEnv(state) },
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const code = await child.exited;
+  if (code !== 0) process.exitCode = code;
 }
 
 async function harnessCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
@@ -371,6 +436,23 @@ function sharedHarnessEnv(state: SharedState, harness: { id: string }): Record<s
     AGENTS_SECRETS: state.secretsDir,
     AGENTS_CREDITS: state.creditsFile,
     ROMMIE_HOME: path.join(state.harnessesDir, harness.id, "runtime"),
+  };
+}
+
+function sharedPackageEnv(state: SharedState): Record<string, string> {
+  return {
+    AGENTS_BIN: process.execPath,
+    AGENTS_BIN_SCRIPT: Bun.argv[1] ? path.resolve(Bun.argv[1]) : "",
+    AGENTS_HOME: state.stateDir,
+    AGENTS_ROOT: state.root,
+    AGENTS_CLIS: state.clisDir,
+    AGENTS_HARNESSES: state.harnessesDir,
+    AGENTS_SKILLS: state.skillsDir,
+    AGENTS_PLUGINS: state.pluginsDir,
+    AGENTS_HOOKS: state.hooksDir,
+    AGENTS_TEMPLATES: state.templatesDir,
+    AGENTS_SECRETS: state.secretsDir,
+    AGENTS_CREDITS: state.creditsFile,
   };
 }
 
