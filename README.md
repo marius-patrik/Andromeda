@@ -1,4 +1,4 @@
-# vibe-bot
+# dark-factory
 
 TypeScript GitHub App bot that receives GitHub webhooks, verifies signatures, and responds to basic repository activity.
 
