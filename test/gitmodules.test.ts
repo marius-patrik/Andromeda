@@ -23,17 +23,18 @@ describe("gitmodules", () => {
     expect(
       serializeGitmodules([
         {
-          name: "harnesses/andromeda-harness",
-          path: "harnesses/andromeda-harness",
-          url: "https://github.com/marius-patrik/andromeda-harness.git",
+          name: "os/agents-harness",
+          path: "os/agents-harness",
+          url: "https://github.com/marius-patrik/agents-harness.git",
           branch: "main",
         },
       ]),
-    ).toBe(`[submodule "harnesses/andromeda-harness"]
-\tpath = harnesses/andromeda-harness
-\turl = https://github.com/marius-patrik/andromeda-harness.git
+    ).toBe(`[submodule "os/agents-harness"]
+\tpath = os/agents-harness
+\turl = https://github.com/marius-patrik/agents-harness.git
 \tbranch = main
 `);
   });
 });
+
 

@@ -13,7 +13,7 @@ describe("package manifests", () => {
         path.join(dir, "agent.package.json"),
         JSON.stringify({
           schemaVersion: 1,
-          id: "andromeda-harness",
+          id: "agents-harness",
           kind: "harness",
           requires: { clis: ["codex", "claude", "kimi", "agy"], state: ["skills", "plugins", "hooks", "credits"] },
           dataRepo: {
@@ -29,7 +29,7 @@ describe("package manifests", () => {
       );
 
       const manifest = await readPackageManifest(dir);
-      expect(manifest?.id).toBe("andromeda-harness");
+      expect(manifest?.id).toBe("agents-harness");
       expect(manifest?.kind).toBe("harness");
       expect(manifest?.workingDirectory).toBe("services/cli");
       expect(manifest?.requires?.clis).toContain("codex");
@@ -45,15 +45,16 @@ describe("package manifests", () => {
     try {
       const state = sharedState(dir);
       await ensureSharedState(state);
-      await upsertPackageRegistration(state, { id: "andromeda-harness", kind: "harness", path: path.join(dir, "andromeda-harness") });
-      await upsertPackageRegistration(state, { id: "andromeda-harness", kind: "harness", path: path.join(dir, "andromeda-harness-2") });
+      await upsertPackageRegistration(state, { id: "agents-harness", kind: "harness", path: path.join(dir, "agents-harness") });
+      await upsertPackageRegistration(state, { id: "agents-harness", kind: "harness", path: path.join(dir, "agents-harness-2") });
 
       const registrations = await readPackageRegistrations(state);
       expect(registrations).toHaveLength(1);
-      expect(registrations[0].path).toBe(path.join(dir, "andromeda-harness-2"));
+      expect(registrations[0].path).toBe(path.join(dir, "agents-harness-2"));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });
 });
+
 
