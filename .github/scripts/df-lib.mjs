@@ -189,12 +189,13 @@ export function parsePrdItems(markdown, sourcePath = "PRD.md") {
       continue;
     }
 
-    const bullet = line.match(/^-\s+\*\*(.+?)\*\*:?\s*(.*)$/);
+    const bullet = line.match(/^-\s*(?:\[(?<check>[ xX])\]\s*)?\*\*(?<name>.+?)\*\*:?\s*(?<detail>.*)$/);
     if (!bullet) continue;
     if (!/^(core loops|milestones)$/i.test(section)) continue;
 
-    const name = bullet[1].trim();
-    const detail = bullet[2].trim();
+    const name = bullet.groups.name.trim();
+    const detail = bullet.groups.detail.trim();
+    const completed = /^(x|X)$/.test(bullet.groups.check || "");
     const acceptanceMatch = detail.match(/\bAcceptance:\s*(.+)$/i);
     const description = acceptanceMatch ? detail.slice(0, acceptanceMatch.index).trim() : detail;
     const acceptance = acceptanceMatch ? acceptanceMatch[1].trim() : "";
@@ -212,6 +213,7 @@ export function parsePrdItems(markdown, sourcePath = "PRD.md") {
       title: prdIssueTitle(name),
       description,
       acceptance,
+      completed,
       priority,
       taskClass: classifyPrdItem(name, description)
     });

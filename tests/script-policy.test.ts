@@ -44,6 +44,15 @@ test("parsePrdItems includes nested PRD paths in stable markers", () => {
   assert.equal(packageItem.sourcePath, "packages/example/PRD.md");
 });
 
+test("parsePrdItems treats checked PRD checkboxes as a completion signal", () => {
+  const [openItem] = parsePrdItems("## Milestones\n\n- **M2 — Planning**: Reconcile.");
+  const [doneItem] = parsePrdItems("## Milestones\n\n- [x] **M2 — Planning**: Reconcile.");
+
+  assert.equal(openItem.completed, false);
+  assert.equal(doneItem.completed, true);
+  assert.equal(doneItem.marker, openItem.marker);
+});
+
 test("task class labels map to Codex reasoning effort", () => {
   assert.deepEqual(taskClassFromLabels([{ name: "df:class:mechanical" }]), {
     taskClass: "mechanical",

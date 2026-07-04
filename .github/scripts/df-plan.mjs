@@ -95,6 +95,25 @@ async function reconcileTargetRepository() {
     const body = prdIssueBody(item, blockedBy);
     const labels = [item.priority, "roadmap", `df:class:${item.taskClass}`];
 
+    if (item.completed) {
+      if (!existing) {
+        ledger.actions.push({ action: "skip-completed", marker: item.marker });
+        continue;
+      }
+      if (existing.state === "closed") {
+        ledger.actions.push({ action: "keep-closed", marker: item.marker, issue: issueRef(existing) });
+        continue;
+      }
+      const closed = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, {
+        state: "closed"
+      });
+      await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}/comments`, {
+        body: "DarkFactory L4 planning closed this issue because the PRD marks this item as completed."
+      });
+      ledger.actions.push({ action: "close-completed-prd-issue", marker: item.marker, issue: issueRef(closed) });
+      continue;
+    }
+
     if (!existing) {
       const created = await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues`, {
         title: item.title,
@@ -107,10 +126,6 @@ async function reconcileTargetRepository() {
     }
 
     if (existing.state === "closed") {
-      if (existing.title === item.title && (existing.body || "").trim() === body.trim()) {
-        ledger.actions.push({ action: "keep-closed", marker: item.marker, issue: issueRef(existing) });
-        continue;
-      }
       const reopened = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, {
         title: item.title,
         body,
