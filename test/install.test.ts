@@ -8,10 +8,18 @@ import { readPackageRegistrations } from "../src/packages";
 const repoRoot = path.resolve(import.meta.dir, "..");
 const cliPath = path.join(repoRoot, "src", "cli.ts");
 
+function cleanEnv(): Record<string, string | undefined> {
+  const copy = { ...process.env };
+  for (const key of Object.keys(copy)) {
+    if (key.startsWith("AGENTS_")) delete copy[key];
+  }
+  return copy;
+}
+
 async function runAgents(cwd: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn([process.execPath, cliPath, ...args], {
     cwd,
-    env: process.env,
+    env: { ...cleanEnv(), AGENTS_HOME: path.join(cwd, ".agents"), AGENTS_ROOT: cwd },
     stdout: "pipe",
     stderr: "pipe",
   });

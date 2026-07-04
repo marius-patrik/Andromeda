@@ -67,6 +67,8 @@ export interface CreditLedgerEntry {
 export interface SharedState {
   root: string;
   stateDir: string;
+  dataDir: string;
+  workspaceDir: string;
   clisDir: string;
   harnessesDir: string;
   skillsDir: string;
@@ -86,6 +88,8 @@ export function sharedStateAt(root: string, stateDir: string): SharedState {
   return {
     root,
     stateDir,
+    dataDir: path.join(root, "data"),
+    workspaceDir: path.join(root, "os", "agents-workspace"),
     clisDir: path.join(stateDir, "clis"),
     harnessesDir: path.join(stateDir, "harnesses"),
     skillsDir: path.join(stateDir, "skills"),
@@ -106,23 +110,25 @@ export function sharedState(root: string): SharedState {
   return sharedStateAt(root, path.join(root, ".agents"));
 }
 
-export function sharedStateFromEnv(cwd: string): SharedState {
-  const envHome = process.env.AGENTS_HOME?.trim();
+export function sharedStateFromEnv(cwd: string, env: Record<string, string | undefined> = process.env): SharedState {
+  const envHome = env.AGENTS_HOME?.trim();
   if (!envHome) return sharedState(cwd);
   const stateDir = path.resolve(envHome);
-  const root = path.dirname(stateDir);
+  const root = env.AGENTS_ROOT?.trim() ? path.resolve(env.AGENTS_ROOT.trim()) : path.dirname(stateDir);
   return {
     ...sharedStateAt(root, stateDir),
-    clisDir: process.env.AGENTS_CLIS?.trim() || path.join(stateDir, "clis"),
-    harnessesDir: process.env.AGENTS_HARNESSES?.trim() || path.join(stateDir, "harnesses"),
-    skillsDir: process.env.AGENTS_SKILLS?.trim() || path.join(stateDir, "skills"),
-    pluginsDir: process.env.AGENTS_PLUGINS?.trim() || path.join(stateDir, "plugins"),
-    hooksDir: process.env.AGENTS_HOOKS?.trim() || path.join(stateDir, "hooks"),
-    templatesDir: process.env.AGENTS_TEMPLATES?.trim() || path.join(stateDir, "templates"),
-    secretsDir: process.env.AGENTS_SECRETS?.trim() || path.join(stateDir, "secrets"),
-    creditsFile: process.env.AGENTS_CREDITS?.trim() || path.join(stateDir, "credits.json"),
-    dataReposFile: process.env.AGENTS_DATA_REPOS?.trim() || path.join(stateDir, "data-repos.json"),
-    environmentsFile: process.env.AGENTS_ENVIRONMENTS?.trim() || path.join(stateDir, "environments.json"),
+    dataDir: env.AGENTS_DATA?.trim() || path.join(root, "data"),
+    workspaceDir: env.AGENTS_WORKSPACE?.trim() || path.join(root, "os", "agents-workspace"),
+    clisDir: env.AGENTS_CLIS?.trim() || path.join(stateDir, "clis"),
+    harnessesDir: env.AGENTS_HARNESSES?.trim() || path.join(stateDir, "harnesses"),
+    skillsDir: env.AGENTS_SKILLS?.trim() || path.join(stateDir, "skills"),
+    pluginsDir: env.AGENTS_PLUGINS?.trim() || path.join(stateDir, "plugins"),
+    hooksDir: env.AGENTS_HOOKS?.trim() || path.join(stateDir, "hooks"),
+    templatesDir: env.AGENTS_TEMPLATES?.trim() || path.join(stateDir, "templates"),
+    secretsDir: env.AGENTS_SECRETS?.trim() || path.join(stateDir, "secrets"),
+    creditsFile: env.AGENTS_CREDITS?.trim() || path.join(stateDir, "credits.json"),
+    dataReposFile: env.AGENTS_DATA_REPOS?.trim() || path.join(stateDir, "data-repos.json"),
+    environmentsFile: env.AGENTS_ENVIRONMENTS?.trim() || path.join(stateDir, "environments.json"),
   };
 }
 
@@ -165,6 +171,7 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
           distroPackages: [],
           containerPackages: [],
           environments: [],
+          containers: [],
         },
         null,
         2,
@@ -197,6 +204,8 @@ export async function ensureSharedState(state: SharedState): Promise<void> {
     [
       `AGENTS_HOME=${state.stateDir}`,
       `AGENTS_ROOT=${state.root}`,
+      `AGENTS_DATA=${state.dataDir}`,
+      `AGENTS_WORKSPACE=${state.workspaceDir}`,
       `AGENTS_CLIS=${state.clisDir}`,
       `AGENTS_HARNESSES=${state.harnessesDir}`,
       `AGENTS_SKILLS=${state.skillsDir}`,
