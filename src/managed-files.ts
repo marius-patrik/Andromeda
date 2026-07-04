@@ -202,7 +202,7 @@ function resolveManagedWorkspaceRoot(): string {
     return siblingWorkspace;
   }
 
-  const legacySiblingWorkspace = resolve(projectRoot, "..", "workspace-darkfactory", "managed-repository");
+  const legacySiblingWorkspace = resolve(projectRoot, "..", "darkfactory-workspace", "managed-repository");
   if (existsSync(legacySiblingWorkspace)) {
     return legacySiblingWorkspace;
   }
@@ -222,7 +222,7 @@ function resolveManagedWorkspaceRoot(): string {
     return bundledWorkspace;
   }
 
-  const legacyBundledWorkspace = resolve(projectRoot, "workspace-darkfactory", "managed-repository");
+  const legacyBundledWorkspace = resolve(projectRoot, "darkfactory-workspace", "managed-repository");
   if (existsSync(legacyBundledWorkspace)) {
     return legacyBundledWorkspace;
   }
