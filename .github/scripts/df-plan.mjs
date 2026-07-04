@@ -134,7 +134,7 @@ async function reconcileTargetRepository() {
         labels: createLabels
       });
       const labelUpdate = await setIssueLabels(TARGET_REPO, created.number, labels);
-      const dispatch = await dispatchIfNewlyReady(TARGET_REPO, created.number, labelUpdate, repo.default_branch);
+      const dispatch = await dispatchIfNewlyReady(TARGET_REPO, created.number, labelUpdate);
       ledger.actions.push({ action: "create-issue", marker: item.marker, issue: issueRef(created), labels });
       if (dispatch) ledger.actions.push(dispatch);
       previousIssueNumber = created.number;
@@ -149,7 +149,7 @@ async function reconcileTargetRepository() {
         state: "open"
       });
       const labelUpdate = await setIssueLabels(TARGET_REPO, existing.number, labels, { preserveWorkerState: false });
-      const dispatch = await dispatchIfNewlyReady(TARGET_REPO, existing.number, labelUpdate, repo.default_branch);
+      const dispatch = await dispatchIfNewlyReady(TARGET_REPO, existing.number, labelUpdate);
       ledger.actions.push({ action: "reopen-prd-issue", marker: item.marker, issue: issueRef(reopened), labels });
       if (dispatch) ledger.actions.push(dispatch);
       previousIssueNumber = reopened.number;
@@ -179,7 +179,7 @@ async function reconcileTargetRepository() {
     }
     const labelUpdate = await setIssueLabels(TARGET_REPO, existing.number, labels);
     ledger.actions.push({ action: "sequence-labels", marker: item.marker, issue: issueRef(existing), labels });
-    const dispatch = await dispatchIfNewlyReady(TARGET_REPO, existing.number, labelUpdate, repo.default_branch);
+    const dispatch = await dispatchIfNewlyReady(TARGET_REPO, existing.number, labelUpdate);
     if (dispatch) ledger.actions.push(dispatch);
     previousIssueNumber = existing.number;
     previousOpenIssueNumber = existing.number;
@@ -277,38 +277,20 @@ async function setIssueLabels(repository, issueNumber, labels, options = {}) {
   return { add, remove };
 }
 
-async function dispatchIfNewlyReady(repository, issueNumber, labelUpdate, defaultBranch) {
+async function dispatchIfNewlyReady(repository, issueNumber, labelUpdate) {
   if (!labelUpdate.add.includes("df:ready")) return null;
-  return await dispatchReadyWorker(repository, issueNumber, defaultBranch);
+  return await dispatchReadyWorker(repository, issueNumber);
 }
 
-async function dispatchReadyWorker(repository, issueNumber, defaultBranch) {
-  // GitHub suppresses workflow runs caused by GITHUB_TOKEN label events, so the
-  // trusted control workflow owns privileged worker dispatch. Managed PRD-edit
-  // pushes only queue the ready issue; the control orchestrator will pick it up.
-  if (TRIGGER === "push" && repoName(repository) !== repoName(CONTROL_REPO)) {
-    return {
-      action: "queue-worker",
-      repo: repoName(repository),
-      issue: `#${issueNumber}`,
-      reason: "await-control-orchestrator"
-    };
-  }
-
-  await gh.request("POST", `/repos/${repoName(CONTROL_REPO)}/actions/workflows/df-work.yml/dispatches`, {
-    ref: "main",
-    inputs: {
-      repo: repoName(repository),
-      issue_number: String(issueNumber)
-    }
-  });
-
+async function dispatchReadyWorker(repository, issueNumber) {
+  // Planning never dispatches privileged workers with a repository-scoped token.
+  // It queues readiness; the trusted control orchestrator dispatches workers
+  // with the GitHub App installation token.
   return {
-    action: "dispatch-worker",
+    action: "queue-worker",
     repo: repoName(repository),
     issue: `#${issueNumber}`,
-    workflow_repository: repoName(CONTROL_REPO),
-    ref: "main"
+    reason: "await-control-orchestrator"
   };
 }
 

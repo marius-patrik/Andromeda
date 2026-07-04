@@ -260,7 +260,7 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.doesNotMatch(workflow, /method:\s*'HEAD'/);
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
   assert.match(workflow, /^\s+schedule:\s*$/m);
-  assert.match(workflow, /actions:\s+write/);
+  assert.doesNotMatch(workflow, /actions:\s+write/);
   assert.notEqual(gate, -1);
   assert.notEqual(checkout, -1);
   assert.notEqual(token, -1);
@@ -277,14 +277,13 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.doesNotMatch(workflow, /DARK_FACTORY_CONTROL_REF/);
 });
 
-test("df-plan explicitly dispatches workers for newly ready PRD issues", async () => {
+test("df-plan queues newly ready PRD issues for the control orchestrator", async () => {
   const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
 
   assert.match(source, /dispatchIfNewlyReady/);
   assert.match(source, /labelUpdate\.add\.includes\("df:ready"\)/);
-  assert.match(source, /actions\/workflows\/df-work\.yml\/dispatches/);
   assert.match(source, /await-control-orchestrator/);
-  assert.match(source, /repos\/\$\{repoName\(CONTROL_REPO\)\}\/actions\/workflows\/df-work\.yml\/dispatches/);
+  assert.doesNotMatch(source, /actions\/workflows\/df-work\.yml\/dispatches/);
 });
 
 test("df-plan preserves PRD sequence references across completed predecessors", async () => {
