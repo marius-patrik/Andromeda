@@ -91,8 +91,6 @@ async function reconcileTargetRepository() {
 
   for (const item of items) {
     const existing = byMarker.get(item.marker);
-    const blockedBy = previousOpenIssueNumber ? [previousOpenIssueNumber] : [];
-    const body = prdIssueBody(item, blockedBy);
     const labels = [item.priority, "roadmap", `df:class:${item.taskClass}`];
 
     if (item.completed) {
@@ -113,6 +111,9 @@ async function reconcileTargetRepository() {
       ledger.actions.push({ action: "close-completed-prd-issue", marker: item.marker, issue: issueRef(closed) });
       continue;
     }
+
+    const blockedBy = previousOpenIssueNumber ? [previousOpenIssueNumber] : [];
+    const body = prdIssueBody(item, blockedBy);
 
     if (!existing) {
       const created = await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues`, {
@@ -137,9 +138,14 @@ async function reconcileTargetRepository() {
       continue;
     }
 
+    // For open issues, preserve existing Blocked-by sequencing while still
+    // updating title/body when the PRD item itself changes.
+    const existingBlockedBy = extractBlockedBy(existing.body || "");
+    const bodyWithPreservedBlockedBy = prdIssueBody(item, existingBlockedBy);
+
     const update = {};
     if (existing.title !== item.title) update.title = item.title;
-    if ((existing.body || "").trim() !== body.trim()) update.body = body;
+    if ((existing.body || "").trim() !== bodyWithPreservedBlockedBy.trim()) update.body = bodyWithPreservedBlockedBy;
     if (Object.keys(update).length) {
       const updated = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, update);
       ledger.actions.push({ action: "update-issue", marker: item.marker, issue: issueRef(updated), fields: Object.keys(update) });
@@ -155,7 +161,6 @@ async function reconcileTargetRepository() {
   });
 
   for (const issue of staleMarkedIssues) {
-    await setIssueLabels(TARGET_REPO, issue.number, []);
     await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}/comments`, {
       body: "DarkFactory L4 planning closed this issue because its `df-prd:` marker is no longer present in any tracked `PRD.md` file."
     });
@@ -310,6 +315,15 @@ async function writeLedger(ledger) {
   } catch (error) {
     console.warn(`DarkFactory ledger warning: ${error.message || String(error)}`);
   }
+}
+
+function extractBlockedBy(body) {
+  const numbers = [];
+  for (const line of body.split(/\r?\n/)) {
+    const match = line.match(/^Blocked-by:\s*#(\d+)\s*$/i);
+    if (match) numbers.push(Number(match[1]));
+  }
+  return numbers;
 }
 
 function issueRef(issue) {

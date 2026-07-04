@@ -146,7 +146,7 @@ test("df-plan reopens PRD-tracked issues when the PRD item still exists", async 
 test("df-plan workflow reacts safely to PRD edits on main", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-plan.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
-  const checkout = workflow.indexOf("Checkout current repository");
+  const checkout = workflow.indexOf("Checkout DarkFactory control scripts");
   const token = workflow.indexOf("Mint mp-agents installation token");
 
   assert.match(workflow, /^\s+push:\s*$/m);
@@ -162,7 +162,9 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.ok(checkout < token);
   assert.match(workflow, /GITHUB_REPOSITORY_OWNER/);
   assert.match(workflow, /GITHUB_REF_NAME.*main/);
-  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /repository:\s+marius-patrik\/darkfactory-agent/);
+  assert.match(workflow, /path:\s+darkfactory-control/);
+  assert.match(workflow, /ref: \$\{\{ github\.event_name == 'push' && 'main' \|\| github\.sha \}\}/);
   assert.doesNotMatch(workflow, /\bdev\b|DARK_FACTORY_CONTROL_REF/);
 });
 
