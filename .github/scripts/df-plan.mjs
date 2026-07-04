@@ -6,6 +6,7 @@ import {
   createGithubClient,
   driftIssueBody,
   ensureLabels,
+  extractClosingIssueNumbers,
   findDriftMarker,
   findPrdMarker,
   getOptionalFileContent,
@@ -288,7 +289,48 @@ async function detectCodeDrift(repository, ref, items, staleMarkedIssues) {
     if (!workflow) findings.push("PRD requires L3 Work, but `.github/workflows/df-work.yml` is absent.");
   }
 
+  // General drift: open issues or PRs that are not tied to a PRD-tracked issue.
+  // The PRD is the source of truth, so open planned work without a PRD marker is
+  // a contradiction between the backlog and the PRD.
+  const openIssues = await listIssues(gh, repository, "open");
+  const prdTrackedNumbers = new Set(
+    openIssues
+      .filter((issue) => !issue.pull_request && findPrdMarker(issue.body || ""))
+      .map((issue) => issue.number)
+  );
+
+  for (const issue of openIssues) {
+    if (issue.pull_request) continue;
+    if (findPrdMarker(issue.body || "")) continue;
+    const labels = (issue.labels || []).map((label) => typeof label === "string" ? label : label.name);
+    if (labels.includes("df:prd-drift") || labels.includes("df:ask-owner")) continue;
+    findings.push(`Open issue #${issue.number} is not tracked by any PRD item.`);
+  }
+
+  const pulls = await listOpenPullRequests(repository);
+  for (const pull of pulls) {
+    const closes = extractClosingIssueNumbers(pull.body || "", repoName(repository));
+    const linkedToPrd = closes.some((number) => prdTrackedNumbers.has(number));
+    if (!linkedToPrd) {
+      findings.push(`Open PR #${pull.number} is not linked to a PRD-tracked issue.`);
+    }
+  }
+
   return findings;
+}
+
+async function listOpenPullRequests(repository) {
+  const pulls = [];
+  for (let page = 1; page <= 20; page += 1) {
+    const batch = await gh.request(
+      "GET",
+      `/repos/${repoName(repository)}/pulls?state=open&per_page=100&page=${page}`
+    );
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    pulls.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return pulls;
 }
 
 async function upsertDriftIssue(repository, findings) {

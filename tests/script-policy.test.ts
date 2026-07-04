@@ -159,6 +159,15 @@ test("df-plan reopens PRD-tracked issues when the PRD item still exists", async 
   assert.match(source, /tracked `PRD\.md` file/);
 });
 
+test("df-plan drift detection covers untracked open issues and PRs", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /not tracked by any PRD item/);
+  assert.match(source, /not linked to a PRD-tracked issue/);
+  assert.match(source, /extractClosingIssueNumbers/);
+  assert.match(source, /listOpenPullRequests/);
+});
+
 test("df-plan workflow reacts safely to PRD edits on main", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-plan.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
