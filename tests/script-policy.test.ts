@@ -443,7 +443,8 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /permission-actions:\s+write/);
   assert.match(workflow, /permission-workflows:\s+write/);
-  assert.match(workflow, /permission-issues:\s+read/);
+  assert.match(workflow, /permission-contents:\s+write/);
+  assert.match(workflow, /permission-issues:\s+write/);
 });
 
 test("df-orchestrate script skips parked repositories and dispatches via workflow_dispatch", async () => {

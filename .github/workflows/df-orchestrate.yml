@@ -47,8 +47,8 @@ jobs:
           owner: marius-patrik
           permission-actions: write
           permission-workflows: write
-          permission-contents: read
-          permission-issues: read
+          permission-contents: write
+          permission-issues: write
 
       - name: Run orchestrator
         env:
