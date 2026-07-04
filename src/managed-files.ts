@@ -89,10 +89,19 @@ export function readManagedFiles(repository?: ManagedRepositoryRef, root = resol
     }
   }
 
+  const missingRequired = requiredManagedFilePaths(root).filter((filePath) => !files.has(filePath));
+  if (missingRequired.length > 0) {
+    throw new Error(`Managed file source is missing required payloads: ${missingRequired.join(", ")}`);
+  }
+
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function requiredManagedFilePaths(): string[] {
+export function requiredManagedFilePaths(root = resolveManagedWorkspaceRoot()): string[] {
+  const packageManagedFiles = PACKAGE_MANAGED_FILES.filter((filePath) => {
+    return readManagedFile(root, filePath) ?? readManagedFile(resolveProjectRoot(), filePath);
+  });
+
   return [
     AGENTS_ENTRYPOINT_PATH,
     AGENTS_GLOBAL_VERSION_PATH,
@@ -100,9 +109,7 @@ export function requiredManagedFilePaths(): string[] {
     GITHUB_BOOTSTRAP_WORKFLOW_PATH,
     DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH,
     DARK_FACTORY_RELEASE_WORKFLOW_PATH,
-    DARK_FACTORY_PLAN_WORKFLOW_PATH,
-    DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
-    DARK_FACTORY_WORKFLOW_PATH,
+    ...packageManagedFiles,
     CODEX_REVIEW_WORKFLOW_PATH,
     CODEX_REVIEW_DOCKERFILE_PATH,
     CODEX_REVIEW_SCHEMA_PATH,
