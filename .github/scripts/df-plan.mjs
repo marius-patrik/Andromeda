@@ -290,14 +290,19 @@ async function dispatchIfNewlyReady(repository, issueNumber, labelUpdate, defaul
 
 async function dispatchReadyWorker(repository, issueNumber, defaultBranch) {
   // GitHub suppresses workflow runs caused by GITHUB_TOKEN label events, so the
-  // planner explicitly dispatches the worker. PRD push runs can dispatch the
-  // managed repository's own workflow; control sweeps dispatch the control
-  // workflow with target inputs.
-  const dispatchRepository = TRIGGER === "push" ? repository : CONTROL_REPO;
-  const dispatchRef = repoName(dispatchRepository) === repoName(CONTROL_REPO) ? "main" : defaultBranch || "main";
+  // trusted control workflow owns privileged worker dispatch. Managed PRD-edit
+  // pushes only queue the ready issue; the control orchestrator will pick it up.
+  if (TRIGGER === "push" && repoName(repository) !== repoName(CONTROL_REPO)) {
+    return {
+      action: "queue-worker",
+      repo: repoName(repository),
+      issue: `#${issueNumber}`,
+      reason: "await-control-orchestrator"
+    };
+  }
 
-  await gh.request("POST", `/repos/${repoName(dispatchRepository)}/actions/workflows/df-work.yml/dispatches`, {
-    ref: dispatchRef,
+  await gh.request("POST", `/repos/${repoName(CONTROL_REPO)}/actions/workflows/df-work.yml/dispatches`, {
+    ref: "main",
     inputs: {
       repo: repoName(repository),
       issue_number: String(issueNumber)
@@ -308,8 +313,8 @@ async function dispatchReadyWorker(repository, issueNumber, defaultBranch) {
     action: "dispatch-worker",
     repo: repoName(repository),
     issue: `#${issueNumber}`,
-    workflow_repository: repoName(dispatchRepository),
-    ref: dispatchRef
+    workflow_repository: repoName(CONTROL_REPO),
+    ref: "main"
   };
 }
 

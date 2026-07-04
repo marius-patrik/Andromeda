@@ -252,7 +252,8 @@ test("df-plan explicitly dispatches workers for newly ready PRD issues", async (
   assert.match(source, /dispatchIfNewlyReady/);
   assert.match(source, /labelUpdate\.add\.includes\("df:ready"\)/);
   assert.match(source, /actions\/workflows\/df-work\.yml\/dispatches/);
-  assert.match(source, /TRIGGER === "push" \? repository : CONTROL_REPO/);
+  assert.match(source, /await-control-orchestrator/);
+  assert.match(source, /repos\/\$\{repoName\(CONTROL_REPO\)\}\/actions\/workflows\/df-work\.yml\/dispatches/);
 });
 
 test("df-follow-through workflow validates trusted refs before privileged tokens", async () => {
@@ -292,20 +293,20 @@ test("df-work workflow only runs issue triggers from trusted actors", async () =
   assert.match(workflow, /OWNER/);
   assert.match(workflow, /COLLABORATOR/);
   assert.doesNotMatch(workflow, /"MEMBER"/);
-  assert.match(workflow, /github\.repository_owner == 'marius-patrik'/);
+  assert.match(workflow, /github\.repository == 'marius-patrik\/darkfactory-agent'/);
   assert.match(workflow, /github\.event\.label\.name == 'df:ready'/);
   assert.match(workflow, /github-actions\[bot\]/);
   assert.match(workflow, /mp-agents\[bot\]/);
   assert.match(workflow, /df-prd:/);
 });
 
-test("df-work workflow allows control and managed self-dispatch", async () => {
+test("df-work workflow restricts privileged workers to the control repository", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-work.yml", import.meta.url), "utf8");
 
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /github\.repository == 'marius-patrik\/darkfactory-agent'/);
-  assert.match(workflow, /inputs\.repo == github\.repository/);
-  assert.match(workflow, /if:\s*github\.event_name == 'workflow_dispatch' && github\.repository == 'marius-patrik\/darkfactory-agent'/);
+  assert.doesNotMatch(workflow, /inputs\.repo == github\.repository/);
+  assert.match(workflow, /if:\s*github\.event_name == 'workflow_dispatch'/);
 });
 
 test("df-work workflow downloads canonical scripts for managed-repo triggers", async () => {

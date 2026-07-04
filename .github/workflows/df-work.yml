@@ -27,9 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       ${{
-        github.repository_owner == 'marius-patrik' &&
-        ((github.event_name == 'workflow_dispatch' &&
-           (github.repository == 'marius-patrik/darkfactory-agent' || inputs.repo == github.repository)) ||
+        github.repository == 'marius-patrik/darkfactory-agent' &&
+        ((github.event_name == 'workflow_dispatch') ||
          (github.event_name == 'issues' &&
            github.event.label.name == 'df:ready' &&
            contains(github.event.issue.body || '', 'df-prd:') &&
@@ -50,8 +49,8 @@ jobs:
         shell: bash
         run: |
           # Privileged workers receive Codex auth, so they only run in the allowed
-          # owner. workflow_dispatch runs from the control repository and may target
-          # another repo; issue/comment triggers run inside the target repository.
+          # owner. The job-level guard restricts execution to the control
+          # repository; workflow_dispatch may still target another repo by input.
           if [[ "${GITHUB_REPOSITORY_OWNER}" != "marius-patrik" ]]; then
             echo "::error::DarkFactory worker can only run in the marius-patrik owner."
             exit 1
@@ -106,7 +105,7 @@ jobs:
 
       - name: Mint mp-agents installation token
         id: app-token
-        if: github.event_name == 'workflow_dispatch' && github.repository == 'marius-patrik/darkfactory-agent'
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
