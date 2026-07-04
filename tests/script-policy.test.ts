@@ -182,6 +182,7 @@ test("df-sweep marks blocked worker issues when follow-through cannot merge", as
 
   assert.match(source, /markWorkerIssueBlocked\(repository, pull, "no-checks-not-allowed"/);
   assert.match(source, /markWorkerIssueBlocked\(repository, pull, reason/);
+  assert.doesNotMatch(source, /checksSummary\(pull\.statusCheckRollup\)\.join/);
   assert.match(source, /replaceIssueLabels\(repository, issueNumber, \["df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
   assert.match(source, /dark-factory:sweep-blocked/);
 });

@@ -114,7 +114,7 @@ async function considerPullRequest(repository, pull) {
       : "checks-not-green";
     const issueUpdate = await markWorkerIssueBlocked(repository, pull, reason, [
       `Required checks: ${requiredContexts.length ? requiredContexts.join(", ") : "(none configured)"}`,
-      `Reported checks: ${checksSummary(pull.statusCheckRollup).join(", ") || "(none)"}`
+      `Reported checks: ${checksSummary(pull.statusCheckRollup) || "(none)"}`
     ]);
     return {
       repo: repoName(repository),
