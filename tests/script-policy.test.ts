@@ -10,6 +10,7 @@ const {
   checksAreGreen,
   cleanupTempRoot,
   extractClosingIssueNumbers,
+  getRequiredStatusCheckContexts,
   isParkedRepo,
   parsePrdItems,
   prdIssueBody,
@@ -85,9 +86,24 @@ test("cleanupTempRoot reports cleanup failures without throwing", async () => {
   assert.match(result.warning, /cleanup warning/i);
 });
 
-test("checksAreGreen allows no checks and rejects pending or failing checks", () => {
+test("checksAreGreen respects required checks and rejects pending or failing checks", () => {
   assert.equal(checksAreGreen([]), true);
+  assert.equal(checksAreGreen([], ["ci"]), false);
   assert.equal(checksAreGreen([{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }]), true);
+  assert.equal(
+    checksAreGreen(
+      [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }],
+      ["ci"]
+    ),
+    true
+  );
+  assert.equal(
+    checksAreGreen(
+      [{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }],
+      ["ci"]
+    ),
+    false
+  );
   assert.equal(checksAreGreen([{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }]), false);
   assert.equal(checksAreGreen([{ __typename: "StatusContext", state: "FAILURE" }]), false);
 });
@@ -200,4 +216,13 @@ test("df-sweep waits before treating empty check rollups as no-checks-configured
   assert.match(source, /EMPTY_CHECK_SETTLE_MS/);
   assert.match(source, /emptyCheckRollupHasSettled\(pull\)/);
   assert.match(source, /checks-not-reported-yet/);
+});
+
+test("df-sweep verifies branch protection before merging empty check rollups", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /getRequiredStatusCheckContexts/);
+  assert.match(source, /required_checks/);
+  assert.match(source, /required-checks-missing/);
+  assert.match(source, /checksAreGreen\(pull\.statusCheckRollup, requiredContexts\)/);
 });

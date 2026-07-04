@@ -5,6 +5,7 @@ import {
   checksSummary,
   createGithubClient,
   extractClosingIssueNumbers,
+  getRequiredStatusCheckContexts,
   isParkedRepo,
   parseRepo,
   repoName,
@@ -85,12 +86,17 @@ async function considerPullRequest(repository, pull) {
   if (!emptyCheckRollupHasSettled(pull)) {
     return { repo: repoName(repository), pr: ref, action: "skip", reason: "checks-not-reported-yet" };
   }
-  if (!checksAreGreen(pull.statusCheckRollup)) {
+
+  const requiredContexts = await getRequiredStatusCheckContexts(gh, repository, pull.baseRefName);
+  if (!checksAreGreen(pull.statusCheckRollup, requiredContexts)) {
     return {
       repo: repoName(repository),
       pr: ref,
       action: "skip",
-      reason: "checks-not-green",
+      reason: requiredContexts.length && !pull.statusCheckRollup?.length
+        ? "required-checks-missing"
+        : "checks-not-green",
+      required_checks: requiredContexts,
       checks: checksSummary(pull.statusCheckRollup)
     };
   }

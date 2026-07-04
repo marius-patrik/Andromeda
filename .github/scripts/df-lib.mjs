@@ -150,6 +150,28 @@ export async function getRepository(gh, repository) {
   return await gh.request("GET", `/repos/${repoName(repository)}`);
 }
 
+export async function getRequiredStatusCheckContexts(gh, repository, branch) {
+  try {
+    const data = await gh.request(
+      "GET",
+      `/repos/${repoName(repository)}/branches/${encodeURIComponent(branch)}/protection`
+    );
+    const checks = data?.required_status_checks;
+    if (!checks) return [];
+
+    if (Array.isArray(checks.checks)) {
+      return checks.checks.map((check) => check.context).filter(Boolean);
+    }
+
+    if (Array.isArray(checks.contexts)) return checks.contexts;
+    return [];
+  } catch (error) {
+    if (error.status === 404) return [];
+    if (error.status === 403 && /enable this feature/i.test(error.message || "")) return [];
+    throw error;
+  }
+}
+
 export async function getOptionalFileContent(gh, repository, filePath, ref) {
   try {
     const data = await gh.request(
@@ -285,10 +307,12 @@ export function findDriftMarker(body) {
   return body?.match(/df-prd-drift:[a-z0-9-]+/)?.[0] ?? "";
 }
 
-export function checksAreGreen(statusCheckRollup) {
-  if (!Array.isArray(statusCheckRollup) || statusCheckRollup.length === 0) return true;
+export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
+  if (!Array.isArray(statusCheckRollup) || statusCheckRollup.length === 0) {
+    return requiredContexts.length === 0;
+  }
 
-  return statusCheckRollup.every((check) => {
+  const allGreen = statusCheckRollup.every((check) => {
     if (check.__typename === "CheckRun") {
       return check.status === "COMPLETED" && ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(check.conclusion);
     }
@@ -297,6 +321,18 @@ export function checksAreGreen(statusCheckRollup) {
     }
     return false;
   });
+
+  if (!allGreen || requiredContexts.length === 0) return allGreen;
+
+  const present = new Set(
+    statusCheckRollup.map((check) => {
+      if (check.__typename === "CheckRun") return check.name;
+      if (check.__typename === "StatusContext") return check.context;
+      return "";
+    })
+  );
+
+  return requiredContexts.every((context) => present.has(context));
 }
 
 export function checksSummary(statusCheckRollup) {
