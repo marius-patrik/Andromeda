@@ -419,6 +419,7 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /permission-actions:\s+write/);
+  assert.match(workflow, /permission-workflows:\s+write/);
   assert.match(workflow, /permission-issues:\s+read/);
 });
 
