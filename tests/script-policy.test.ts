@@ -294,7 +294,7 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.match(workflow, /marius-patrik\/fabrica/);
   assert.match(workflow, /must be a marius-patrik repository/);
   assert.match(workflow, /permission-issues:\s+write/);
-  assert.match(workflow, /permission-pull-requests:\s+write/);
+  assert.doesNotMatch(workflow, /permission-pull-requests:\s+write/);
   assert.doesNotMatch(workflow, /DARK_FACTORY_CONTROL_REF/);
 });
 
@@ -414,6 +414,14 @@ test("df-sweep requires explicit allowlist before merging PRs with no checks", a
   assert.match(source, /DF_ALLOW_NO_CHECK_REPOS/);
   assert.match(source, /NO_CHECK_ALLOWLIST/);
   assert.match(source, /no-checks-not-allowed/);
+});
+
+test("df-sweep skips open worker PRs whose linked issue is already blocked", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /isWorkerIssueBlocked\(repository, issueNumber\)/);
+  assert.match(source, /worker-issue-blocked/);
+  assert.match(source, /labels\.includes\("df:blocked"\)/);
 });
 
 test("df-orchestrate workflow validates trusted refs before privileged tokens", async () => {

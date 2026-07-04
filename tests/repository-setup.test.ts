@@ -23,6 +23,8 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".github/workflows/dark-factory-autoupdate.yml": "name: DarkFactory Auto Update\n",
       ".github/workflows/dark-factory-release.yml": "name: DarkFactory Release\n",
       ".github/workflows/df-plan.yml": "name: DarkFactory Plan\n",
+      ".github/workflows/df-follow-through.yml": "name: DarkFactory Follow Through\n",
+      ".github/workflows/df-orchestrate.yml": "name: DarkFactory Orchestrate\n",
       ".github/workflows/df-work.yml": "name: DarkFactory Work\n",
       ".github/workflows/codex-review.yml": "name: Codex Review\n",
       ".github/codex-review.Dockerfile": "FROM node:22-bookworm-slim\n",
@@ -31,6 +33,8 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".github/scripts/dark-factory-release-check.mjs": "#!/usr/bin/env node\n",
       ".github/scripts/df-lib.mjs": "export {}\n",
       ".github/scripts/df-plan.mjs": "import './df-lib.mjs';\n",
+      ".github/scripts/df-orchestrate.mjs": "import './df-lib.mjs';\n",
+      ".github/scripts/df-sweep.mjs": "import './df-lib.mjs';\n",
       ".github/scripts/df-work.mjs": "import './df-lib.mjs';\n",
       ".darkfactory/branching-policy.md": "# Branching\n",
       ".darkfactory/labels.json": "{}\n",
@@ -69,6 +73,7 @@ test("checkRepositorySetup reports stale agents and missing github bootstrap", a
   assert.ok(comment?.includes(".github/workflows/dark-factory-autoupdate.yml"));
   assert.ok(comment?.includes(".github/workflows/dark-factory-release.yml"));
   assert.ok(comment?.includes(".github/workflows/df-plan.yml"));
+  assert.ok(comment?.includes(".github/workflows/df-follow-through.yml"));
   assert.ok(comment?.includes(".github/workflows/df-work.yml"));
   assert.ok(comment?.includes(".github/workflows/codex-review.yml"));
   assert.ok(comment?.includes(".darkfactory/managed-repository.json"));
