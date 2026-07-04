@@ -281,6 +281,8 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.match(workflow, /Validate manual planning target repository/);
   assert.match(workflow, /marius-patrik\/fabrica/);
   assert.match(workflow, /must be a marius-patrik repository/);
+  assert.match(workflow, /permission-issues:\s+write/);
+  assert.match(workflow, /permission-pull-requests:\s+write/);
   assert.doesNotMatch(workflow, /DARK_FACTORY_CONTROL_REF/);
 });
 
@@ -320,6 +322,9 @@ test("df-follow-through workflow validates trusted refs before privileged tokens
   assert.match(workflow, /GITHUB_REPOSITORY/);
   assert.match(workflow, /GITHUB_REF_NAME.*main/);
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
+  assert.match(workflow, /permission-contents:\s+write/);
+  assert.match(workflow, /permission-issues:\s+write/);
+  assert.match(workflow, /permission-pull-requests:\s+write/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.doesNotMatch(workflow, /github\.ref_name|DARK_FACTORY_CONTROL_REF/);
 });
@@ -366,6 +371,9 @@ test("df-work workflow uses the app token for control-dispatched workers", async
 
   assert.match(workflow, /if:\s*github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /DARK_FACTORY_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}/);
+  assert.match(workflow, /permission-contents:\s+write/);
+  assert.match(workflow, /permission-issues:\s+write/);
+  assert.match(workflow, /permission-pull-requests:\s+write/);
   assert.doesNotMatch(workflow, /steps\.app-token\.outputs\.token \|\| github\.token/);
   assert.match(workflow, /DF_TARGET_REPO: \$\{\{ inputs\.repo \}\}/);
   assert.match(workflow, /DF_TARGET_ISSUE_NUMBER: \$\{\{ inputs\.issue_number \}\}/);
@@ -410,6 +418,8 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /GITHUB_REPOSITORY/);
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /permission-actions:\s+write/);
+  assert.match(workflow, /permission-issues:\s+read/);
 });
 
 test("df-orchestrate script skips parked repositories and dispatches via workflow_dispatch", async () => {

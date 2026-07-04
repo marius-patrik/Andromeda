@@ -75,6 +75,10 @@ jobs:
           app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: marius-patrik
+          permission-actions: read
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
 
       - name: Run follow-through
         env:

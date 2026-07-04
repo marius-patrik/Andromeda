@@ -108,6 +108,9 @@ jobs:
           app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: marius-patrik
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
 
       - name: Run planner
         env:

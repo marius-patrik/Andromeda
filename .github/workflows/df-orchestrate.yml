@@ -45,6 +45,9 @@ jobs:
           app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: marius-patrik
+          permission-actions: write
+          permission-contents: read
+          permission-issues: read
 
       - name: Run orchestrator
         env:
