@@ -248,7 +248,13 @@ function resolveAgentosDataRepoRoot(): string | null {
 
     const agentosRoot = process.env.AGENTS_ROOT?.trim() ?? resolve(dirname(dataReposFile), "..");
     const dataRepo = parsed.find((item) => {
-      return isRecord(item) && (item.id === "workspace-darkfactory" || item.repo === "marius-patrik/data-agentos");
+      return (
+        isRecord(item) &&
+        (item.id === "workspace-darkfactory" ||
+          item.id === "darkfactory-workspace" ||
+          item.repo === "marius-patrik/data-agentos" ||
+          item.repo === "marius-patrik/agentos-data")
+      );
     });
     if (!isRecord(dataRepo) || typeof dataRepo.path !== "string") {
       return null;
