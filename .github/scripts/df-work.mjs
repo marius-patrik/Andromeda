@@ -165,9 +165,18 @@ async function main() {
     runGit(["push", "origin", `HEAD:refs/heads/${branch}`], worktree);
     pullRequest = await createPullRequest(TARGET_REPO, workBaseBranch, branch, issue, summary);
     ledger.pull_request = pullRequest.html_url;
-    const automerge = mergePolicy.useAutomerge
-      ? await enableAutoMerge(pullRequest.node_id)
-      : { enabled: false, reason: "Direct green-PR sweep will merge after checks because branch protection is not configured." };
+
+    let automerge;
+    try {
+      automerge = mergePolicy.useAutomerge
+        ? await enableAutoMerge(pullRequest.node_id)
+        : { enabled: false, reason: "Direct green-PR sweep will merge after checks because branch protection is not configured." };
+    } catch (automergeError) {
+      automerge = {
+        enabled: false,
+        reason: sanitize(automergeError.message || String(automergeError), TOKEN)
+      };
+    }
 
     await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:done"], ["df:ready", "df:running", "df:blocked"]);
     await createIssueComment(
@@ -186,30 +195,36 @@ async function main() {
     ledger.status = "success";
     ledger.actions.push({ action: "open-pr", url: pullRequest.html_url, automerge });
   } catch (error) {
-    if (pullRequest) {
-      ledger.status = "success";
-      ledger.pull_request = pullRequest.html_url;
+    if (pullRequest && ledger.status === "success") {
       ledger.error = sanitize(error.stack || error.message || String(error), TOKEN);
       ledger.actions.push({ action: "post-pr-warning", url: pullRequest.html_url, error: ledger.error });
       console.warn(`DarkFactory post-PR warning for ${pullRequest.html_url}: ${ledger.error}`);
       return;
     }
+
     ledger.status = "blocked";
     ledger.error = sanitize(error.stack || error.message || String(error), TOKEN);
-    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
-    await createIssueComment(
-      TARGET_REPO,
-      TARGET_ISSUE_NUMBER,
-      [
-        "DarkFactory worker blocked.",
-        "",
-        "Blocker:",
-        "",
-        "```text",
-        truncate(ledger.error, 6000),
-        "```"
-      ].join("\n")
-    );
+    if (pullRequest) {
+      ledger.pull_request = pullRequest.html_url;
+    }
+    try {
+      await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
+      await createIssueComment(
+        TARGET_REPO,
+        TARGET_ISSUE_NUMBER,
+        [
+          "DarkFactory worker blocked.",
+          "",
+          "Blocker:",
+          "",
+          "```text",
+          truncate(ledger.error, 6000),
+          "```"
+        ].join("\n")
+      );
+    } catch (updateError) {
+      console.warn(`DarkFactory failed to mark issue blocked: ${sanitize(updateError.stack || updateError.message || String(updateError), TOKEN)}`);
+    }
     throw error;
   } finally {
     const cleanup = await cleanupTempRoot(tempRoot, (warning) => console.warn(sanitize(warning, TOKEN)));

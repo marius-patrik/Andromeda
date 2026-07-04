@@ -97,7 +97,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: marius-patrik/darkfactory-agent
-          ref: ${{ github.event_name == 'push' && 'main' || github.sha }}
+          ref: ${{ github.repository == 'marius-patrik/darkfactory-agent' && github.event_name != 'push' && github.sha || 'main' }}
           path: darkfactory-control
           persist-credentials: false
 

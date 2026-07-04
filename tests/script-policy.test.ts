@@ -285,7 +285,7 @@ test("df-plan workflow reacts safely to PRD edits on main", async () => {
   assert.match(workflow, /GITHUB_REF_NAME.*main/);
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
   assert.match(workflow, /path:\s+darkfactory-control/);
-  assert.match(workflow, /ref:\s+\$\{\{.*github\.event_name == 'push'.*'main'.*github\.sha.*\}\}/);
+  assert.match(workflow, /ref:\s+\$\{\{.*github\.repository == 'marius-patrik\/darkfactory-agent'.*github\.event_name != 'push'.*github\.sha.*'main'.*\}\}/);
   assert.doesNotMatch(workflow, /steps\.control-ref\.outputs\.sha|Resolve canonical control ref/);
   assert.match(workflow, /Validate manual planning target ref/);
   assert.match(workflow, /Validate manual planning target repository/);
