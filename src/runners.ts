@@ -59,8 +59,13 @@ export interface GitHubRunnerClient {
 }
 
 export interface CommandRunner {
-  exec(file: string, args: string[], options?: { cwd?: string }): Promise<{ stdout: string; stderr: string }>;
+  exec(file: string, args: string[], options?: CommandRunnerExecOptions): Promise<{ stdout: string; stderr: string }>;
   spawnDetached(file: string, args: string[], options?: { cwd?: string }): { pid: number };
+}
+
+export interface CommandRunnerExecOptions {
+  cwd?: string;
+  redactions?: string[];
 }
 
 export interface Downloader {
@@ -138,7 +143,8 @@ export class RunnerManager {
     const runnerName = runnerNameFor(repository);
     const url = repositoryUrl(repository);
 
-    await this.commands.exec(
+    await execWithRedaction(
+      this.commands,
       "cmd.exe",
       [
         "/d",
@@ -157,7 +163,7 @@ export class RunnerManager {
         "_work",
         "--replace"
       ],
-      { cwd: directory }
+      { cwd: directory, redactions: [token.token] }
     );
 
     const record: RunnerRecord = {
@@ -254,10 +260,11 @@ export class RunnerManager {
 
     if (existsSync(join(record.directory, "config.cmd"))) {
       const token = await this.github.createRemovalToken(repository);
-      await this.commands.exec(
+      await execWithRedaction(
+        this.commands,
         "cmd.exe",
         ["/d", "/c", ".\\config.cmd", "remove", "--unattended", "--token", token.token],
-        { cwd: record.directory }
+        { cwd: record.directory, redactions: [token.token] }
       );
     }
 
@@ -392,6 +399,17 @@ export function stateKey(repository: RepositoryRef): string {
   return `${repository.owner}/${repository.repo}`.toLowerCase();
 }
 
+export function redactSecrets(value: string, secrets: readonly string[] = []): string {
+  return secrets.reduce((redacted, secret) => {
+    if (!secret) return redacted;
+    return redacted.split(secret).join("***");
+  }, value);
+}
+
+export function commandForLog(file: string, args: readonly string[], secrets: readonly string[] = []): string {
+  return redactSecrets([file, ...args].join(" "), secrets);
+}
+
 export function mapRunnerListResponse(data: unknown): GitHubRunner[] {
   if (!isRecord(data) || !Array.isArray(data.runners)) {
     throw new Error("GitHub returned an invalid runners list response");
@@ -483,6 +501,19 @@ async function stopRunnerProcess(pid: number | undefined, commands: CommandRunne
   await commands.exec("taskkill.exe", ["/PID", String(pid), "/T", "/F"]);
 }
 
+async function execWithRedaction(
+  commands: CommandRunner,
+  file: string,
+  args: string[],
+  options: CommandRunnerExecOptions
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await commands.exec(file, args, options);
+  } catch (error) {
+    throw redactThrownError(error, options.redactions ?? []);
+  }
+}
+
 function isProcessRunning(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -519,6 +550,7 @@ function parseTokenResponse(data: unknown): RegistrationToken {
 
 const defaultCommandRunner: CommandRunner = {
   async exec(file, args, options) {
+    const redactions = options?.redactions ?? [];
     try {
       const result = await execFileAsync(file, args, {
         cwd: options?.cwd,
@@ -527,19 +559,20 @@ const defaultCommandRunner: CommandRunner = {
       });
 
       return {
-        stdout: result.stdout,
-        stderr: result.stderr
+        stdout: redactSecrets(result.stdout, redactions),
+        stderr: redactSecrets(result.stderr, redactions)
       };
     } catch (error) {
       if (isRecord(error)) {
         const code = typeof error.code === "number" || typeof error.code === "string" ? ` exit ${error.code}` : "";
         const stderr = typeof error.stderr === "string" ? error.stderr.trim() : "";
         const stdout = typeof error.stdout === "string" ? error.stdout.trim() : "";
-        const detail = stderr || stdout || "child process failed";
-        throw new Error(`${file} failed${code}: ${detail}`);
+        const message = typeof error.message === "string" ? error.message.trim() : "";
+        const detail = redactSecrets(stderr || stdout || message || "child process failed", redactions);
+        throw new Error(`${commandForLog(file, args, redactions)} failed${code}: ${detail}`);
       }
 
-      throw error;
+      throw redactThrownError(error, redactions);
     }
   },
   spawnDetached(file, args, options) {
@@ -573,4 +606,13 @@ const defaultDownloader: Downloader = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function redactThrownError(error: unknown, secrets: readonly string[]): Error {
+  if (error instanceof Error) {
+    const message = error.stack || error.message || String(error);
+    return new Error(redactSecrets(message, secrets));
+  }
+
+  return new Error(redactSecrets(String(error), secrets));
 }
