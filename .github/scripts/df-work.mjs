@@ -192,9 +192,9 @@ async function getIssue(repository, issueNumber) {
 async function preflightMergePolicy(repository, baseBranch, repo) {
   const protection = await getBranchProtection(repository, baseBranch);
   const autoMergeSupported = repo.allow_auto_merge === true;
-  if (protection.protected && !autoMergeSupported) {
+  if (!autoMergeSupported) {
     throw new Error(
-      `${repoName(repository)} requires branch-protection automerge on ${baseBranch}, but repository auto-merge is disabled.`
+      `${repoName(repository)} repository auto-merge is disabled. Enable "Allow auto-merge" in the repository settings before DarkFactory can run a worker.`
     );
   }
   if (protection.protected) {
@@ -207,9 +207,7 @@ async function preflightMergePolicy(repository, baseBranch, repo) {
   return {
     useAutomerge: false,
     autoMergeSupported,
-    summary: autoMergeSupported
-      ? `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly`
-      : `repository auto-merge is disabled, but no branch protection on \`${baseBranch}\` requires it; green-PR sweep will squash-merge directly`
+    summary: `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly`
   };
 }
 
