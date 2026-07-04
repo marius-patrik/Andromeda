@@ -82,7 +82,8 @@ jobs:
       ${{
         github.event_name == 'pull_request' &&
         github.event.pull_request.merged == true &&
-        github.event.pull_request.base.ref == 'dev'
+        github.event.pull_request.base.ref == 'dev' &&
+        github.event.pull_request.head.repo.full_name == github.repository
       }}
     permissions:
       contents: read
@@ -107,9 +108,17 @@ jobs:
           path: darkfactory-control
           persist-credentials: false
 
+      - name: Mint mp-agents installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
+          private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
+          owner: marius-patrik
+
       - name: Run dev merge closure
         env:
-          DARK_FACTORY_TOKEN: ${{ github.token }}
+          DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
           DF_CONTROL_REPO: ${{ github.repository }}
           DF_FOLLOW_THROUGH_MODE: dev-merge
           DF_TRIGGER: ${{ github.event_name }}
