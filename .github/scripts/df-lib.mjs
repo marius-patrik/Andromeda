@@ -174,7 +174,7 @@ export async function listIssues(gh, repository, state = "all") {
   return issues;
 }
 
-export function parsePrdItems(markdown) {
+export function parsePrdItems(markdown, sourcePath = "PRD.md") {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const items = [];
   let section = "";
@@ -197,11 +197,13 @@ export function parsePrdItems(markdown) {
     const acceptance = acceptanceMatch ? acceptanceMatch[1].trim() : "";
     const stableId = name.match(/^(M\d+|L\d+)\b/i)?.[1]?.toLowerCase() || slug(name);
     const priority = /^M[1-3]\b/i.test(name) || /^L[0-4]\b/i.test(name) ? "P1" : "P2";
-    const marker = `df-prd:${slug(`${section}-${stableId}`)}`;
+    const markerPrefix = sourcePath === "PRD.md" ? "" : `${sourcePath}-`;
+    const marker = `df-prd:${slug(`${markerPrefix}${section}-${stableId}`)}`;
 
     items.push({
       marker,
       slug: marker.slice("df-prd:".length),
+      sourcePath,
       section,
       name,
       title: prdIssueTitle(name),
@@ -227,7 +229,7 @@ export function prdIssueBody(item, blockedBy = []) {
     `<!-- ${item.marker} -->`,
     "## Source",
     "",
-    `PRD.md > ${item.section} > ${item.name}`,
+    `${item.sourcePath || "PRD.md"} > ${item.section} > ${item.name}`,
     "",
     "## PRD Item",
     "",
@@ -253,7 +255,7 @@ export function driftIssueBody(targetRepoName, driftItems) {
     "",
     `Target repository: \`${targetRepoName}\``,
     "",
-    "DarkFactory found backlog or code state that no longer matches the root PRD.",
+    "DarkFactory found backlog or code state that no longer matches the tracked PRD files.",
     "",
     "## Findings",
     "",

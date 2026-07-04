@@ -34,6 +34,15 @@ test("parsePrdItems creates stable df-prd markers from PRD milestones and loops"
   assert.equal(items[1].acceptance, "drift report issue when code contradicts PRD.");
 });
 
+test("parsePrdItems includes nested PRD paths in stable markers", () => {
+  const [rootItem] = parsePrdItems("## Milestones\n\n- **M2 — Planning**: Reconcile.");
+  const [packageItem] = parsePrdItems("## Milestones\n\n- **M2 — Planning**: Reconcile.", "packages/example/PRD.md");
+
+  assert.equal(rootItem.marker, "df-prd:milestones-m2");
+  assert.equal(packageItem.marker, "df-prd:packages-example-prd-md-milestones-m2");
+  assert.equal(packageItem.sourcePath, "packages/example/PRD.md");
+});
+
 test("task class labels map to Codex reasoning effort", () => {
   assert.deepEqual(taskClassFromLabels([{ name: "df:class:mechanical" }]), {
     taskClass: "mechanical",
@@ -117,6 +126,24 @@ test("df-plan reopens PRD-tracked issues when the PRD item still exists", async 
   assert.match(source, /action: "keep-closed"/);
   assert.match(source, /action: "reopen-prd-issue"/);
   assert.match(source, /state: "open"/);
+  assert.match(source, /listPrdPaths/);
+  assert.match(source, /tracked `PRD\.md` file/);
+});
+
+test("df-plan workflow avoids push-triggered write-token execution", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-plan.yml", import.meta.url), "utf8");
+
+  assert.doesNotMatch(workflow, /^\s+push:\s*$/m);
+  assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
+  assert.match(workflow, /^\s+schedule:\s*$/m);
+});
+
+test("df-work records auto-merge support during merge-policy preflight", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-work.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /const autoMergeSupported = repo\.allow_auto_merge === true/);
+  assert.match(source, /autoMergeSupported/);
+  assert.match(source, /repository auto-merge is disabled/);
 });
 
 test("df-sweep waits before treating empty check rollups as no-checks-configured", async () => {

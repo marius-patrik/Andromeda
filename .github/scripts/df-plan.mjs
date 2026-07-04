@@ -48,11 +48,12 @@ async function reconcileTargetRepository() {
 
   const repo = await getRepository(gh, TARGET_REPO);
   const sourceRef = PLAN_ALL ? repo.default_branch : TARGET_REF || repo.default_branch;
-  const prd = await getOptionalFileContent(gh, TARGET_REPO, "PRD.md", sourceRef);
+  const prdSources = await getPrdSources(TARGET_REPO, sourceRef);
   const ledger = {
     trigger: TRIGGER,
     default_branch: repo.default_branch,
     source_ref: sourceRef,
+    prd_files: prdSources.map((source) => source.path),
     actions: [],
     token_usage: {
       codex_calls: 0,
@@ -62,14 +63,14 @@ async function reconcileTargetRepository() {
     }
   };
 
-  if (!prd) {
-    const issue = await upsertDriftIssue(TARGET_REPO, [`Root \`PRD.md\` is missing on \`${repo.default_branch}\`.`]);
+  if (prdSources.length === 0) {
+    const issue = await upsertDriftIssue(TARGET_REPO, [`No \`PRD.md\` files were found on \`${sourceRef}\`.`]);
     ledger.actions.push({ action: "drift-report", reason: "missing-prd", issue });
     await writeLedger(ledger);
     return;
   }
 
-  const items = parsePrdItems(prd);
+  const items = prdSources.flatMap((source) => parsePrdItems(source.content, source.path));
   const issues = await listIssues(gh, TARGET_REPO, "all");
   const byMarker = new Map();
   const driftIssues = [];
@@ -136,7 +137,7 @@ async function reconcileTargetRepository() {
   for (const issue of staleMarkedIssues) {
     await setIssueLabels(TARGET_REPO, issue.number, []);
     await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}/comments`, {
-      body: "DarkFactory L4 planning closed this issue because its `df-prd:` marker is no longer present in the root PRD."
+      body: "DarkFactory L4 planning closed this issue because its `df-prd:` marker is no longer present in any tracked `PRD.md` file."
     });
     await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${issue.number}`, { state: "closed" });
     ledger.actions.push({ action: "close-stale-prd-issue", issue: issueRef(issue) });
@@ -158,6 +159,38 @@ async function reconcileTargetRepository() {
 
   await writeLedger(ledger);
   console.log(`DarkFactory planning reconciled ${items.length} PRD items for ${repoName(TARGET_REPO)}.`);
+}
+
+async function getPrdSources(repository, ref) {
+  const paths = await listPrdPaths(repository, ref);
+  const sources = [];
+  for (const filePath of paths) {
+    const content = await getOptionalFileContent(gh, repository, filePath, ref);
+    if (content) sources.push({ path: filePath, content });
+  }
+  return sources;
+}
+
+async function listPrdPaths(repository, ref) {
+  try {
+    const tree = await gh.request(
+      "GET",
+      `/repos/${repoName(repository)}/git/trees/${encodeURIComponent(ref)}?recursive=1`
+    );
+    const paths = (tree.tree || [])
+      .filter((entry) => entry.type === "blob" && (entry.path === "PRD.md" || entry.path.endsWith("/PRD.md")))
+      .map((entry) => entry.path)
+      .sort((a, b) => {
+        if (a === "PRD.md") return -1;
+        if (b === "PRD.md") return 1;
+        return a.localeCompare(b);
+      });
+    return paths;
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    const root = await getOptionalFileContent(gh, repository, "PRD.md", ref);
+    return root ? ["PRD.md"] : [];
+  }
 }
 
 async function targetRepositories() {
