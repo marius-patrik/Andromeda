@@ -21,7 +21,7 @@ where they identify an existing repo, env var, or historical concept.
 - Keep CLI-specific metadata under `.agents/clis`.
 - Keep user-installed skills and plugins under `.agents/skills` and `.agents/plugins`.
 - Keep harness packages under `os/agents-harness` and launch them with shared state.
-- Configure git-backed data repositories such as `agentos-data`; workspace packages such as `darkfactory-workspace` can point at those data repos.
+- Configure git-backed data repositories such as `agentos-data`; workspace packages such as `workspace-darkfactory` can point at those data repos.
 - Expose one shared state root to every CLI through `.agents/env`.
 - Maintain a shared credit store at `.agents/credits.json`.
 - Provide one adapter abstraction for Codex, Claude, Kimi, and Agy.
@@ -53,7 +53,7 @@ where they identify an existing repo, env var, or historical concept.
 - Managed checkout: a git-backed package under `<category>/<name>`. Agents, apps, harnesses, templates, data repositories, and workspace repositories are organized under explicit category folders.
 - Distro image: a releaseable container image (`agents-os`) that packages the agents CLI, Bun/Node/Python/Go runtimes, and the shared-state mount contract.
 - Global workspace: the system-wide writable working set at `os/agents-workspace`, paired with `agentos-data` as its durable data companion.
-- Per-agent workspace pattern: every agent gets a data repo (`data/<agent-name>-data`) and a workspace repo (`workspaces/<agent-name>-workspace`), mirroring the reference pair `darkfactory-data` + `darkfactory-workspace`.
+- Per-agent workspace pattern: every agent gets a data repo (`data/<agent-name>-data`) and a workspace repo (`workspaces/<agent-name>-workspace`), mirroring the reference pair `darkfactory-data` + `workspace-darkfactory`.
 - CLI metadata: per-CLI data under `.agents/clis/<name>`.
 - Skill install: files installed under `.agents/skills/<name>`.
 - Plugin install: files installed under `.agents/plugins/<name>`.
@@ -86,12 +86,13 @@ where they identify an existing repo, env var, or historical concept.
     agents-manager/
     agents-harness/
     agents-workspace/
+    agents-plugin/
     llm-gateway/
     inference-engine/
   data/
     data-agentos/
   agents/
-    darkfactory-agent/
+    agent-darkfactory/
     life-support/
     skyblock-agent/
   apps/
@@ -100,10 +101,9 @@ where they identify an existing repo, env var, or historical concept.
   templates/
     darkfactory-templates/
   workspaces/
-    darkfactory-workspace/
+    workspace-darkfactory/
     # future per-agent workspaces follow workspaces/<agent-name>-workspace
   plugins/
-    plugin-rommie/
     dream/
 ```
 
@@ -175,7 +175,7 @@ agents-harness shape rather than the legacy Andromeda command path:
 ```json
 {
   "id": "agentos-data",
-  "repo": "marius-patrik/agentos-data",
+  "repo": "marius-patrik/data-agentos",
   "path": "data/data-agentos",
   "branch": "main",
   "env": "AGENTOS_DATA_ROOT"

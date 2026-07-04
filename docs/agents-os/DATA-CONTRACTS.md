@@ -54,7 +54,7 @@ The owner-machine MVP maps host paths into the container as follows:
 | `<root>/data/data-agentos` | `/agents/data/agentos-data` | read-write | agentos-data |
 | `<root>/data/darkfactory-data` or registered equivalent | `/agents/data/darkfactory-data` | read-write | darkfactory-data |
 | `<root>/os/agents-workspace` | `/workspace/agents` | read-write | global workspace |
-| `<root>/workspaces/darkfactory-workspace` | `/workspace/darkfactory` | read-write | DarkFactory workspace |
+| `<root>/workspaces/workspace-darkfactory` | `/workspace/darkfactory` | read-write | DarkFactory workspace |
 | `<root>/agents/<agent>` | `/workspace/agents/<agent>/repo` | read-write when enabled | per-agent code checkout |
 | `<root>/workspaces/<agent>-workspace` | `/workspace/agents/<agent>/workspace` | read-write when enabled | per-agent workspace |
 | `<root>/data/<agent>-data` | `/agents/data/<agent>-data` | read-write when enabled | per-agent data repo |
@@ -71,7 +71,7 @@ only the container paths from environment variables.
 ```json
 {
   "id": "agentos-data",
-  "repo": "marius-patrik/agentos-data",
+  "repo": "marius-patrik/data-agentos",
   "path": "data/data-agentos",
   "branch": "main",
   "env": "AGENTOS_DATA_ROOT"
@@ -112,7 +112,7 @@ Workspaces are writable checkouts or working sets, distinct from durable data.
 
 #13 defines a global system workspace:
 
-- Repository: `agents-workspace`
+- Repository: `workspace-agents`
 - Mount point in agents-mono: `os/agents-workspace`
 - Container path: `/workspace/agents`
 - Env: `AGENTS_WORKSPACE=/workspace/agents`
@@ -122,9 +122,9 @@ orchestrator. It pairs with `agentos-data` as its durable data companion.
 
 ### DarkFactory Workspace
 
-`darkfactory-workspace` is the bot working set:
+`workspace-darkfactory` is the bot working set:
 
-- Host path: `workspaces/darkfactory-workspace`
+- Host path: `workspaces/workspace-darkfactory`
 - Container path: `/workspace/darkfactory`
 - Env: `DARK_FACTORY_WORKSPACE_ROOT=/workspace/darkfactory`
 - Data companion: `darkfactory-data`
@@ -161,7 +161,7 @@ field:
 ```json
 {
   "schemaVersion": 1,
-  "id": "darkfactory-workspace",
+  "id": "workspace-darkfactory",
   "kind": "workspace",
   "dataRepo": {
     "id": "darkfactory-data",
@@ -208,7 +208,7 @@ MVP environments:
 | `host` | Native host CLI state and package management. |
 | `agents-os` | Default full-system container environment. |
 | `global-workspace` | System-level mono orchestrator work. |
-| `darkfactory-workspace` | DarkFactory work execution. |
+| `workspace-darkfactory` | DarkFactory work execution. |
 | `<agent-name>` | Future per-agent execution and workspace scope. |
 
 The environment export inside the container must be deterministic. The minimum
@@ -308,7 +308,7 @@ can prove:
 - `AGENTS_HOME`, `AGENTS_DATA`, and `AGENTS_WORKSPACE` are present in every
   container profile.
 - agentos-data and darkfactory-data mount to their specified paths.
-- `darkfactory-workspace`, `os/agents-workspace`, and per-agent workspaces use
+- `workspace-darkfactory`, `os/agents-workspace`, and per-agent workspaces use
   the documented topology.
 - `agents doctor` validates mounted shared state from inside the container.
 - llm-gateway reads `AGENTS_CREDITS` through the mount.

@@ -67,14 +67,14 @@ agents doctor
 - `os/agents-workspace` is the global system workspace submodule, paired with `agentos-data`.
 - `os/llm-gateway` is a submodule containing the OpenAI-format LLM gateway, model registry routing, fallback, switchers, quota, OAuth seams, and tests.
 - `os/inference-engine` is a submodule containing the Python agent loop, Go runtime services, engine work, deploy assets, and inference architecture.
-- `plugins/plugin-rommie` is the Rommie Codex plugin submodule.
+- `os/agents-plugin` is the Rommie Codex plugin submodule.
 - `plugins/dream` is the Dream plugin submodule.
-- `agents/darkfactory-agent`, `agents/life-support`, and `agents/skyblock-agent` are managed agent submodules.
+- `agents/agent-darkfactory`, `agents/life-support`, and `agents/skyblock-agent` are managed agent submodules.
 - `apps/singularity` contains the managed Singularity app.
 - `apps/fabrica` contains the managed Fabrica app workspace.
 - `templates/darkfactory-templates` contains the Bun templates monorepo and nested template submodules.
 - `data/data-agentos` contains the private AgentOS managed data repository and migrated non-code material.
-- `workspaces/darkfactory-workspace` contains the DarkFactory workspace package, paired with `darkfactory-data`.
+- `workspaces/workspace-darkfactory` contains the DarkFactory workspace package, paired with `darkfactory-data`.
 - `os/agents-workspace` contains the global system workspace package, paired with `agentos-data`.
 - Future agents follow the per-agent pattern: `data/<agent-name>-data` + `workspaces/<agent-name>-workspace`.
 

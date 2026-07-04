@@ -30,7 +30,7 @@ async function main() {
 
   const tmp = await mkdtemp(path.join(tmpdir(), "agents-os-smoke-"));
   const agentsDir = path.join(tmp, ".agents");
-  const dataDir = path.join(tmp, "data-agentos");
+  const dataDir = path.join(tmp, "agentos-data");
 
   try {
     await mkdir(agentsDir, { recursive: true });

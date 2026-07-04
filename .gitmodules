@@ -10,9 +10,9 @@
 	path = agents/skyblock-agent
 	url = https://github.com/marius-patrik/skyblock-agent.git
 	branch = main
-[submodule "agents/darkfactory-agent"]
-	path = agents/darkfactory-agent
-	url = https://github.com/marius-patrik/darkfactory-agent.git
+[submodule "agents/agent-darkfactory"]
+	path = agents/agent-darkfactory
+	url = https://github.com/marius-patrik/agent-darkfactory.git
 	branch = main
 [submodule "templates/darkfactory-templates"]
 	path = templates/darkfactory-templates
@@ -24,15 +24,15 @@
 	branch = main
 [submodule "data/data-agentos"]
 	path = data/data-agentos
-	url = https://github.com/marius-patrik/agentos-data.git
+	url = https://github.com/marius-patrik/data-agentos.git
 	branch = main
 [submodule "apps/fabrica"]
 	path = apps/fabrica
 	url = https://github.com/marius-patrik/Fabrica.git
 	branch = dev
-[submodule "workspaces/darkfactory-workspace"]
-	path = workspaces/darkfactory-workspace
-	url = https://github.com/marius-patrik/darkfactory-workspace.git
+[submodule "workspaces/workspace-darkfactory"]
+	path = workspaces/workspace-darkfactory
+	url = https://github.com/marius-patrik/workspace-darkfactory.git
 	branch = main
 
 [submodule "os/agents-core"]
@@ -55,13 +55,13 @@
 	path = plugins/dream
 	url = https://github.com/marius-patrik/dream.git
 	branch = dev
-[submodule "plugins/plugin-rommie"]
-	path = plugins/plugin-rommie
-	url = https://github.com/marius-patrik/plugin-rommie.git
+[submodule "os/agents-plugin"]
+	path = os/agents-plugin
+	url = https://github.com/marius-patrik/agents-plugin.git
 	branch = main
 
 
 [submodule "os/agents-workspace"]
 	path = os/agents-workspace
-	url = https://github.com/marius-patrik/agents-workspace.git
+	url = https://github.com/marius-patrik/workspace-agents.git
 	branch = main

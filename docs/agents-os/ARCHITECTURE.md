@@ -36,7 +36,7 @@ The container runs one integrated system, not separate products:
   environment materialization, and the TUI.
 - `os/agents-harness` is the orchestration engine. It is the long-term home for
   workers, streams, scheduling, memory, and runtime supervision.
-- `agents/darkfactory-agent` is the GitHub control-plane adapter. It maps issues,
+- `agents/agent-darkfactory` is the GitHub control-plane adapter. It maps issues,
   PRs, labels, gates, and releases into harness work. It must remain thin and
   must not become a second orchestration brain.
 - `os/inference-engine` is the execution substrate for agent loops and runtime
@@ -85,7 +85,7 @@ supports package kinds including `agent`, `app`, `data`, `package`,
   build provenance, and compatible manager version.
 - Environments are named package sets with scoped config and secrets. MVP
   environments are `host`, `agents-os`, `global-workspace`,
-  `darkfactory-workspace`, and future per-agent workspaces.
+  `workspace-darkfactory`, and future per-agent workspaces.
 - Each environment resolves to a deterministic mount set, env set, package set,
   and lifecycle plan.
 
@@ -151,7 +151,7 @@ The container starts a small supervisor that can run these services:
 | harness | `os/agents-harness` | orchestration, workers, scheduling, streams | harness health endpoint or CLI doctor |
 | inference-engine | `os/inference-engine` | execution substrate | profile health command and declared port readiness |
 | llm-gateway | `os/llm-gateway` | model routing, provider fallback, quota | HTTP health endpoint plus shared credit-store visibility |
-| darkfactory-adapter | `agents/darkfactory-agent` | GitHub issue/PR control plane | loop status and data repo access |
+| darkfactory-adapter | `agents/agent-darkfactory` | GitHub issue/PR control plane | loop status and data repo access |
 | plugin services | `plugins/*` | optional capabilities | package-declared health check |
 
 The MVP may run these under one container supervisor. The contract must not
