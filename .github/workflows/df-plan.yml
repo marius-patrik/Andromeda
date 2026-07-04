@@ -61,11 +61,10 @@ jobs:
 
       - name: Resolve canonical control ref
         id: control-ref
-        if: github.event_name != 'push'
         shell: node {0}
         run: |
           // Pin to an immutable SHA on marius-patrik/darkfactory-agent main so
-          // scheduled/manual runs cannot execute unreviewed control code.
+          // every execution path can verify it is running canonical control code.
           (async () => {
             const res = await fetch('https://api.github.com/repos/marius-patrik/darkfactory-agent/commits/main');
             if (!res.ok) throw new Error(`Failed to resolve canonical control ref: ${res.status}`);
@@ -109,6 +108,32 @@ jobs:
           ref: ${{ github.sha }}
           path: darkfactory-control
           persist-credentials: false
+
+      - name: Validate local scripts match canonical control SHA
+        if: github.event_name == 'push'
+        shell: node {0}
+        run: |
+          // PRD-edit triggers use the locally checked-in scripts, but only if
+          // they match the canonical pinned SHA. This stops a compromised push
+          // from running arbitrary planning code with the repository token.
+          (async () => {
+            const sha = '${{ steps.control-ref.outputs.sha }}';
+            const controlRoot = `https://raw.githubusercontent.com/marius-patrik/darkfactory-agent/${sha}`;
+            const localRoot = 'darkfactory-control';
+            const files = ['.github/scripts/df-lib.mjs', '.github/scripts/df-plan.mjs'];
+            const crypto = await import('node:crypto');
+            const fs = await import('node:fs');
+            for (const file of files) {
+              const controlRes = await fetch(`${controlRoot}/${file}`);
+              if (!controlRes.ok) throw new Error(`Could not fetch canonical ${file}`);
+              const controlText = await controlRes.text();
+              const localText = fs.readFileSync(`${localRoot}/${file}`, 'utf8');
+              const hash = (text) => crypto.createHash('sha256').update(text).digest('hex');
+              if (hash(controlText) !== hash(localText)) {
+                throw new Error(`Local ${file} does not match canonical control SHA ${sha}`);
+              }
+            }
+          })();
 
       # The cross-repo planning sweep runs from the control repository and needs
       # an installation token. PRD-edit triggers run inside the target repository
