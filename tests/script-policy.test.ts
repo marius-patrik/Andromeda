@@ -284,6 +284,17 @@ test("df-plan explicitly dispatches workers for newly ready PRD issues", async (
   assert.match(source, /repos\/\$\{repoName\(CONTROL_REPO\)\}\/actions\/workflows\/df-work\.yml\/dispatches/);
 });
 
+test("df-plan preserves PRD sequence references across completed predecessors", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /let previousIssueNumber = null/);
+  assert.match(source, /let previousOpenIssueNumber = null/);
+  assert.match(source, /const blockedBy = previousIssueNumber \? \[previousIssueNumber\] : \[\]/);
+  assert.match(source, /if \(previousOpenIssueNumber === null\) labels\.push\("df:ready"\)/);
+  assert.match(source, /previousIssueNumber = closed\.number/);
+  assert.match(source, /previousIssueNumber = existing\.number/);
+});
+
 test("df-follow-through workflow validates trusted refs before privileged tokens", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-follow-through.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");

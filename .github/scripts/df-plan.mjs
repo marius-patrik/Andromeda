@@ -89,6 +89,7 @@ async function reconcileTargetRepository() {
   }
 
   const expectedMarkers = new Set(items.map((item) => item.marker));
+  let previousIssueNumber = null;
   let previousOpenIssueNumber = null;
 
   for (const item of items) {
@@ -102,6 +103,7 @@ async function reconcileTargetRepository() {
       }
       if (existing.state === "closed") {
         ledger.actions.push({ action: "keep-closed", marker: item.marker, issue: issueRef(existing) });
+        previousIssueNumber = existing.number;
         continue;
       }
       const closed = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, {
@@ -111,11 +113,14 @@ async function reconcileTargetRepository() {
         body: "DarkFactory L4 planning closed this issue because the PRD marks this item as completed."
       });
       ledger.actions.push({ action: "close-completed-prd-issue", marker: item.marker, issue: issueRef(closed) });
+      previousIssueNumber = closed.number;
       continue;
     }
 
-    const blockedBy = previousOpenIssueNumber ? [previousOpenIssueNumber] : [];
-    if (blockedBy.length === 0) labels.push("df:ready");
+    // Keep deterministic PRD-order references even when the predecessor is
+    // already closed, but only an unfinished predecessor blocks readiness.
+    const blockedBy = previousIssueNumber ? [previousIssueNumber] : [];
+    if (previousOpenIssueNumber === null) labels.push("df:ready");
     const body = prdIssueBody(item, blockedBy);
 
     if (!existing) {
@@ -132,6 +137,7 @@ async function reconcileTargetRepository() {
       const dispatch = await dispatchIfNewlyReady(TARGET_REPO, created.number, labelUpdate, repo.default_branch);
       ledger.actions.push({ action: "create-issue", marker: item.marker, issue: issueRef(created), labels });
       if (dispatch) ledger.actions.push(dispatch);
+      previousIssueNumber = created.number;
       previousOpenIssueNumber = created.number;
       continue;
     }
@@ -146,6 +152,7 @@ async function reconcileTargetRepository() {
       const dispatch = await dispatchIfNewlyReady(TARGET_REPO, existing.number, labelUpdate, repo.default_branch);
       ledger.actions.push({ action: "reopen-prd-issue", marker: item.marker, issue: issueRef(reopened), labels });
       if (dispatch) ledger.actions.push(dispatch);
+      previousIssueNumber = reopened.number;
       previousOpenIssueNumber = reopened.number;
       continue;
     }
@@ -174,6 +181,7 @@ async function reconcileTargetRepository() {
     ledger.actions.push({ action: "sequence-labels", marker: item.marker, issue: issueRef(existing), labels });
     const dispatch = await dispatchIfNewlyReady(TARGET_REPO, existing.number, labelUpdate, repo.default_branch);
     if (dispatch) ledger.actions.push(dispatch);
+    previousIssueNumber = existing.number;
     previousOpenIssueNumber = existing.number;
   }
 
