@@ -191,6 +191,40 @@ Built-in adapters:
 
 Credential materialization is explicit, non-destructive, and must not print secret values.
 
+## Installation and updater
+
+Supported install paths:
+
+- **Local development** — clone the repo, run `bun install` and `bun link`, then
+  verify with `agents doctor`.
+- **Source install** — this root remains developer/source-install only until
+  release-backed binaries are available. `install/install.sh` clones the repo
+  into `~/.agents-mono`, initializes the required `os/agents-manager` submodule,
+  installs dependencies, links the CLI, and smoke-tests with fast commands
+  (`agents state init` and `agents list`).
+
+Update path for source installs:
+
+```sh
+cd ~/.agents-mono
+git pull
+bun install --frozen-lockfile
+bun link
+agents list
+```
+
+Run `agents sync` before `agents doctor` when you want to initialize and
+validate all submodule packages.
+
+Release automation runs `bun run smoke:release` during the DarkFactory release
+workflow. The release smoke test performs an isolated source install into a
+temporary directory and then verifies that the linked `agents` command resolves
+to `os/agents-manager/src/cli.ts` (on symlink platforms) and that fast commands
+(`agents state init` and `agents list`) succeed.
+
+Release-backed binary installers, a Windows PowerShell installer, and an
+automatic updater are out of scope for this slice and tracked in #24.
+
 ## CI
 
 CI runs on pushes and pull requests to `main`:

@@ -4,11 +4,51 @@ agents-mono is the root aggregator workspace for the agents-mono topology. It
 exposes the `agents` CLI for managing agent packages, apps, templates, private
 workspace state, shared skills/plugins, CLI data, and a common credit store.
 
-## Usage
+## Installation
+
+### Local development
 
 ```sh
 bun install
 bun link
+agents doctor
+```
+
+### Source install (current supported path)
+
+This root is intentionally developer/source-install only until release-backed
+binaries are available. The supported install path is:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/marius-patrik/agents-mono/dev/install/install.sh | bash
+```
+
+The install script clones the repo into `~/.agents-mono`, initializes the
+required `os/agents-manager` submodule, installs dependencies, links the
+`agents` CLI, and smoke-tests with fast commands (`agents state init` and
+`agents list`). It does not initialize every git submodule, so `agents doctor`
+may report missing checkouts until you run `agents sync`.
+
+### Updating
+
+```sh
+cd ~/.agents-mono
+git pull
+bun install --frozen-lockfile
+bun link
+agents list
+```
+
+Run `agents sync` and then `agents doctor` when you want to initialize and
+validate all submodule packages.
+
+Release-backed binary installers, a Windows PowerShell installer, and an
+automatic updater are out of scope for this slice and tracked in the follow-up
+issue.
+
+## Usage
+
+```sh
 agents list
 agents state init
 agents state env
