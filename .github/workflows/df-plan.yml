@@ -61,10 +61,11 @@ jobs:
 
       - name: Resolve canonical control ref
         id: control-ref
+        if: github.event_name != 'push'
         shell: node {0}
         run: |
           // Pin to an immutable SHA on marius-patrik/darkfactory-agent main so
-          // PRD edits in managed repositories cannot execute arbitrary code.
+          // scheduled/manual runs cannot execute unreviewed control code.
           const res = await fetch('https://api.github.com/repos/marius-patrik/darkfactory-agent/commits/main');
           if (!res.ok) throw new Error(`Failed to resolve canonical control ref: ${res.status}`);
           const sha = (await res.json()).sha;
@@ -86,14 +87,24 @@ jobs:
             exit 1
           fi
 
+      # Cross-repo planning sweeps run the canonical control scripts from
+      # darkfactory-agent. PRD-edit triggers run inside the target repository and
+      # use the locally checked-in managed scripts so the repository token can
+      # reconcile its own issues without needing cross-repo checkout rights.
       - name: Checkout DarkFactory control scripts
+        if: github.event_name != 'push'
         uses: actions/checkout@v4
         with:
-          # Always run the canonical control scripts from marius-patrik/darkfactory-agent,
-          # never from a managed repository's own checkout, so a compromised managed
-          # repo cannot execute privileged planning code with the app token.
           repository: marius-patrik/darkfactory-agent
           ref: ${{ steps.control-ref.outputs.sha }}
+          path: darkfactory-control
+          persist-credentials: false
+
+      - name: Checkout local DarkFactory scripts
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
           path: darkfactory-control
           persist-credentials: false
 
