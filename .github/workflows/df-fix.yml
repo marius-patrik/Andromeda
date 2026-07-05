@@ -40,20 +40,19 @@ jobs:
             exit 1
           fi
 
-          if [[ "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
-            echo "::error::DarkFactory fix cycle can only run from refs/heads/main."
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" && "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
+            echo "::error::Scheduled DarkFactory fix cycle can only run from refs/heads/main."
             exit 1
           fi
 
-          if [[ "${GITHUB_REF_TYPE:-}" == "branch" && "${GITHUB_REF_NAME:-}" != "main" ]]; then
-            echo "::error::DarkFactory fix cycle branch mismatch."
-            exit 1
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
+            echo "::notice::Manual df-fix dispatch selected ${GITHUB_REF}; executing trusted refs/heads/main instead."
           fi
 
       - name: Checkout installed DarkFactory fix cycle
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: main
           path: darkfactory-control
           persist-credentials: false
 
