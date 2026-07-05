@@ -498,6 +498,7 @@ test("df-fix workflow validates trusted refs before privileged tokens", async ()
   assert.match(workflow, /permission-contents:\s+write/);
   assert.match(workflow, /permission-issues:\s+write/);
   assert.match(workflow, /permission-pull-requests:\s+write/);
+  assert.match(workflow, /^\s+workflows:\s+write\s*$/m);
   assert.match(workflow, /permission-actions:\s+write/);
   assert.match(workflow, /permission-workflows:\s+write/);
   assert.doesNotMatch(workflow, /CODEX_AUTH_JSON/);
