@@ -242,10 +242,16 @@ async function main() {
 }
 
 async function listOpenPullRequests(gh, repository) {
+  const pulls = [];
+  let cursor = null;
   const query = `
-    query Pulls($owner: String!, $repo: String!) {
+    query Pulls($owner: String!, $repo: String!, $cursor: String) {
       repository(owner: $owner, name: $repo) {
-        pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        pullRequests(states: OPEN, first: 50, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
           nodes {
             id
             number
@@ -287,12 +293,17 @@ async function listOpenPullRequests(gh, repository) {
         }
       }
     }`;
-  const data = await gh.graphql(query, { owner: repository.owner, repo: repository.repo });
-  return data.repository.pullRequests.nodes.map((pull) => ({
-    ...pull,
-    labels: pull.labels?.nodes || [],
-    statusCheckRollup: pull.statusCheckRollup?.contexts?.nodes || []
-  }));
+  do {
+    const data = await gh.graphql(query, { owner: repository.owner, repo: repository.repo, cursor });
+    const page = data.repository.pullRequests;
+    pulls.push(...page.nodes.map((pull) => ({
+      ...pull,
+      labels: pull.labels?.nodes || [],
+      statusCheckRollup: pull.statusCheckRollup?.contexts?.nodes || []
+    })));
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (cursor);
+  return pulls;
 }
 
 export async function fixPullRequestByRedispatch(gh, controlRepo, repository, pull, classification, requiredContexts, options = {}) {
@@ -354,7 +365,7 @@ export async function fixPullRequestByRedispatch(gh, controlRepo, repository, pu
   await updateIssueFixRound(gh, repository, issue, round);
   await resetIssueForWorker(gh, repository, issueNumber);
   await closeSupersededPullRequest(gh, repository, freshPull, round);
-  await deleteHeadBranch(gh, repository, freshPull.headRefName);
+  const branchDeletion = await deleteHeadBranch(gh, repository, freshPull.headRefName);
   await dispatchWorker(gh, controlRepo, repository, issueNumber, freshPull.baseRefName);
 
   return {
@@ -368,7 +379,9 @@ export async function fixPullRequestByRedispatch(gh, controlRepo, repository, pu
     reason: classification.reason,
     revision,
     stale_pr_closed: true,
-    head_branch_deleted: freshPull.headRefName,
+    head_branch_deleted: branchDeletion.deleted,
+    head_branch: freshPull.headRefName,
+    head_branch_delete_reason: branchDeletion.reason,
     dispatched_workflow: "df-work.yml"
   };
 }
@@ -482,7 +495,15 @@ async function closeSupersededPullRequest(gh, repository, pull, round) {
 }
 
 async function deleteHeadBranch(gh, repository, branch) {
-  await gh.request("DELETE", `/repos/${repoName(repository)}/git/refs/heads/${encodeRefPath(branch)}`);
+  try {
+    await gh.request("DELETE", `/repos/${repoName(repository)}/git/refs/heads/${encodeRefPath(branch)}`);
+    return { deleted: true, reason: "deleted" };
+  } catch (error) {
+    if (error.status === 404 || error.status === 422) {
+      return { deleted: false, reason: error.message || String(error) };
+    }
+    throw error;
+  }
 }
 
 async function dispatchWorker(gh, controlRepo, repository, issueNumber, baseRefName) {

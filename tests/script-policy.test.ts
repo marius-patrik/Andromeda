@@ -516,7 +516,11 @@ test("df-fix script is deterministic and only redispatches red worker PRs", asyn
   assert.match(source, /df-fix-revision/);
   assert.match(source, /\/actions\/workflows\/df-work\.yml\/dispatches/);
   assert.match(source, /base_ref: baseRefName \|\| ""/);
+  assert.match(source, /pageInfo/);
+  assert.match(source, /hasNextPage/);
+  assert.match(source, /while \(cursor\)/);
   assert.match(source, /deleteHeadBranch/);
+  assert.match(source, /error\.status === 404 \|\| error\.status === 422/);
   assert.match(source, /closeSupersededPullRequest/);
   assert.match(source, /const freshPull = await getPullRequestForFix/);
   assert.match(source, /checksAreGreen\(freshPull\.statusCheckRollup, requiredContexts\)/);
