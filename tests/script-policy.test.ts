@@ -30,10 +30,8 @@ const {
 
 const {
   classifyFixCandidate,
+  fixTrustFailure,
   fixPullRequestByRedispatch,
-  getMergeBranchProtectionState,
-  mergeGateTrustFailure,
-  mergeGreenPullRequest,
   parseFixRound
 } = dfFix;
 
@@ -508,7 +506,7 @@ test("df-fix workflow validates trusted refs before privileged tokens", async ()
   assert.match(workflow, /darkfactory-control\/\.github\/scripts\/df-fix\.mjs/);
 });
 
-test("df-fix script is deterministic and uses active managed repos, df-work redispatch, and fresh merge gates", async () => {
+test("df-fix script is deterministic and only redispatches red worker PRs", async () => {
   const source = await readFile(new URL("../.github/scripts/df-fix.mjs", import.meta.url), "utf8");
 
   assert.match(source, /listActiveManagedRepos\(gh, controlRepo, \{ root: CONTROL_ROOT \}\)/);
@@ -519,113 +517,14 @@ test("df-fix script is deterministic and uses active managed repos, df-work redi
   assert.match(source, /\/actions\/workflows\/df-work\.yml\/dispatches/);
   assert.match(source, /deleteHeadBranch/);
   assert.match(source, /closeSupersededPullRequest/);
-  assert.match(source, /const mergeGate = await getPullRequestMergeGate/);
-  assert.match(source, /checksAreGreen\(mergeGate\.statusCheckRollup, requiredContexts\)/);
-  assert.match(source, /sha: mergeGate\.headRefOid/);
-  assert.match(source, /merge_method: "squash"/);
+  assert.match(source, /const freshPull = await getPullRequestForFix/);
+  assert.match(source, /checksAreGreen\(freshPull\.statusCheckRollup, requiredContexts\)/);
+  assert.match(source, /reason: "checks-green"/);
   assert.doesNotMatch(source, /--admin/);
   assert.doesNotMatch(source, /danger-full-access/);
+  assert.doesNotMatch(source, /mergeGreenPullRequest|getMergeBranchProtectionState|enableAutoMerge|enablePullRequestAutoMerge/i);
+  assert.doesNotMatch(source, /merge_method|\/pulls\/\$\{[^}]+\}\/merge|action: "merge"|enable-automerge/i);
   assert.doesNotMatch(source, /\bcodex\s+exec\b|CODEX_AUTH_JSON|DF_WORKER_IMAGE|codex-home|runCodex|writeCodexAuth|docker\s+run/);
-});
-
-test("df-fix merge gate skips when fresh trust predicates fail", async () => {
-  const repository = { owner: "marius-patrik", repo: "active" };
-  const originalPull = workerPull({ number: 40, checkConclusion: "SUCCESS" });
-  const freshPull = {
-    ...originalPull,
-    isDraft: true,
-    mergeable: "MERGEABLE",
-    url: "https://github.com/marius-patrik/active/pull/40",
-    statusCheckRollup: { contexts: { nodes: originalPull.statusCheckRollup } }
-  };
-  const gh = {
-    graphql: async () => ({ repository: { pullRequest: freshPull } }),
-    request: async (method: string, pathName: string) => {
-      throw new Error(`unexpected merge-gate request: ${method} ${pathName}`);
-    }
-  };
-
-  assert.equal(mergeGateTrustFailure(originalPull, { ...originalPull, isDraft: true }, repository), "draft");
-
-  const result = await mergeGreenPullRequest(gh, repository, originalPull, ["ci"], new Set(), "token");
-  assert.equal(result.action, "skip");
-  assert.equal(result.reason, "merge-trust-failed");
-  assert.equal(result.trust_failure, "draft");
-});
-
-test("df-fix merge gate fails closed when branch protection is unreadable", async () => {
-  const repository = { owner: "marius-patrik", repo: "active" };
-  const originalPull = workerPull({ number: 41, checkConclusion: "SUCCESS" });
-  const freshPull = {
-    ...originalPull,
-    mergeable: "MERGEABLE",
-    url: "https://github.com/marius-patrik/active/pull/41",
-    statusCheckRollup: { contexts: { nodes: originalPull.statusCheckRollup } }
-  };
-  const gh = {
-    graphql: async () => ({ repository: { pullRequest: freshPull } }),
-    request: async (method: string, pathName: string) => {
-      if (method === "GET" && pathName.endsWith("/branches/dev/protection")) {
-        const error: Error & { status?: number } = new Error("Resource not accessible by integration");
-        error.status = 403;
-        throw error;
-      }
-      throw new Error(`unexpected merge request: ${method} ${pathName}`);
-    }
-  };
-
-  assert.deepEqual(
-    await getMergeBranchProtectionState(gh, repository, "dev"),
-    {
-      protected: null,
-      unreadable: true,
-      status: 403,
-      reason: "Resource not accessible by integration"
-    }
-  );
-
-  const result = await mergeGreenPullRequest(gh, repository, originalPull, ["ci"], new Set(), "token");
-  assert.equal(result.action, "skip");
-  assert.equal(result.reason, "branch-protection-unreadable");
-});
-
-test("df-fix protected branch direct-merges after automerge failure when checks are green", async () => {
-  const repository = { owner: "marius-patrik", repo: "active" };
-  const originalPull = workerPull({ number: 42, checkConclusion: "SUCCESS" });
-  const initialFreshPull = {
-    ...originalPull,
-    headRefOid: "old-head",
-    mergeable: "MERGEABLE",
-    url: "https://github.com/marius-patrik/active/pull/42",
-    statusCheckRollup: { contexts: { nodes: originalPull.statusCheckRollup } }
-  };
-  const directFreshPull = { ...initialFreshPull, headRefOid: "fresh-head" };
-  let mergeGateReads = 0;
-  const gh = {
-    graphql: async (query: string) => {
-      if (query.includes("EnableAutoMerge")) {
-        throw new Error("Pull request is in clean status");
-      }
-      mergeGateReads += 1;
-      return { repository: { pullRequest: mergeGateReads === 1 ? initialFreshPull : directFreshPull } };
-    },
-    request: async (method: string, pathName: string, body?: any) => {
-      if (method === "GET" && pathName.endsWith("/branches/dev/protection")) return {};
-      if (method === "PUT" && pathName === "/repos/marius-patrik/active/pulls/42/merge") {
-        assert.equal(body.sha, "fresh-head");
-        return { sha: "defabc" };
-      }
-      if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/42/comments") return {};
-      if (method === "PATCH" && pathName === "/repos/marius-patrik/active/issues/42") return {};
-      throw new Error(`unexpected protected-branch merge request: ${method} ${pathName}`);
-    }
-  };
-
-  const result = await mergeGreenPullRequest(gh, repository, originalPull, ["ci"], new Set(), "token");
-  assert.equal(result.action, "merge");
-  assert.equal(result.sha, "defabc");
-  assert.equal(mergeGateReads, 2);
-  assert.notEqual(result.reason, "protected-branch-automerge-failed");
 });
 
 test("df-work merge-policy preflight uses direct sweep when branch protection is absent or unreadable", async () => {
@@ -776,6 +675,11 @@ test("df-fix posts a trusted revision request, closes the red PR, deletes the br
     }
   };
 
+  assert.equal(
+    fixTrustFailure(pull, { ...pull, headRepository: { owner: { login: "other-owner" }, name: "active" } }, repository),
+    "head-repository-changed"
+  );
+
   const result = await fixPullRequestByRedispatch(
     gh,
     controlRepo,
@@ -896,7 +800,7 @@ test("df-fix round cap adds df:ask-owner and does not redispatch", async () => {
   assert.equal(calls.some((call) => call.method === "PATCH" && call.pathName === "/repos/marius-patrik/active/pulls/20"), false);
 });
 
-test("df-fix classifies all-green PRs for merge and red PRs for fixing", () => {
+test("df-fix skips all-green PRs and fixes red PRs", () => {
   const repository = { owner: "marius-patrik", repo: "active" };
   const green = classifyFixCandidate(workerPull({ number: 30, checkConclusion: "SUCCESS" }), repository, ["ci"]);
   const red = classifyFixCandidate(workerPull({ number: 31, checkConclusion: "FAILURE" }), repository, ["ci"]);
@@ -906,9 +810,9 @@ test("df-fix classifies all-green PRs for merge and red PRs for fixing", () => {
     ["ci"]
   );
 
-  assert.equal(green.action, "merge");
+  assert.equal(green.action, "skip");
+  assert.equal(green.reason, "checks-green");
   assert.equal(red.action, "fix");
-  assert.notEqual(red.action, "merge");
   assert.equal(pending.action, "skip");
   assert.equal(pending.reason, "checks-pending");
 });

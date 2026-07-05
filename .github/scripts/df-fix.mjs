@@ -9,7 +9,6 @@ import {
   createGithubClient,
   darkFactoryWorkerIssueNumber,
   ensureLabels,
-  extractClosingIssueNumbers,
   getRequiredStatusCheckContexts,
   isDarkFactoryWorkerPullRequest,
   isParkedRepo,
@@ -97,7 +96,7 @@ export function classifyFixCandidate(pull, repository, requiredContexts = [], op
 
   const statusCheckRollup = Array.isArray(pull.statusCheckRollup) ? pull.statusCheckRollup : [];
   if (checksAreGreen(statusCheckRollup, requiredContexts)) {
-    return { pr: ref, action: "merge", reason: "checks-green" };
+    return { pr: ref, action: "skip", reason: "checks-green" };
   }
 
   if (!emptyCheckRollupHasSettled(pull)) {
@@ -176,7 +175,6 @@ async function main() {
   const dataRepo = process.env.DF_DATA_REPO ?? DEFAULT_DATA_REPO;
   const trigger = process.env.DF_TRIGGER ?? "unknown";
   const maxRounds = parseMaxRounds(process.env.DF_MAX_FIX_ROUNDS);
-  const noCheckAllowlist = new Set(repoList(process.env.DF_ALLOW_NO_CHECK_REPOS || "").map((repo) => repoName(repo).toLowerCase()));
   const gh = createGithubClient(token, "darkfactory-fix");
   const ledger = {
     trigger,
@@ -209,11 +207,6 @@ async function main() {
         const requiredContexts = await getRequiredStatusCheckContexts(gh, repository, pull.baseRefName);
         const classification = classifyFixCandidate(pull, repository, requiredContexts, { maxRounds });
 
-        if (classification.action === "merge") {
-          ledger.actions.push(await mergeGreenPullRequest(gh, repository, pull, requiredContexts, noCheckAllowlist, token));
-          continue;
-        }
-
         if (classification.action === "fix") {
           ledger.actions.push(await fixPullRequestByRedispatch(gh, controlRepo, repository, pull, classification, requiredContexts, { maxRounds, token }));
           continue;
@@ -244,9 +237,8 @@ async function main() {
   }
 
   const regenerated = ledger.actions.filter((action) => action.action === "redispatch").length;
-  const merged = ledger.actions.filter((action) => action.action === "merge" || action.action === "enable-automerge").length;
   const escalated = ledger.actions.filter((action) => action.action === "escalate").length;
-  console.log(`DarkFactory fix cycle processed ${repositories.length} repos; regenerated=${regenerated} merged=${merged} escalated=${escalated}.`);
+  console.log(`DarkFactory fix cycle processed ${repositories.length} repos; regenerated=${regenerated} escalated=${escalated}.`);
 }
 
 async function listOpenPullRequests(gh, repository) {
@@ -333,8 +325,8 @@ export async function fixPullRequestByRedispatch(gh, controlRepo, repository, pu
     );
   }
 
-  const freshPull = await getPullRequestMergeGate(gh, repository, pull.number);
-  const trustFailure = mergeGateTrustFailure(pull, freshPull, repository);
+  const freshPull = await getPullRequestForFix(gh, repository, pull.number);
+  const trustFailure = fixTrustFailure(pull, freshPull, repository);
   if (trustFailure) {
     return {
       repo: repoName(repository),
@@ -572,132 +564,23 @@ async function hasIssueComment(gh, repository, issueNumber, marker) {
   return comments.some((comment) => String(comment.body || "").includes(marker));
 }
 
-export async function mergeGreenPullRequest(gh, repository, pull, requiredContexts, noCheckAllowlist, token) {
-  const ref = `${repoName(repository)}#${pull.number}`;
-  const mergeGate = await getPullRequestMergeGate(gh, repository, pull.number);
-  const trustFailure = mergeGateTrustFailure(pull, mergeGate, repository);
-  if (trustFailure) {
-    return {
-      repo: repoName(repository),
-      pr: ref,
-      url: mergeGate.url || pull.url,
-      action: "skip",
-      reason: "merge-trust-failed",
-      trust_failure: trustFailure
-    };
-  }
-
-  const hasChecks = Array.isArray(mergeGate.statusCheckRollup) && mergeGate.statusCheckRollup.length > 0;
-  if ((!hasChecks && !noCheckAllowlist.has(repoName(repository).toLowerCase())) || !checksAreGreen(mergeGate.statusCheckRollup, requiredContexts)) {
-    return {
-      repo: repoName(repository),
-      pr: ref,
-      action: "skip",
-      reason: "merge-checks-not-green",
-      checks: checksSummary(mergeGate.statusCheckRollup)
-    };
-  }
-  if (mergeGate.mergeable !== "MERGEABLE") {
-    return { repo: repoName(repository), pr: ref, action: "skip", reason: `mergeable-${mergeGate.mergeable}` };
-  }
-
-  const branchProtection = await getMergeBranchProtectionState(gh, repository, mergeGate.baseRefName);
-  if (branchProtection.unreadable) {
-    return {
-      repo: repoName(repository),
-      pr: ref,
-      url: pull.url,
-      action: "skip",
-      reason: "branch-protection-unreadable",
-      branch: mergeGate.baseRefName,
-      protection_status: branchProtection.status,
-      protection_error: sanitize(branchProtection.reason || "", token)
-    };
-  }
-
-  if (branchProtection.protected) {
-    const enabled = await enableAutoMerge(gh, mergeGate.id, token);
-    if (enabled.enabled) {
-      return {
-        repo: repoName(repository),
-        pr: ref,
-        url: pull.url,
-        action: "enable-automerge",
-        checks: checksSummary(mergeGate.statusCheckRollup)
-      };
-    }
-
-    const directMergeGate = await getPullRequestMergeGate(gh, repository, pull.number);
-    const directTrustFailure = mergeGateTrustFailure(pull, directMergeGate, repository);
-    const directHasChecks = Array.isArray(directMergeGate.statusCheckRollup) && directMergeGate.statusCheckRollup.length > 0;
-    const directGreen = checksAreGreen(directMergeGate.statusCheckRollup, requiredContexts);
-    if (!directTrustFailure && directHasChecks && directGreen && directMergeGate.mergeable === "MERGEABLE") {
-      try {
-        const merged = responseData(await gh.request("PUT", `/repos/${repoName(repository)}/pulls/${pull.number}/merge`, {
-          commit_title: directMergeGate.title,
-          merge_method: "squash",
-          sha: directMergeGate.headRefOid
-        }));
-        await closeIssuesIfDevMerge(gh, repository, directMergeGate);
-        return {
-          repo: repoName(repository),
-          pr: ref,
-          url: pull.url,
-          action: "merge",
-          sha: merged.sha,
-          base: directMergeGate.baseRefName,
-          checks: checksSummary(directMergeGate.statusCheckRollup)
-        };
-      } catch {
-        // fall through to skip with preserved auto-merge error
-      }
-    }
-
-    return {
-      repo: repoName(repository),
-      pr: ref,
-      url: pull.url,
-      action: "skip",
-      reason: "protected-branch-automerge-failed",
-      automerge_error: enabled.reason,
-      checks: checksSummary(mergeGate.statusCheckRollup)
-    };
-  }
-
-  const merged = responseData(await gh.request("PUT", `/repos/${repoName(repository)}/pulls/${pull.number}/merge`, {
-    commit_title: mergeGate.title,
-    merge_method: "squash",
-    sha: mergeGate.headRefOid
-  }));
-  await closeIssuesIfDevMerge(gh, repository, mergeGate);
-  return {
-    repo: repoName(repository),
-    pr: ref,
-    url: pull.url,
-    action: "merge",
-    sha: merged.sha,
-    base: pull.baseRefName,
-    checks: checksSummary(mergeGate.statusCheckRollup)
-  };
-}
-
-export function mergeGateTrustFailure(originalPull, mergeGate, repository) {
+export function fixTrustFailure(originalPull, freshPull, repository) {
   const expectedHeadOwner = originalPull.headRepository?.owner?.login || repository.owner;
   const expectedHeadRepo = originalPull.headRepository?.name || repository.repo;
-  const actualHeadOwner = mergeGate.headRepository?.owner?.login || "";
-  const actualHeadRepo = mergeGate.headRepository?.name || "";
+  const actualHeadOwner = freshPull.headRepository?.owner?.login || "";
+  const actualHeadRepo = freshPull.headRepository?.name || "";
 
-  if (mergeGate.isDraft) return "draft";
-  if (mergeGate.headRefName !== originalPull.headRefName) return "head-branch-changed";
+  if (freshPull.isDraft) return "draft";
+  if (freshPull.headRefName !== originalPull.headRefName) return "head-branch-changed";
   if (actualHeadOwner !== expectedHeadOwner || actualHeadRepo !== expectedHeadRepo) return "head-repository-changed";
   if (actualHeadOwner !== repository.owner || actualHeadRepo !== repository.repo) return "fork-head-repository";
-  if (!isDarkFactoryWorkerPullRequest(mergeGate, repository)) return "not-worker-pr";
+  if (!isDarkFactoryWorkerPullRequest(freshPull, repository)) return "not-worker-pr";
   return "";
 }
 
-async function getPullRequestMergeGate(gh, repository, pullNumber) {
+async function getPullRequestForFix(gh, repository, pullNumber) {
   const query = `
-    query PullForMergeGate($owner: String!, $repo: String!, $number: Int!) {
+    query PullForFix($owner: String!, $repo: String!, $number: Int!) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
           id
@@ -742,57 +625,9 @@ async function getPullRequestMergeGate(gh, repository, pullNumber) {
   };
 }
 
-export async function getMergeBranchProtectionState(gh, repository, branch) {
-  try {
-    await gh.request("GET", `/repos/${repoName(repository)}/branches/${encodeURIComponent(branch)}/protection`);
-    return { protected: true, unreadable: false, status: 200 };
-  } catch (error) {
-    if (error.status === 404) return { protected: false, unreadable: false, status: 404, reason: error.message || String(error) };
-    if (error.status === 403) return { protected: null, unreadable: true, status: 403, reason: error.message || String(error) };
-    throw error;
-  }
-}
-
-async function enableAutoMerge(gh, pullRequestId, token) {
-  try {
-    await gh.graphql(
-      `mutation EnableAutoMerge($pullRequestId: ID!) {
-        enablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
-          pullRequest { url }
-        }
-      }`,
-      { pullRequestId }
-    );
-    return { enabled: true };
-  } catch (error) {
-    return { enabled: false, reason: sanitize(error.message || String(error), token) };
-  }
-}
-
-async function closeIssuesIfDevMerge(gh, repository, pull) {
-  if (pull.baseRefName !== "dev") return;
-  if (!isDarkFactoryWorkerPullRequest(pull, repository)) return;
-
-  const issueNumbers = extractClosingIssueNumbers(pull.body || "", repoName(repository));
-  for (const issueNumber of issueNumbers) {
-    await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/comments`, {
-      body: `merged to dev in ${pull.url}; releases with the next dev->main PR`
-    });
-    await gh.request("PATCH", `/repos/${repoName(repository)}/issues/${issueNumber}`, { state: "closed" });
-  }
-}
-
 function parseMaxRounds(value) {
   const parsed = Number(value || DEFAULT_MAX_ROUNDS);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_ROUNDS;
-}
-
-function repoList(value) {
-  return value
-    .split(/[\s,]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map(parseRepo);
 }
 
 function encodeRefPath(ref) {
