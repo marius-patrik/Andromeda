@@ -3,8 +3,10 @@ import { fileURLToPath } from "node:url";
 import {
   DEFAULT_DATA_REPO,
   WORK_LABELS,
+  assertEnforcementRules,
   assertAllowedRepo,
   createGithubClient,
+  enforcementContextBase,
   ensureLabels,
   findOpenWorkerPullRequestForIssue,
   getRepository,
@@ -126,10 +128,24 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
   }
 
   const repo = await getRepository(gh, repository);
-  const workBaseBranch = await resolveWorkBaseBranch(gh, repository, repo.default_branch);
+  const branchInfo = await resolveWorkBaseBranchInfo(gh, repository, repo.default_branch);
+  const workBaseBranch = branchInfo.baseRefName;
   const mergePolicy = await preflightMergePolicy(gh, repository, workBaseBranch, repo);
   if (mergePolicy.blocked) {
     await blockIssueBeforeDispatch(gh, repository, issueNumber, workBaseBranch, mergePolicy);
+    return false;
+  }
+  try {
+    await assertEnforcementRules(
+      enforcementContextBase(repository, "dispatch", "worker-dispatch", {
+        branch: branchInfo,
+        repository: { lifecycleState: "active" }
+      }),
+      { gh, repository, ref: workBaseBranch, root: CONTROL_ROOT }
+    );
+  } catch (error) {
+    if (error.code !== "DF_ENFORCEMENT_BLOCKED") throw error;
+    await blockIssueByEnforcement(gh, repository, issueNumber, workBaseBranch, error);
     return false;
   }
 
@@ -153,12 +169,12 @@ export async function dispatchWorker(gh, controlRepo, repository, issueNumber) {
   return true;
 }
 
-async function resolveWorkBaseBranch(gh, repository, defaultBranch) {
+async function resolveWorkBaseBranchInfo(gh, repository, defaultBranch) {
   try {
     await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent("dev")}`);
-    return "dev";
+    return { baseRefName: "dev", defaultBranch, devExists: true };
   } catch (error) {
-    if (error.status === 404) return defaultBranch;
+    if (error.status === 404) return { baseRefName: defaultBranch, defaultBranch, devExists: false };
     throw error;
   }
 }
@@ -183,6 +199,27 @@ async function blockIssueBeforeDispatch(gh, repository, issueNumber, baseBranch,
       `Repository auto-merge enabled: \`${mergePolicy.autoMergeSupported ? "yes" : "no"}\``,
       "",
       "This is target repository setup work, not a code implementation failure."
+    ].join("\n")
+  );
+}
+
+async function blockIssueByEnforcement(gh, repository, issueNumber, baseBranch, error) {
+  await ensureLabels(gh, repository, WORK_LABELS);
+  await replaceIssueLabels(gh, repository, issueNumber, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
+  await createIssueComment(
+    gh,
+    repository,
+    issueNumber,
+    [
+      "DarkFactory blocked this issue before worker dispatch.",
+      "",
+      "Enforcement rules:",
+      "",
+      "```text",
+      error.message || String(error),
+      "```",
+      "",
+      `Target branch: \`${baseBranch}\``
     ].join("\n")
   );
 }

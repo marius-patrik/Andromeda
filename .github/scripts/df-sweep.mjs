@@ -1,10 +1,12 @@
 import {
   DEFAULT_DATA_REPO,
+  assertEnforcementRules,
   assertAllowedRepo,
   checksAreGreen,
   checksSummary,
   createGithubClient,
   darkFactoryWorkerIssueNumber,
+  enforcementContextBase,
   extractClosingIssueNumbers,
   getRepository,
   getRequiredStatusCheckContexts,
@@ -216,6 +218,37 @@ export async function considerPullRequest(repository, pull) {
       `Fresh GitHub mergeability is \`${mergeGate.mergeable || "unknown"}\`.`
     ]);
     return { repo: repoName(repository), pr: ref, action: "skip", reason, issue_update: issueUpdate };
+  }
+
+  const devExists = pull.baseRefName === "dev" ? true : await branchExists(repository, "dev");
+  try {
+    await assertEnforcementRules(
+      enforcementContextBase(repository, "merge", "worker-pr-merge", {
+        branch: { baseRefName: pull.baseRefName, devExists },
+        repository: { lifecycleState: "active" },
+        pull: {
+          number: pull.number,
+          mergeable: mergeGate.mergeable,
+          requiredChecks: requiredContexts,
+          requiredChecksGreen: checksAreGreen(mergeGate.statusCheckRollup, requiredContexts),
+          checksSummary: checksSummary(mergeGate.statusCheckRollup)
+        }
+      }),
+      { gh, repository, ref: pull.baseRefName }
+    );
+  } catch (error) {
+    if (error.code !== "DF_ENFORCEMENT_BLOCKED") throw error;
+    const issueUpdate = await markWorkerIssueBlocked(repository, pull, "enforcement-rules-blocked", [
+      error.message || String(error)
+    ]);
+    return {
+      repo: repoName(repository),
+      pr: ref,
+      action: "skip",
+      reason: "enforcement-rules-blocked",
+      issue_update: issueUpdate,
+      violations: error.violations?.map((violation) => violation.id) || []
+    };
   }
 
   const protectedBranch = await branchIsProtected(repository, pull.baseRefName);
@@ -642,6 +675,16 @@ async function branchIsProtected(repository, branch) {
   } catch (error) {
     if (error.status === 404) return false;
     if (error.status === 403) return false;
+    throw error;
+  }
+}
+
+async function branchExists(repository, branch) {
+  try {
+    await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(branch)}`);
+    return true;
+  } catch (error) {
+    if (error.status === 404) return false;
     throw error;
   }
 }

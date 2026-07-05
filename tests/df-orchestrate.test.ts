@@ -42,6 +42,9 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
       if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") {
         throw notFound;
       }
+      if (method === "GET" && path === "/repos/marius-patrik/example/contents/.darkfactory/enforcement-rules.json?ref=main") {
+        throw notFound;
+      }
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/42/labels") {
         return {};
       }

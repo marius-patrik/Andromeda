@@ -11,8 +11,11 @@ const dfSweep: any = await import("../.github/scripts/df-sweep.mjs");
 
 const {
   assertAllowedRepo,
+  assertEnforcementRules,
   checksAreGreen,
   cleanupTempRoot,
+  enforcementContextBase,
+  evaluateEnforcementRules,
   extractClosingIssueNumbers,
   getBranchProtection,
   getRequiredStatusCheckContexts,
@@ -180,7 +183,7 @@ test("cleanupTempRoot reports EACCES cleanup failures without throwing", async (
   assert.match(result.warning, /permission denied/);
 });
 
-test("checksAreGreen rejects pending or failing checks without requiring fixed check names", () => {
+test("checksAreGreen rejects pending, failing, or missing required checks", () => {
   assert.equal(checksAreGreen([]), true);
   assert.equal(checksAreGreen([], ["ci"]), false);
   assert.equal(checksAreGreen([{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }]), true);
@@ -198,10 +201,50 @@ test("checksAreGreen rejects pending or failing checks without requiring fixed c
       [{ __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }],
       ["ci"]
     ),
-    true
+    false
   );
   assert.equal(checksAreGreen([{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }]), false);
   assert.equal(checksAreGreen([{ __typename: "StatusContext", state: "FAILURE" }]), false);
+});
+
+test("enforcement rules block red merges and parked dispatches declaratively", async () => {
+  const redMerge = await evaluateEnforcementRules(
+    enforcementContextBase({ owner: "marius-patrik", repo: "active" }, "merge", "worker-pr-merge", {
+      repository: { lifecycleState: "active" },
+      branch: { baseRefName: "dev", devExists: true },
+      pull: { requiredChecksGreen: false }
+    })
+  );
+
+  assert.equal(redMerge.allowed, false);
+  assert.deepEqual(redMerge.violations.map((violation: { id: string }) => violation.id), ["never-merge-red"]);
+
+  await assert.rejects(
+    assertEnforcementRules(
+      enforcementContextBase({ owner: "marius-patrik", repo: "skyblock-agent" }, "dispatch", "worker-dispatch", {
+        repository: { lifecycleState: "parked" },
+        branch: { baseRefName: "dev", devExists: true }
+      })
+    ),
+    /parked-repos-untouched/
+  );
+});
+
+test("enforcement rules require dev as the worker base when a dev branch exists", async () => {
+  const withDev = await evaluateEnforcementRules(
+    enforcementContextBase({ owner: "marius-patrik", repo: "active" }, "dispatch", "worker-dispatch", {
+      branch: { baseRefName: "main", devExists: true }
+    })
+  );
+  const withoutDev = await evaluateEnforcementRules(
+    enforcementContextBase({ owner: "marius-patrik", repo: "active" }, "dispatch", "worker-dispatch", {
+      branch: { baseRefName: "main", devExists: false }
+    })
+  );
+
+  assert.equal(withDev.allowed, false);
+  assert.deepEqual(withDev.violations.map((violation: { id: string }) => violation.id), ["work-prs-target-dev"]);
+  assert.equal(withoutDev.allowed, true);
 });
 
 test("getRequiredStatusCheckContexts treats inaccessible branch protection as no native requirements", async () => {
@@ -989,6 +1032,11 @@ test("df-sweep merges green app-authored dev worker PRs and blocks red ones", as
           error.status = 404;
           throw error;
         }
+        if (method === "GET" && pathName === "/repos/marius-patrik/active/contents/.darkfactory/enforcement-rules.json?ref=dev") {
+          const error: Error & { status?: number } = new Error("not found");
+          error.status = 404;
+          throw error;
+        }
         if (method === "GET" && /^\/repos\/marius-patrik\/active\/issues\/4[01]$/.test(pathName)) {
           return { labels: [] };
         }
@@ -1049,6 +1097,11 @@ test("df-sweep merges green app-authored dev worker PRs even when the worker iss
           error.status = 404;
           throw error;
         }
+        if (method === "GET" && pathName === "/repos/marius-patrik/active/contents/.darkfactory/enforcement-rules.json?ref=dev") {
+          const error: Error & { status?: number } = new Error("not found");
+          error.status = 404;
+          throw error;
+        }
         if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/1349") {
           return { labels: [{ name: "df:done" }] };
         }
@@ -1101,6 +1154,11 @@ test("df-sweep merges green app-authored worker PRs even when the worker issue i
         calls.push({ method, pathName, body });
         if (method === "GET" && pathName.endsWith("/protection")) {
           const error: Error & { status?: number } = new Error("Branch not protected");
+          error.status = 404;
+          throw error;
+        }
+        if (method === "GET" && pathName === "/repos/marius-patrik/active/contents/.darkfactory/enforcement-rules.json?ref=dev") {
+          const error: Error & { status?: number } = new Error("not found");
           error.status = 404;
           throw error;
         }

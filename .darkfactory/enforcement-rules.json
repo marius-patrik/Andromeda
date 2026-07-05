@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "description": "Declarative merge and dispatch gates evaluated by DarkFactory before worker dispatch and follow-through merge actions.",
+  "rules": [
+    {
+      "id": "never-merge-red",
+      "description": "Merge actions require all required checks to be reported and successful.",
+      "events": ["merge"],
+      "assert": [{ "fact": "pull.requiredChecksGreen", "op": "equals", "value": true }]
+    },
+    {
+      "id": "no-force-push",
+      "description": "DarkFactory actions may not force-push managed branches.",
+      "events": ["dispatch", "merge"],
+      "assert": [{ "fact": "git.forcePushAllowed", "op": "equals", "value": false }]
+    },
+    {
+      "id": "no-admin-bypass",
+      "description": "DarkFactory actions may not use admin bypasses for branch protection or merge gates.",
+      "events": ["dispatch", "merge"],
+      "assert": [{ "fact": "github.adminBypassAllowed", "op": "equals", "value": false }]
+    },
+    {
+      "id": "secrets-never-logged",
+      "description": "DarkFactory logs must keep secret redaction enabled.",
+      "events": ["dispatch", "merge"],
+      "assert": [{ "fact": "logging.secretRedactionEnabled", "op": "equals", "value": true }]
+    },
+    {
+      "id": "parked-repos-untouched",
+      "description": "DarkFactory must not dispatch or merge work in parked repositories.",
+      "events": ["dispatch", "merge"],
+      "assert": [
+        { "fact": "repository.parked", "op": "equals", "value": false },
+        { "fact": "repository.lifecycleState", "op": "notIn", "value": ["parked", "archived", "removed"] }
+      ]
+    },
+    {
+      "id": "work-prs-target-dev",
+      "description": "When a managed repository has a dev branch, worker PRs must target dev.",
+      "events": ["dispatch", "merge"],
+      "if": [{ "fact": "branch.devExists", "op": "equals", "value": true }],
+      "assert": [{ "fact": "branch.baseRefName", "op": "equals", "value": "dev" }]
+    }
+  ]
+}

@@ -10,7 +10,53 @@ export const PARKED_REPOS = new Set([
   "marius-patrik/life-support"
 ]);
 export const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
+export const ENFORCEMENT_RULES_PATH = ".darkfactory/enforcement-rules.json";
 export const MANAGED_REPO_STATES = new Set(["active", "parked", "archived", "completed", "removed"]);
+export const DEFAULT_ENFORCEMENT_RULES = {
+  schemaVersion: 1,
+  rules: [
+    {
+      id: "never-merge-red",
+      description: "Merge actions require all required checks to be reported and successful.",
+      events: ["merge"],
+      assert: [{ fact: "pull.requiredChecksGreen", op: "equals", value: true }]
+    },
+    {
+      id: "no-force-push",
+      description: "DarkFactory actions may not force-push managed branches.",
+      events: ["dispatch", "merge"],
+      assert: [{ fact: "git.forcePushAllowed", op: "equals", value: false }]
+    },
+    {
+      id: "no-admin-bypass",
+      description: "DarkFactory actions may not use admin bypasses for branch protection or merge gates.",
+      events: ["dispatch", "merge"],
+      assert: [{ fact: "github.adminBypassAllowed", op: "equals", value: false }]
+    },
+    {
+      id: "secrets-never-logged",
+      description: "DarkFactory logs must keep secret redaction enabled.",
+      events: ["dispatch", "merge"],
+      assert: [{ fact: "logging.secretRedactionEnabled", op: "equals", value: true }]
+    },
+    {
+      id: "parked-repos-untouched",
+      description: "DarkFactory must not dispatch or merge work in parked repositories.",
+      events: ["dispatch", "merge"],
+      assert: [
+        { fact: "repository.parked", op: "equals", value: false },
+        { fact: "repository.lifecycleState", op: "notIn", value: ["parked", "archived", "removed"] }
+      ]
+    },
+    {
+      id: "work-prs-target-dev",
+      description: "When a managed repository has a dev branch, worker PRs must target dev.",
+      events: ["dispatch", "merge"],
+      if: [{ fact: "branch.devExists", op: "equals", value: true }],
+      assert: [{ fact: "branch.baseRefName", op: "equals", value: "dev" }]
+    }
+  ]
+};
 
 export const WORK_LABELS = [
   { name: "df:ready", color: "0E8A16", description: "DarkFactory work loop may pick up this issue" },
@@ -86,6 +132,107 @@ export async function readManagedRepoRegistry(root = process.cwd()) {
     ? registry.repositories
     : {};
   return { ...registry, repositories };
+}
+
+export async function loadEnforcementRules(options = {}) {
+  const filePath = options.path ?? path.join(options.root ?? process.cwd(), ENFORCEMENT_RULES_PATH);
+  let policyText = "";
+
+  if (options.gh && options.repository) {
+    policyText = await getOptionalFileContent(options.gh, options.repository, ENFORCEMENT_RULES_PATH, options.ref) ?? "";
+  }
+
+  if (!policyText) {
+    try {
+      policyText = await readFile(filePath, "utf8");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+
+  if (!policyText.trim()) return DEFAULT_ENFORCEMENT_RULES;
+
+  const policy = JSON.parse(policyText);
+  validateEnforcementPolicy(policy);
+  return policy;
+}
+
+export async function evaluateEnforcementRules(context, options = {}) {
+  const policy = options.policy ?? await loadEnforcementRules(options);
+  validateEnforcementPolicy(policy);
+  const event = context.event || context.action || "";
+  const violations = [];
+
+  for (const rule of policy.rules) {
+    if (rule.enabled === false) continue;
+    if (Array.isArray(rule.events) && rule.events.length && !rule.events.includes(event)) continue;
+    if (!conditionsPass(rule.if || [], context)) continue;
+
+    const failed = (rule.assert || []).filter((condition) => !conditionPass(condition, context));
+    if (failed.length) {
+      violations.push({
+        id: rule.id,
+        description: rule.description || "",
+        failed
+      });
+    }
+  }
+
+  return {
+    allowed: violations.length === 0,
+    violations,
+    rules: policy.rules.length
+  };
+}
+
+export async function assertEnforcementRules(context, options = {}) {
+  const result = await evaluateEnforcementRules(context, options);
+  if (result.allowed) return result;
+
+  const detail = result.violations
+    .map((violation) => {
+      const failed = violation.failed.map(formatCondition).join("; ");
+      return `${violation.id}${failed ? ` (${failed})` : ""}`;
+    })
+    .join(", ");
+  const error = new Error(`DarkFactory enforcement rules blocked ${context.action || context.event || "action"}: ${detail}`);
+  error.code = "DF_ENFORCEMENT_BLOCKED";
+  error.violations = result.violations;
+  throw error;
+}
+
+export function enforcementContextBase(repository, event, action, extras = {}) {
+  const lifecycleState = extras.repository?.lifecycleState ?? "active";
+  return {
+    event,
+    action,
+    repository: {
+      name: repoName(repository),
+      parked: isParkedRepo(repository) || lifecycleState === "parked",
+      lifecycleState,
+      ...(extras.repository || {})
+    },
+    branch: {
+      baseRefName: "",
+      devExists: false,
+      ...(extras.branch || {})
+    },
+    git: {
+      forcePushAllowed: false,
+      ...(extras.git || {})
+    },
+    github: {
+      adminBypassAllowed: false,
+      ...(extras.github || {})
+    },
+    logging: {
+      secretRedactionEnabled: true,
+      ...(extras.logging || {})
+    },
+    pull: {
+      ...(extras.pull || {})
+    }
+  };
 }
 
 export function managedRepoLifecycleState(repository, registry) {
@@ -594,7 +741,7 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
     return requiredContexts.length === 0;
   }
 
-  return statusCheckRollup.every((check) => {
+  const greenChecks = statusCheckRollup.filter((check) => {
     if (check.__typename === "CheckRun") {
       return check.status === "COMPLETED" && check.conclusion === "SUCCESS";
     }
@@ -603,6 +750,19 @@ export function checksAreGreen(statusCheckRollup, requiredContexts = []) {
     }
     return false;
   });
+
+  if (greenChecks.length !== statusCheckRollup.length) return false;
+
+  if (requiredContexts.length) {
+    const greenNames = new Set(
+      greenChecks
+        .map((check) => check.__typename === "CheckRun" ? check.name : check.context)
+        .filter(Boolean)
+    );
+    return requiredContexts.every((context) => greenNames.has(context));
+  }
+
+  return true;
 }
 
 export function checksSummary(statusCheckRollup) {
@@ -653,6 +813,73 @@ export async function readLocalJson(filePath, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function validateEnforcementPolicy(policy) {
+  if (!policy || typeof policy !== "object") {
+    throw new Error("Invalid enforcement-rules policy: expected an object.");
+  }
+  if (!Array.isArray(policy.rules)) {
+    throw new Error("Invalid enforcement-rules policy: `rules` must be an array.");
+  }
+
+  for (const rule of policy.rules) {
+    if (!rule || typeof rule !== "object" || typeof rule.id !== "string" || !rule.id.trim()) {
+      throw new Error("Invalid enforcement-rules policy: every rule needs an id.");
+    }
+    for (const key of ["if", "assert"]) {
+      if (rule[key] !== undefined && !Array.isArray(rule[key])) {
+        throw new Error(`Invalid enforcement-rules policy: rule ${rule.id} ${key} must be an array.`);
+      }
+    }
+    if (rule.events !== undefined && !Array.isArray(rule.events)) {
+      throw new Error(`Invalid enforcement-rules policy: rule ${rule.id} events must be an array.`);
+    }
+  }
+}
+
+function conditionsPass(conditions, context) {
+  return conditions.every((condition) => conditionPass(condition, context));
+}
+
+function conditionPass(condition, context) {
+  if (!condition || typeof condition !== "object" || typeof condition.fact !== "string") return false;
+  const actual = getFact(context, condition.fact);
+  const op = condition.op || "equals";
+  const expected = condition.value;
+
+  switch (op) {
+    case "equals":
+      return actual === expected;
+    case "notEquals":
+      return actual !== expected;
+    case "in":
+      return Array.isArray(expected) && expected.includes(actual);
+    case "notIn":
+      return Array.isArray(expected) && !expected.includes(actual);
+    case "truthy":
+      return Boolean(actual);
+    case "falsy":
+      return !actual;
+    case "startsWith":
+      return typeof actual === "string" && typeof expected === "string" && actual.startsWith(expected);
+    case "matches":
+      return typeof actual === "string" && typeof expected === "string" && new RegExp(expected).test(actual);
+    default:
+      throw new Error(`Invalid enforcement-rules condition operator: ${op}`);
+  }
+}
+
+function getFact(context, factPath) {
+  return factPath.split(".").reduce((current, key) => {
+    if (current === null || current === undefined || typeof current !== "object") return undefined;
+    return current[key];
+  }, context);
+}
+
+function formatCondition(condition) {
+  const value = condition.value === undefined ? "" : ` ${JSON.stringify(condition.value)}`;
+  return `${condition.fact} ${condition.op || "equals"}${value}`;
 }
 
 export function sanitize(value, ...secrets) {

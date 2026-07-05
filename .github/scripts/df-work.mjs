@@ -7,9 +7,11 @@ import { fileURLToPath } from "node:url";
 import {
   DEFAULT_DATA_REPO,
   WORK_LABELS,
+  assertEnforcementRules,
   assertAllowedRepo,
   cleanupTempRoot,
   createGithubClient,
+  enforcementContextBase,
   ensureLabels,
   findOpenWorkerPullRequestForIssue,
   getRepository,
@@ -74,6 +76,7 @@ async function main() {
 
   const repo = await getRepository(gh, TARGET_REPO);
   const workBaseBranch = await resolveWorkBaseBranch(TARGET_REPO, repo.default_branch, TARGET_BASE_REF);
+  const devExists = await branchExists(TARGET_REPO, "dev");
 
   // Ensure work labels exist before any preflight failure path tries to apply
   // `df:blocked` to the issue, so the blocker comment is always left reliably.
@@ -123,6 +126,30 @@ async function main() {
       TARGET_REPO,
       TARGET_ISSUE_NUMBER,
       preflightBlockedComment(target, workBaseBranch, mergePolicy)
+    );
+    return;
+  }
+  try {
+    const enforcement = await assertEnforcementRules(
+      enforcementContextBase(TARGET_REPO, "dispatch", "worker-dispatch", {
+        branch: { baseRefName: workBaseBranch, defaultBranch: repo.default_branch, devExists },
+        repository: { lifecycleState: "active" }
+      }),
+      { gh, repository: TARGET_REPO, ref: workBaseBranch, root: CONTROL_ROOT }
+    );
+    ledger.actions.push({ action: "enforcement-rules", result: enforcement });
+  } catch (error) {
+    if (error.code !== "DF_ENFORCEMENT_BLOCKED") throw error;
+    ledger.status = "blocked";
+    ledger.error = sanitize(error.message || String(error), TOKEN);
+    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
+    await createIssueComment(
+      TARGET_REPO,
+      TARGET_ISSUE_NUMBER,
+      preflightBlockedComment(target, workBaseBranch, {
+        reason: error.message || String(error),
+        autoMergeSupported: mergePolicy.autoMergeSupported
+      })
     );
     return;
   }
@@ -286,6 +313,16 @@ async function resolveWorkBaseBranch(repository, defaultBranch, requestedBranch 
 
 async function ensureBranchExists(repository, branch) {
   await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeRefPath(branch)}`);
+}
+
+async function branchExists(repository, branch) {
+  try {
+    await ensureBranchExists(repository, branch);
+    return true;
+  } catch (error) {
+    if (error.status === 404) return false;
+    throw error;
+  }
 }
 
 async function replaceIssueLabels(repository, issueNumber, add, remove) {
