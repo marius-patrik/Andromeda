@@ -256,7 +256,7 @@ export async function cleanupTempRoot(tempRoot, warn = console.warn) {
 }
 
 export function isIgnorableCleanupError(error) {
-  return error?.code === "EACCES" || error?.code === "ENOENT";
+  return error?.code === "ENOENT";
 }
 
 export function createGithubClient(token, userAgent = "darkfactory") {
