@@ -479,6 +479,23 @@ test("df-plan drift detection covers untracked open issues and PRs", async () =>
   assert.match(source, /listOpenPullRequests/);
 });
 
+test("df-plan drift detection maps M2 PRD commitments to code artifacts", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /detectPrdArtifactDrift/);
+  assert.match(source, /PRD editing to automatically reconcile sequenced backlog issues/);
+  assert.match(source, /PRD drift reporting when code or backlog contradicts the PRD/);
+  assert.match(source, /prd\\W\*backlog/);
+  assert.match(source, /\.github\/workflows\/df-plan\.yml/);
+  assert.match(source, /\.github\/scripts\/df-plan\.mjs/);
+  assert.match(source, /listen for PRD file changes/);
+  assert.match(source, /maintain sequencing references/);
+  assert.match(source, /file or update a drift report issue/);
+  assert.match(source, /does not \$\{check\.reason\}/);
+  assert.match(source, /artifactContentForChecks/);
+  assert.match(source, /detectPrdArtifactDrift\[\\s\\S\]\*\?/);
+});
+
 test("df-plan workflow reacts safely to PRD edits on trusted default branches", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-plan.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
