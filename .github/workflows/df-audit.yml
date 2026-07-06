@@ -49,8 +49,10 @@ jobs:
       - name: Validate manual audit target repository
         if: github.event_name == 'workflow_dispatch' && inputs.repo
         shell: bash
+        env:
+          DF_MANUAL_AUDIT_REPO: ${{ inputs.repo }}
         run: |
-          repo="${{ inputs.repo }}"
+          repo="${DF_MANUAL_AUDIT_REPO}"
           case "${repo}" in
             marius-patrik/fabrica|marius-patrik/skyblock-agent|marius-patrik/singularity|marius-patrik/life-support)
               echo "::error::DarkFactory manual audit target is parked: ${repo}."
@@ -83,7 +85,7 @@ jobs:
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: marius-patrik
           permission-actions: read
-          permission-contents: read
+          permission-contents: write
           permission-issues: write
 
       - name: Run audit
