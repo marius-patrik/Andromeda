@@ -143,7 +143,10 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
 
 test("orchestrator selects next ready issues by priority, blocked-by, and stream lane", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
-  const { selectDispatchableIssues } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-scheduler-test");
+  const { blockedByIssueNumbers, selectDispatchableIssues } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-scheduler-test");
+
+  assert.deepEqual(blockedByIssueNumbers("Blocked-by: #61, #63\nBlocked-by: owner/repo#70"), [61, 63, 70]);
+  assert.equal(Number.isNaN(blockedByIssueNumbers("Blocked-by: waiting for owner")[0]), true);
 
   const selected = selectDispatchableIssues([
     {
@@ -175,11 +178,26 @@ test("orchestrator selects next ready issues by priority, blocked-by, and stream
       number: 14,
       body: "Blocked-by: #99",
       labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:api" }]
+    },
+    {
+      number: 15,
+      body: "Blocked-by: #99, #12",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:ops" }]
+    },
+    {
+      number: 16,
+      body: "Blocked-by: owner/repo#99, owner/repo#98",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:review" }]
+    },
+    {
+      number: 17,
+      body: "Blocked-by: waiting for owner",
+      labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:unsafe" }]
     }
   ]);
 
   assert.deepEqual(
     selected.map((issue: { number: number }) => issue.number),
-    [13, 14, 12]
+    [13, 14, 16, 12]
   );
 });

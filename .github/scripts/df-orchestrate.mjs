@@ -131,7 +131,9 @@ export function selectDispatchableIssues(openIssues) {
       const names = issueLabelNames(issue);
       if (!names.has("df:ready")) return false;
       if (names.has("df:running") || names.has("df:blocked") || names.has("df:done")) return false;
-      return blockedByIssueNumbers(issue.body || "").every((number) => !openIssueNumbers.has(number));
+      return blockedByIssueNumbers(issue.body || "").every(
+        (number) => Number.isInteger(number) && !openIssueNumbers.has(number)
+      );
     })
     .sort(compareReadyIssues)
     .filter((issue) => {
@@ -164,8 +166,16 @@ export function issueStreamLanes(issue) {
 export function blockedByIssueNumbers(body) {
   const numbers = [];
   for (const line of String(body || "").split(/\r?\n/)) {
-    const match = line.match(/^\s*Blocked-by:\s*(?:[\w.-]+\/[\w.-]+)?#(\d+)\s*$/i);
-    if (match) numbers.push(Number(match[1]));
+    const match = line.match(/^\s*Blocked-by:\s*(.+)$/i);
+    if (!match) continue;
+
+    const refs = [...match[1].matchAll(/(?:[\w.-]+\/[\w.-]+)?#(\d+)/g)];
+    if (refs.length === 0) {
+      numbers.push(Number.NaN);
+      continue;
+    }
+
+    numbers.push(...refs.map((ref) => Number(ref[1])));
   }
   return numbers;
 }
