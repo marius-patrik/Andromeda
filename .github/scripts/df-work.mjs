@@ -366,8 +366,11 @@ async function blockStaleWorkerBranch(branch) {
 }
 
 async function upsertStaleBranchAskOwnerIssue(branch) {
-  const marker = `<!-- dark-factory:stale-worker-branch issue=${TARGET_ISSUE_NUMBER} branch=${slug(branch)} -->`;
-  const title = `DarkFactory stale worker branch: #${TARGET_ISSUE_NUMBER}`;
+  // Recovery issues live in the CONTROL repository so owner decisions stay on
+  // the central DarkFactory queue/dashboard regardless of which managed repo
+  // the stale branch belongs to.
+  const marker = `<!-- dark-factory:stale-worker-branch repo=${repoName(TARGET_REPO)} issue=${TARGET_ISSUE_NUMBER} branch=${slug(branch)} -->`;
+  const title = `DarkFactory stale worker branch: ${repoName(TARGET_REPO)}#${TARGET_ISSUE_NUMBER}`;
   const body = [
     marker,
     "## Owner Decision Required",
@@ -387,23 +390,23 @@ async function upsertStaleBranchAskOwnerIssue(branch) {
     "",
     "- AI tokens: 0 (deterministic worker preflight)."
   ].join("\n");
-  const existing = await findOpenIssueByMarker(TARGET_REPO, marker);
+  const existing = await findOpenIssueByMarker(CONTROL_REPO, marker);
 
   if (existing) {
-    const updated = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, {
+    const updated = await gh.request("PATCH", `/repos/${repoName(CONTROL_REPO)}/issues/${existing.number}`, {
       title,
       body
     });
     // The upsert path must enforce the escalation label on update as well as
     // create, or a recovery issue that lost df:ask-owner disappears from
     // label-driven dashboards and queues.
-    await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}/labels`, {
+    await gh.request("POST", `/repos/${repoName(CONTROL_REPO)}/issues/${existing.number}/labels`, {
       labels: ["df:ask-owner"]
     });
     return `#${updated.number || existing.number}`;
   }
 
-  const created = await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues`, {
+  const created = await gh.request("POST", `/repos/${repoName(CONTROL_REPO)}/issues`, {
     title,
     body,
     labels: ["df:ask-owner"]

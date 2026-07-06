@@ -660,6 +660,18 @@ export function blockedByIssueRefs(body, currentRepository = null) {
       continue;
     }
 
+    // A Blocked-by payload must contain nothing but issue references and
+    // separators. Leftover text (e.g. "Blocked-by: #12 or ask owner") makes
+    // the line ambiguous, so a malformed marker is emitted alongside the
+    // parsed refs and the issue escalates instead of dispatching on a
+    // partially-parsed dependency line.
+    const residue = match[1]
+      .replace(/(?:[\w.-]+\/[\w.-]+)?#\d+/g, "")
+      .replace(/[,\s]+/g, "");
+    if (residue) {
+      refs.push({ repository: null, number: Number.NaN, raw: match[1].trim() });
+    }
+
     refs.push(...found.map((entry) => ({
       repository: entry.groups?.owner
         ? `${entry.groups.owner.toLowerCase()}/${entry.groups.repo.toLowerCase()}`

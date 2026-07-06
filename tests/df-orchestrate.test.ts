@@ -254,6 +254,20 @@ test("orchestrator holds and escalates unknown cross-repo Blocked-by references"
     labels: [{ name: "df:ready" }, { name: "P1" }]
   };
   assert.equal(ownerDecisionEscalation(sameRepoIssue, knownRepositories), null);
+
+  // A Blocked-by line with leftover text beyond refs and separators is
+  // ambiguous even when it contains a parseable reference: it escalates and
+  // is never dispatched on the partially-parsed dependency.
+  const partiallyMalformed = {
+    number: 24,
+    body: "Blocked-by: #12 or ask owner",
+    labels: [{ name: "df:ready" }, { name: "P1" }, { name: "stream:d" }]
+  };
+  assert.equal(ownerDecisionEscalation(partiallyMalformed, knownRepositories)?.reason, "ambiguous-blocked-by");
+  assert.deepEqual(
+    selectDispatchableIssues([partiallyMalformed], { repository, openIssueIndex, knownRepositories }),
+    []
+  );
 });
 
 test("orchestration plan applies wave gates and cross-repo concurrency caps", async () => {
