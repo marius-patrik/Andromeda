@@ -5,7 +5,11 @@ import { App } from "@octokit/app";
 import { Octokit } from "@octokit/core";
 import { createBot } from "./bot.js";
 import { loadAppCredentials, loadConfig } from "./config.js";
-import { ensureManagedRepositorySetup, orderManagedRepositoriesForSync } from "./managed-sync.js";
+import {
+  assertControlRepositoryIncluded,
+  ensureManagedRepositorySetup,
+  orderManagedRepositoriesForSync
+} from "./managed-sync.js";
 import {
   GhCliRunnerClient,
   RunnerManager,
@@ -103,10 +107,13 @@ async function syncManagedRepositories(): Promise<void> {
     repositories.push({ octokit, repository });
   }
 
-  for (const { octokit, repository } of orderManagedRepositoriesForSync(repositories, ({ repository }) => ({
+  const getRepositoryRef = ({ repository }: (typeof repositories)[number]) => ({
     owner: repository.owner.login,
     repo: repository.name
-  }))) {
+  });
+  assertControlRepositoryIncluded(repositories, getRepositoryRef);
+
+  for (const { octokit, repository } of orderManagedRepositoriesForSync(repositories, getRepositoryRef)) {
     const result = await ensureManagedRepositorySetup(octokit, {
       owner: repository.owner.login,
       repo: repository.name,

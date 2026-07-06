@@ -139,19 +139,31 @@ Managed files:
 
 - `.agents/.global/**`
 - `.agents/.project/**`, only when `data-agentos/managed-repository/repositories/<owner>/<repo>/.agents/.project/**` exists
+- `.darkfactory/managed-repos.json`
 - `.darkfactory/managed-repository.json`
+- `.darkfactory/orchestration.json`
 - `.darkfactory/installer-policy.json`
 - `.darkfactory/release-policy.json`
 - `.github/workflows/dark-factory-bootstrap.yml`
 - `.github/workflows/dark-factory-autoupdate.yml`
 - `.github/workflows/dark-factory-release.yml`
+- `.github/workflows/df-plan.yml`
+- `.github/workflows/df-follow-through.yml`
+- `.github/workflows/df-orchestrate.yml`
+- `.github/workflows/df-work.yml`
 - `.github/workflows/codex-review.yml`
 - `.github/codex-review.Dockerfile`
 - `.github/codex-review.schema.json`
+- `.github/scripts/df-lib.mjs`
+- `.github/scripts/df-plan.mjs`
+- `.github/scripts/df-orchestrate.mjs`
+- `.github/scripts/df-sweep.mjs`
+- `.github/scripts/df-work.mjs`
 - `.github/scripts/run-codex-review.sh`
+- `.github/scripts/validate-codex-review.mjs`
 - `.github/scripts/dark-factory-release-check.mjs`
 
-The `agentos-data` repository is the single source of truth for managed setup. Keep reusable policy in `managed-repository/.agents/.global/` and `managed-repository/.darkfactory/`, and per-repository context in `managed-repository/repositories/<owner>/<repo>/.agents/.project/`.
+The `data-agentos` repository is the single source of truth for managed setup. Keep reusable policy in `managed-repository/.agents/.global/` and `managed-repository/.darkfactory/`, and per-repository context in `managed-repository/repositories/<owner>/<repo>/.agents/.project/`.
 
 Managed sync runs automatically when:
 

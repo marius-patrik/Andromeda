@@ -56,6 +56,21 @@ export function orderManagedRepositoriesForSync<T>(
   });
 }
 
+export function assertControlRepositoryIncluded<T>(
+  items: readonly T[],
+  getRepository: (item: T) => Pick<ManagedRepository, "owner" | "repo">,
+  controlRepository: Pick<ManagedRepository, "owner" | "repo"> = DARK_FACTORY_CONTROL_REPOSITORY
+): void {
+  const controlKey = repositoryKey(controlRepository);
+  const hasControlRepository = items.some((item) => repositoryKey(getRepository(item)) === controlKey);
+
+  if (!hasControlRepository) {
+    throw new Error(
+      `DarkFactory control repository ${controlRepository.owner}/${controlRepository.repo} is not visible to the GitHub App installation. Managed sync must be self-applying before syncing other repositories.`
+    );
+  }
+}
+
 export async function ensureManagedRepositorySetup(
   github: GitHubRequester,
   repository: ManagedRepository,

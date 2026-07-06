@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
+  assertControlRepositoryIncluded,
   ensureManagedRepositorySetup,
   managedSetupPullRequestBody,
   MANAGED_SETUP_BRANCH,
@@ -13,8 +14,10 @@ import {
 } from "../src/managed-sync.js";
 import {
   DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
+  DARK_FACTORY_MANAGED_REPOS_PATH,
   DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH,
   DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH,
+  DARK_FACTORY_ORCHESTRATION_PATH,
   DARK_FACTORY_PLAN_SCRIPT_PATH,
   DARK_FACTORY_PLAN_WORKFLOW_PATH,
   DARK_FACTORY_SCRIPT_LIB_PATH,
@@ -153,6 +156,22 @@ test("orderManagedRepositoriesForSync deduplicates repository entries case-insen
   );
 });
 
+test("assertControlRepositoryIncluded rejects syncs that cannot self-apply", () => {
+  assert.throws(
+    () => assertControlRepositoryIncluded([{ owner: "marius-patrik", repo: "dream" }], (repository) => repository),
+    /control repository marius-patrik\/agent-darkfactory is not visible/
+  );
+});
+
+test("assertControlRepositoryIncluded accepts case-insensitive control repository refs", () => {
+  assert.doesNotThrow(() =>
+    assertControlRepositoryIncluded(
+      [{ owner: "MARIUS-PATRIK", repo: "Agent-DarkFactory" }],
+      (repository) => repository
+    )
+  );
+});
+
 test("readManagedFiles supplies every required package-managed payload", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
   const packagePaths = new Set([
@@ -182,6 +201,9 @@ test("readManagedFiles supplies every required package-managed payload", async (
     for (const filePath of requiredPaths) {
       assert.equal(managedPaths.has(filePath), true, filePath);
     }
+
+    assert.equal(managedPaths.has(DARK_FACTORY_MANAGED_REPOS_PATH), true);
+    assert.equal(managedPaths.has(DARK_FACTORY_ORCHESTRATION_PATH), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
