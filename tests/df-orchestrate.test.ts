@@ -274,8 +274,6 @@ test("orchestrator writes dashboard digest and escalates repeated failures to df
 
   gh.request = async (method: string, path: string, body?: any) => {
     calls.push({ method, path, body });
-    const common = await baseResponse(method, path, body, { issues: [issue], controlIssues: [] });
-    if (common.handled) return common.value;
     if (method === "GET" && path === "/repos/marius-patrik/example/issues/9/comments?per_page=100") {
       return [
         { body: "DarkFactory worker blocked." },
@@ -283,6 +281,8 @@ test("orchestrator writes dashboard digest and escalates repeated failures to df
         { body: "DarkFactory worker blocked." }
       ];
     }
+    const common = await baseResponse(method, path, body, { issues: [issue], controlIssues: [] });
+    if (common.handled) return common.value;
     if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
     if (method === "PATCH" && path.startsWith("/repos/marius-patrik/example/labels/")) return {};
     if (method === "POST" && path === "/repos/marius-patrik/example/issues/9/labels") return {};
@@ -310,6 +310,59 @@ test("orchestrator writes dashboard digest and escalates repeated failures to df
   );
   assert.ok(calls.some((call) => call.method === "DELETE" && call.path === "/repos/marius-patrik/example/issues/9/labels/df%3Aready"));
   assert.ok(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/agent-darkfactory/issues" && String(call.body.body).includes("orchestrator-dashboard")));
+  assert.ok(result.ledger.escalations.some((action: any) => action.reason === "repeated-worker-failure"));
+});
+
+test("orchestrator escalates df:ready issues with repeated blocked comments in history", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-ready-history-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const issue = {
+    number: 7,
+    title: "Ready but repeated failure",
+    body: "",
+    state: "open",
+    labels: [{ name: "roadmap" }, { name: "df:ready" }]
+  };
+
+  const gh = baseGithubMock(calls, {
+    issues: [issue],
+    controlIssues: [],
+    graphql: async () => emptyPullRequestConnection()
+  });
+
+  gh.request = async (method: string, path: string, body?: any) => {
+    calls.push({ method, path, body });
+    if (method === "GET" && path === "/repos/marius-patrik/example/issues/7/comments?per_page=100") {
+      return [
+        { body: "DarkFactory worker blocked." },
+        { body: "DarkFactory worker blocked." },
+        { body: "DarkFactory worker blocked." }
+      ];
+    }
+    const common = await baseResponse(method, path, body, { issues: [issue], controlIssues: [] });
+    if (common.handled) return common.value;
+    if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+    if (method === "POST" && path === "/repos/marius-patrik/example/issues/7/labels") return {};
+    if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/7/labels/df%3Aready") return null;
+    if (method === "POST" && path === "/repos/marius-patrik/example/issues") return { number: 101, ...body };
+    throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    registry: { repositories: { "marius-patrik/example": { state: "active" } } },
+    repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
+    writeLedger: false,
+    updateDashboard: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.dispatched, []);
+  assert.ok(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/7/labels" && call.body.labels.includes("df:ask-owner")));
+  assert.ok(calls.some((call) => call.method === "DELETE" && call.path === "/repos/marius-patrik/example/issues/7/labels/df%3Aready"));
   assert.ok(result.ledger.escalations.some((action: any) => action.reason === "repeated-worker-failure"));
 });
 
@@ -359,6 +412,10 @@ async function baseResponse(method: string, path: string, _body: unknown, option
     return { handled: true, value: controlIssues };
   }
   if (method === "GET" && path === "/repos/marius-patrik/agent-darkfactory/issues?state=open&per_page=100&page=2") {
+    return { handled: true, value: [] };
+  }
+  const exampleCommentsMatch = path.match(/^\/repos\/marius-patrik\/example\/issues\/(\d+)\/comments\?per_page=100$/);
+  if (method === "GET" && exampleCommentsMatch) {
     return { handled: true, value: [] };
   }
 

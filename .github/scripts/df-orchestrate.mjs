@@ -202,7 +202,12 @@ export async function reconstructRepositoryState(gh, repository, warn = console.
   const blockedIssues = issueStates.filter((issue) => issue.labels.has("df:blocked"));
   const askOwnerIssues = issueStates.filter((issue) => issue.labels.has("df:ask-owner"));
 
-  for (const issue of blockedIssues.filter((blocked) => blocked.fixRound < 3)) {
+  for (const issue of issueStates.filter(
+    (issue) =>
+      isManagedWorkIssue(issue) &&
+      issue.fixRound < 3 &&
+      (issue.labels.has("df:ready") || issue.labels.has("df:blocked"))
+  )) {
     issue.blockedCommentCount += await countBlockedCommentsFromHistory(gh, repository, issue.number, warn);
   }
 
@@ -339,7 +344,7 @@ async function sequenceReadyIssues(gh, repository, state) {
       continue;
     }
 
-    if (blockersClosed && !issue.labels.has("df:ready") && !issue.labels.has("df:blocked")) {
+    if (blockersClosed && !issue.labels.has("df:ready") && !issue.labels.has("df:blocked") && issue.blockedBy.length > 0) {
       await replaceIssueLabels(gh, repository, issue.number, ["df:ready"], ["df:done"]);
       actions.push({ action: "mark-ready", repo: repoName(repository), issue: `#${issue.number}` });
       continue;
