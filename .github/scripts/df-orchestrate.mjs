@@ -66,9 +66,15 @@ async function main() {
   const controlRepo = parseRepo(requiredEnv("DF_CONTROL_REPO"));
   const dataRepo = process.env.DF_DATA_REPO ?? DEFAULT_DATA_REPO;
   const trigger = process.env.DF_TRIGGER ?? "unknown";
+  const dispatchRequest = parseWorkflowDispatchRequest(
+    process.env.DF_TARGET_REPO,
+    process.env.DF_TARGET_ISSUE_NUMBER,
+    process.env.DF_SOURCE_EVENT,
+    console.warn
+  );
   const gh = createGithubClient(appInstallationToken, "darkfactory-orchestrate");
 
-  await orchestrate({ gh, controlRepo, dataRepo, trigger, root: CONTROL_ROOT });
+  await orchestrate({ gh, controlRepo, dataRepo, trigger, root: CONTROL_ROOT, dispatchRequest });
 }
 
 export async function orchestrate(options) {
@@ -80,6 +86,7 @@ export async function orchestrate(options) {
     root = CONTROL_ROOT,
     registry,
     repositories,
+    dispatchRequest: dispatchRequestInput,
     policy: policyInput,
     writeLedger: shouldWriteLedger = true,
     updateDashboard: shouldUpdateDashboard = true,
@@ -89,7 +96,14 @@ export async function orchestrate(options) {
 
   assertAllowedRepo(controlRepo);
   const isEventTrigger = trigger === "issue_comment" || trigger === "issues";
-  const eventRequest = parseEventRequest(process.env.GITHUB_EVENT_PAYLOAD || "", trigger, warn);
+  const eventRequest = parseEventRequest(process.env.GITHUB_EVENT_PAYLOAD || "", trigger, warn)
+    ?? normalizeDispatchRequest(dispatchRequestInput, warn)
+    ?? parseWorkflowDispatchRequest(
+      process.env.DF_TARGET_REPO,
+      process.env.DF_TARGET_ISSUE_NUMBER,
+      process.env.DF_SOURCE_EVENT,
+      warn
+    );
   const policy = normalizeOrchestrationPolicy(policyInput ?? await readOrchestrationPolicy(root, warn));
   let targets = [];
   if (eventRequest) {
@@ -209,6 +223,44 @@ export function parseEventRequest(payloadText, trigger = "unknown", warn = conso
     slashRun: false,
     readyLabel: true
   };
+}
+
+export function parseWorkflowDispatchRequest(repoInput, issueNumberInput, sourceEventInput = "", warn = console.warn) {
+  const repoText = String(repoInput || "").trim();
+  const issueNumber = Number(String(issueNumberInput || "").trim());
+  if (!repoText && !issueNumberInput) return null;
+  if (!repoText || !Number.isInteger(issueNumber) || issueNumber <= 0) {
+    warn("DarkFactory workflow_dispatch scope ignored because repo or issue_number input is invalid.");
+    return null;
+  }
+
+  const sourceEvent = String(sourceEventInput || "").trim();
+  let repository;
+  try {
+    repository = parseRepo(repoText);
+  } catch (error) {
+    warn(`DarkFactory workflow_dispatch scope ignored: ${error.message || String(error)}`);
+    return null;
+  }
+
+  return {
+    repository,
+    issueNumber,
+    slashRun: sourceEvent === "issue_comment",
+    readyLabel: sourceEvent === "issues"
+  };
+}
+
+function normalizeDispatchRequest(request, warn = console.warn) {
+  if (!request) return null;
+  const repoText = request.repository ? repoName(request.repository) : request.repo;
+  const issueNumber = request.issueNumber ?? request.issue_number;
+  return parseWorkflowDispatchRequest(
+    repoText,
+    issueNumber,
+    request.sourceEvent ?? request.source_event ?? "",
+    warn
+  );
 }
 
 async function readySlashRunIssue(gh, repository, issueNumber) {
