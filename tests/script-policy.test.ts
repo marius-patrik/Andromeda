@@ -1172,6 +1172,24 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
 });
 
+test("df-orchestrate uses the app token for cross-repo writes", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-orchestrate.yml", import.meta.url), "utf8");
+  const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
+
+  assert.match(workflow, /uses:\s+actions\/create-github-app-token@v2/);
+  assert.match(workflow, /owner:\s+marius-patrik/);
+  assert.match(workflow, /permission-actions:\s+write/);
+  assert.match(workflow, /permission-contents:\s+write/);
+  assert.match(workflow, /permission-issues:\s+write/);
+  assert.match(workflow, /permission-workflows:\s+write/);
+  assert.match(workflow, /DARK_FACTORY_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}/);
+  assert.doesNotMatch(workflow, /DARK_FACTORY_TOKEN:.*github\.token/);
+  assert.match(source, /const appInstallationToken = requiredEnv\("DARK_FACTORY_TOKEN"\)/);
+  assert.match(source, /createGithubClient\(appInstallationToken, "darkfactory-orchestrate"\)/);
+  assert.match(source, /GITHUB_TOKEN[\s\S]+cannot perform cross-repo issue writes/);
+  assert.doesNotMatch(source, /process\.env\.GITHUB_TOKEN|github\.token/);
+});
+
 test("df-orchestrate script uses the active managed registry and dispatches via workflow_dispatch", async () => {
   const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
 
