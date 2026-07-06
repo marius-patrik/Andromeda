@@ -329,6 +329,84 @@ test("orchestrator updates the L6 dashboard issue after dispatch", async () => {
   assert.match(dashboardUpdate?.body.body, /AI tokens: 0/);
 });
 
+test("orchestrator escalates ambiguous sequencing to df:ask-owner without dispatch", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { ASK_OWNER_MARKER, orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-ask-owner-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+
+  const gh = {
+    async graphql() {
+      return {
+        repository: {
+          pullRequests: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: []
+          }
+        }
+      };
+    },
+    async request(method: string, path: string, body?: unknown) {
+      calls.push({ method, path, body });
+
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
+        return [
+          {
+            number: 17,
+            title: "Needs owner",
+            body: "## Sequencing\n\nBlocked-by: waiting for owner",
+            labels: [{ name: "df:ready" }, { name: "P0" }, { name: "stream:core" }]
+          }
+        ];
+      }
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
+      if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/17/labels") return {};
+      if (method === "DELETE" && path.startsWith("/repos/marius-patrik/example/issues/17/labels/")) return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/17/comments") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/agent-darkfactory/labels") return {};
+      if (method === "GET" && path === "/repos/marius-patrik/agent-darkfactory/issues?state=open&per_page=100&page=1") {
+        return [{ number: 99, body: "<!-- df-dashboard:orchestration -->", labels: [] }];
+      }
+      if (method === "PATCH" && path === "/repos/marius-patrik/agent-darkfactory/issues/99") return {};
+
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    registry: { repositories: { "marius-patrik/example": { state: "active" } } },
+    repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
+    writeLedger: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.dispatched, []);
+  assert.deepEqual(result.escalated, [
+    {
+      repo: "marius-patrik/example",
+      issue: 17,
+      reason: "ambiguous-blocked-by",
+      detail: "Blocked-by lines must reference GitHub issues as #123 or owner/repo#123."
+    }
+  ]);
+  assert.deepEqual(
+    calls.find((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/17/labels")?.body,
+    { labels: ["df:ask-owner", "df:blocked"] }
+  );
+  assert.ok(calls.some((call) => call.method === "DELETE" && call.path === "/repos/marius-patrik/example/issues/17/labels/df%3Aready"));
+  assert.match(
+    calls.find((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/17/comments")?.body.body,
+    new RegExp(ASK_OWNER_MARKER)
+  );
+  assert.equal(calls.some((call) => call.path.endsWith("/actions/workflows/df-work.yml/dispatches")), false);
+  const dashboardUpdate = calls.find((call) => call.method === "PATCH" && call.path === "/repos/marius-patrik/agent-darkfactory/issues/99");
+  assert.match(dashboardUpdate?.body.body, /Owner Escalations/);
+  assert.match(dashboardUpdate?.body.body, /marius-patrik\/example#17/);
+});
+
 test("orchestrator turns trusted /df run comments into df:ready before dispatch", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-slash-run-test");
