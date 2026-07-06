@@ -240,7 +240,7 @@ test("orchestrator does not dispatch candidates with running blocked or ask-owne
   const baseRequest = gh.request;
   gh.request = async (method: string, path: string, body?: unknown) => {
     calls.push({ method, path, body });
-    if (method === "GET" && path === "/repos/marius-patrik/example/issues/11/comments?per_page=100") return [];
+    if (method === "GET" && path === "/repos/marius-patrik/example/issues/11/comments?per_page=100&page=1") return [];
     return baseRequest(method, path, body);
   };
 
@@ -372,7 +372,7 @@ test("orchestrator writes dashboard digest and escalates repeated failures to df
 
   gh.request = async (method: string, path: string, body?: any) => {
     calls.push({ method, path, body });
-    if (method === "GET" && path === "/repos/marius-patrik/example/issues/9/comments?per_page=100") {
+    if (method === "GET" && path === "/repos/marius-patrik/example/issues/9/comments?per_page=100&page=1") {
       return [
         { body: "DarkFactory worker blocked." },
         { body: "DarkFactory follow-through blocked this worker PR." },
@@ -431,7 +431,10 @@ test("orchestrator escalates df:ready issues with repeated blocked comments in h
 
   gh.request = async (method: string, path: string, body?: any) => {
     calls.push({ method, path, body });
-    if (method === "GET" && path === "/repos/marius-patrik/example/issues/7/comments?per_page=100") {
+    if (method === "GET" && path === "/repos/marius-patrik/example/issues/7/comments?per_page=100&page=1") {
+      return Array.from({ length: 100 }, () => ({ body: "non-blocking history" }));
+    }
+    if (method === "GET" && path === "/repos/marius-patrik/example/issues/7/comments?per_page=100&page=2") {
       return [
         { body: "DarkFactory worker blocked." },
         { body: "DarkFactory worker blocked." },
@@ -518,7 +521,7 @@ async function baseResponse(method: string, path: string, _body: unknown, option
   if (method === "GET" && path === "/repos/marius-patrik/agent-darkfactory/issues?state=open&per_page=100&page=2") {
     return { handled: true, value: [] };
   }
-  const exampleCommentsMatch = path.match(/^\/repos\/marius-patrik\/example\/issues\/(\d+)\/comments\?per_page=100$/);
+  const exampleCommentsMatch = path.match(/^\/repos\/marius-patrik\/example\/issues\/(\d+)\/comments\?per_page=100&page=\d+$/);
   if (method === "GET" && exampleCommentsMatch) {
     return { handled: true, value: [] };
   }

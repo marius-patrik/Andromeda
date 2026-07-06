@@ -782,12 +782,17 @@ function countWorkerBlockedComments(body) {
 
 async function countBlockedCommentsFromHistory(gh, repository, issueNumber, warn) {
   try {
-    const comments = await gh.request(
-      "GET",
-      `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100`
-    );
-    if (!Array.isArray(comments)) return 0;
-    return comments.reduce((count, comment) => count + countWorkerBlockedComments(String(comment.body || "")), 0);
+    let total = 0;
+    for (let page = 1; page <= 20; page += 1) {
+      const comments = await gh.request(
+        "GET",
+        `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100&page=${page}`
+      );
+      if (!Array.isArray(comments) || comments.length === 0) break;
+      total += comments.reduce((count, comment) => count + countWorkerBlockedComments(String(comment.body || "")), 0);
+      if (comments.length < 100) break;
+    }
+    return total;
   } catch (error) {
     if (error.status === 403 || error.status === 404) {
       warn(`DarkFactory could not read issue history for ${repoName(repository)}#${issueNumber}: ${error.message || String(error)}`);
