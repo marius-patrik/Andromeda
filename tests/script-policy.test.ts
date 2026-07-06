@@ -1366,8 +1366,8 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /repository:\s+marius-patrik\/agent-darkfactory/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'[\s\S]+github\.event_name == 'schedule'/);
-  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'[\s\S]+github\.event_name == 'issues'/);
-  assert.match(workflow, /github\.repository == 'marius-patrik\/agent-darkfactory'[\s\S]+github\.event_name == 'issue_comment'/);
+  assert.doesNotMatch(workflow, /^\s+issues:\s*$/m);
+  assert.doesNotMatch(workflow, /^\s+issue_comment:\s*$/m);
   assert.doesNotMatch(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issues'/);
   assert.doesNotMatch(workflow, /github\.repository_owner == 'marius-patrik'[\s\S]+github\.event_name == 'issue_comment'/);
   assert.match(workflow, /permission-actions:\s+write/);
@@ -1376,17 +1376,45 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.match(workflow, /permission-issues:\s+write/);
   assert.match(workflow, /DARK_FACTORY_TOKEN: \$\{\{ steps\.app-token\.outputs\.token \}\}/);
   assert.match(workflow, /DF_CONTROL_REPO: marius-patrik\/agent-darkfactory/);
-  assert.match(workflow, /^\s+issues:\s*$/m);
-  assert.match(workflow, /^\s+issue_comment:\s*$/m);
-  assert.match(workflow, /github\.event\.label\.name == 'df:ready'/);
-  assert.match(workflow, /contains\(github\.event\.comment\.body, '\/df run'\)/);
-  assert.match(workflow, /github\.event\.comment\.author_association == 'OWNER'/);
+  assert.match(workflow, /repo:\s*\n\s+description: Optional managed repository/);
+  assert.match(workflow, /issue_number:\s*\n\s+description: Optional managed issue number/);
+  assert.match(workflow, /source_event:\s*\n\s+description: Optional forwarded managed event name/);
+  assert.match(workflow, /DF_TARGET_REPO: \$\{\{ inputs\.repo \}\}/);
+  assert.match(workflow, /DF_TARGET_ISSUE_NUMBER: \$\{\{ inputs\.issue_number \}\}/);
+  assert.match(workflow, /DF_SOURCE_EVENT: \$\{\{ inputs\.source_event \}\}/);
   assert.match(workflow, /^\s+workflow_run:\s*$/m);
   assert.match(workflow, /workflows:\s*\n\s+-\s+DarkFactory Plan\s*\n\s+-\s+DarkFactory Work\s*\n\s+-\s+DarkFactory Follow Through/);
   assert.match(workflow, /types:\s*\n\s+-\s+completed/);
   assert.match(workflow, /github\.event_name == 'workflow_run'/);
   assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'main'/);
   assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
+});
+
+test("df-event-forward workflow safely dispatches managed events to control", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/df-event-forward.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /^\s+issues:\s*$/m);
+  assert.match(workflow, /^\s+issue_comment:\s*$/m);
+  assert.match(workflow, /permissions:\s*\{\}/);
+  assert.match(workflow, /github\.event\.label\.name == 'df:ready'/);
+  assert.match(workflow, /github\.event\.comment\.body == '\/df run'/);
+  assert.match(workflow, /startsWith\(github\.event\.comment\.body, '\/df run '\)/);
+  assert.match(workflow, /github\.event\.comment\.author_association == 'OWNER'/);
+  assert.match(workflow, /github\.event\.comment\.author_association == 'MEMBER'/);
+  assert.match(workflow, /github\.event\.comment\.author_association == 'COLLABORATOR'/);
+  assert.match(workflow, /actions\/create-github-app-token@v2/);
+  assert.match(workflow, /repositories:\s+agent-darkfactory/);
+  assert.match(workflow, /permission-actions:\s+write/);
+  assert.doesNotMatch(workflow, /permission-contents:\s+write/);
+  assert.doesNotMatch(workflow, /permission-issues:\s+write/);
+  assert.doesNotMatch(workflow, /actions\/checkout/);
+  assert.doesNotMatch(workflow, /\.github\/scripts|npm\s|node\s/);
+  assert.match(workflow, /createWorkflowDispatch/);
+  assert.match(workflow, /workflow_id: "df-orchestrate\.yml"/);
+  assert.match(workflow, /ref: "main"/);
+  assert.match(workflow, /repo: `\$\{context\.repo\.owner\}\/\$\{context\.repo\.repo\}`/);
+  assert.match(workflow, /issue_number: String\(context\.payload\.issue\.number\)/);
+  assert.match(workflow, /source_event: context\.eventName/);
 });
 
 test("df-orchestrate source requires the app token for cross-repo writes", async () => {
@@ -1404,6 +1432,7 @@ test("df-orchestrate script uses the active managed registry and dispatches via 
   assert.match(source, /const CONTROL_ROOT = path\.resolve/);
   assert.match(source, /listActiveManagedRepos\(gh, controlRepo, options\)/);
   assert.match(source, /parseEventRequest\(process\.env\.GITHUB_EVENT_PAYLOAD/);
+  assert.match(source, /parseWorkflowDispatchRequest\(\s*process\.env\.DF_TARGET_REPO/);
   assert.match(source, /readySlashRunIssue/);
   assert.match(source, /DarkFactory received `\/df run` and queued this issue with `df:ready`\./);
   assert.match(source, /\/repos\/\$\{repoName\(controlRepo\)\}\/actions\/workflows\/df-work\.yml\/dispatches/);

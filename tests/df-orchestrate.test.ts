@@ -745,6 +745,92 @@ test("parseEventRequest accepts df:ready label events for one issue", async () =
   });
 });
 
+test("parseWorkflowDispatchRequest scopes forwarded managed events", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { parseWorkflowDispatchRequest } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-dispatch-parse-test");
+
+  assert.deepEqual(parseWorkflowDispatchRequest("marius-patrik/example", "44", "issues", () => {}), {
+    repository: { owner: "marius-patrik", repo: "example" },
+    issueNumber: 44,
+    slashRun: false,
+    readyLabel: true
+  });
+  assert.deepEqual(parseWorkflowDispatchRequest("marius-patrik/example", "45", "issue_comment", () => {}), {
+    repository: { owner: "marius-patrik", repo: "example" },
+    issueNumber: 45,
+    slashRun: true,
+    readyLabel: false
+  });
+  assert.equal(parseWorkflowDispatchRequest("", "", "", () => {}), null);
+});
+
+test("orchestrator turns forwarded /df run dispatches into df:ready before dispatch", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-forwarded-slash-run-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const notFound = Object.assign(new Error("not found"), { status: 404 });
+
+  const gh = {
+    async graphql() {
+      return {
+        repository: {
+          pullRequests: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: []
+          }
+        }
+      };
+    },
+    async request(method: string, path: string, body?: unknown) {
+      calls.push({ method, path, body });
+
+      if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+      if (method === "PATCH" && path === "/repos/marius-patrik/example/labels/df%3Aready") return {};
+      if (method === "PATCH" && path === "/repos/marius-patrik/example/labels/df%3Arunning") return {};
+      if (method === "PATCH" && path === "/repos/marius-patrik/example/labels/df%3Ablocked") return {};
+      if (method === "PATCH" && path === "/repos/marius-patrik/example/labels/df%3Adone") return {};
+      if (method === "PATCH" && path.startsWith("/repos/marius-patrik/example/labels/df%3A")) return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/12/labels") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/12/comments") return {};
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
+        return [
+          { number: 12, title: "Run me", body: "", labels: [{ name: "df:ready" }] },
+          { number: 99, title: "Do not run me", body: "", labels: [{ name: "df:ready" }] }
+        ];
+      }
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
+      if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
+      if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") throw notFound;
+      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") throw notFound;
+      if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/12/labels/df%3Aready") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/agent-darkfactory/actions/workflows/df-work.yml/dispatches") return {};
+
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    registry: { repositories: { "marius-patrik/example": { state: "active" }, "marius-patrik/other": { state: "active" } } },
+    repositories: [
+      { full_name: "marius-patrik/example", archived: false, disabled: false },
+      { full_name: "marius-patrik/other", archived: false, disabled: false }
+    ],
+    trigger: "workflow_dispatch",
+    dispatchRequest: { repo: "marius-patrik/example", issue_number: "12", source_event: "issue_comment" },
+    writeLedger: false,
+    updateDashboard: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.dispatched, [{ repo: "marius-patrik/example", issue: 12, wave: "features", streams: ["default"] }]);
+  assert.equal(calls.some((call) => call.path.includes("/issues/99/")), false);
+  assert.equal(calls.some((call) => call.path.startsWith("/repos/marius-patrik/other/")), false);
+  assert.ok(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/12/comments"));
+});
+
 test("orchestrator treats untrusted /df run comments as no-op events", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-untrusted-slash-run-test");
