@@ -951,6 +951,23 @@ test("df-work no-ops instead of blocking when an open worker PR already exists",
   assert.match(source, /No new worker run is needed; follow-through will evaluate the existing PR/);
 });
 
+test("df-work blocks stale remote branches without open worker PRs", async () => {
+  const source = await readFile(new URL("../.github/scripts/df-work.mjs", import.meta.url), "utf8");
+
+  const openPrIndex = source.indexOf("const existingPullRequest = await findOpenWorkerPullRequestForIssue(gh, TARGET_REPO, TARGET_ISSUE_NUMBER)");
+  const remoteBranchIndex = source.indexOf("if (await remoteBranchExists(TARGET_REPO, branch))");
+
+  assert.notEqual(openPrIndex, -1);
+  assert.notEqual(remoteBranchIndex, -1);
+  assert.ok(openPrIndex < remoteBranchIndex);
+  assert.match(source, /action: "stale-worker-branch"/);
+  assert.match(source, /result: "blocked"/);
+  assert.match(source, /Stale worker branch exists without an open worker PR\. Owner\/manual recovery is required\./);
+  assert.match(source, /replaceIssueLabels\(TARGET_REPO, TARGET_ISSUE_NUMBER, \["df:blocked"\], \["df:ready", "df:running", "df:done"\]\)/);
+  assert.match(source, /no open worker PR was found/);
+  assert.doesNotMatch(source, /action: "remote-branch-exists"/);
+});
+
 test("df-sweep does not skip green worker PRs solely because the issue is blocked", async () => {
   const source = await readFile(new URL("../.github/scripts/df-sweep.mjs", import.meta.url), "utf8");
 

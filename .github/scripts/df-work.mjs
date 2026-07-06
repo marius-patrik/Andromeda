@@ -87,17 +87,6 @@ async function main() {
   }
   await ensureLabels(gh, TARGET_REPO, WORK_LABELS);
 
-  if (await remoteBranchExists(TARGET_REPO, branch)) {
-    ledger.status = "success";
-    ledger.actions.push({
-      action: "remote-branch-exists",
-      result: "noop",
-      branch
-    });
-    console.log(`DarkFactory worker skipped ${target} because remote branch ${branch} already exists.`);
-    return;
-  }
-
   const existingPullRequest = await findOpenWorkerPullRequestForIssue(gh, TARGET_REPO, TARGET_ISSUE_NUMBER);
   if (existingPullRequest) {
     ledger.status = "success";
@@ -121,6 +110,30 @@ async function main() {
         "No new worker run is needed; follow-through will evaluate the existing PR."
       ].join("\n")
     );
+    return;
+  }
+
+  if (await remoteBranchExists(TARGET_REPO, branch)) {
+    ledger.status = "blocked";
+    ledger.error = "Stale worker branch exists without an open worker PR. Owner/manual recovery is required.";
+    ledger.actions.push({
+      action: "stale-worker-branch",
+      result: "blocked",
+      branch
+    });
+    await replaceIssueLabels(TARGET_REPO, TARGET_ISSUE_NUMBER, ["df:blocked"], ["df:ready", "df:running", "df:done"]);
+    await createIssueComment(
+      TARGET_REPO,
+      TARGET_ISSUE_NUMBER,
+      [
+        `DarkFactory worker blocked for \`${target}\` because the remote branch already exists but no open worker PR was found.`,
+        "",
+        `Branch: \`${branch}\``,
+        "",
+        "Owner/manual recovery is required."
+      ].join("\n")
+    );
+    await writeLedger(ledger);
     return;
   }
 
