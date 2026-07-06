@@ -33,11 +33,11 @@ jobs:
         (
           github.event_name == 'schedule' ||
           github.event_name == 'workflow_dispatch' ||
-          (
-            github.event_name == 'workflow_run' &&
-            github.event.workflow_run.head_branch == 'main' &&
-            github.event.workflow_run.conclusion == 'success'
-          )
+            (
+              github.event_name == 'workflow_run' &&
+              github.event.workflow_run.head_branch == 'dev' &&
+              github.event.workflow_run.conclusion == 'success'
+            )
         )
       }}
     permissions:
@@ -59,12 +59,12 @@ jobs:
 
           # Scheduled, workflow_dispatch, and workflow_run events reliably set GITHUB_REF; the
           # immutable branch ref is the trusted gate before minting the app token.
-          if [[ "${GITHUB_REF:-}" != "refs/heads/main" ]]; then
-            echo "::error::DarkFactory privileged follow-through can only run from refs/heads/main."
+          if [[ "${GITHUB_REF:-}" != "refs/heads/dev" ]]; then
+            echo "::error::DarkFactory privileged follow-through can only run from refs/heads/dev."
             exit 1
           fi
 
-          if [[ "${GITHUB_REF_TYPE:-}" == "branch" && "${GITHUB_REF_NAME:-}" != "main" ]]; then
+          if [[ "${GITHUB_REF_TYPE:-}" == "branch" && "${GITHUB_REF_NAME:-}" != "dev" ]]; then
             echo "::error::DarkFactory privileged follow-through branch mismatch."
             exit 1
           fi

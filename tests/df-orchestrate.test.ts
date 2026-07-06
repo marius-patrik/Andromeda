@@ -75,7 +75,7 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
   assert.ok(calls.some((call) => call.method === "DELETE" && call.path === "/repos/marius-patrik/example/issues/42/labels/df%3Aready"));
   assert.deepEqual(
     calls.find((call) => call.method === "POST" && call.path.endsWith("/actions/workflows/df-work.yml/dispatches"))?.body,
-    { ref: "main", inputs: { repo: "marius-patrik/example", issue_number: "42" } }
+    { ref: "dev", inputs: { repo: "marius-patrik/example", issue_number: "42" } }
   );
 });
 
@@ -262,6 +262,87 @@ test("orchestration plan applies wave gates and cross-repo concurrency caps", as
       ["marius-patrik/pkg-c", "hygiene", "features"]
     ]
   );
+});
+
+test("orchestration plan respects cross-repo blocked-by references", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { buildOrchestrationPlan } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-cross-repo-blockers-test");
+
+  const policy = {
+    concurrency: { global: 3, perRepository: 2, perStream: 3 },
+    waves: [{ name: "features", streams: ["default"] }],
+    dashboard: { enabled: true }
+  };
+  const plan = buildOrchestrationPlan([
+    {
+      repository: { owner: "marius-patrik", repo: "pkg-a" },
+      openIssues: [
+        { number: 1, title: "Blocker", body: "", labels: [{ name: "roadmap" }] }
+      ]
+    },
+    {
+      repository: { owner: "marius-patrik", repo: "pkg-b" },
+      openIssues: [
+        { number: 2, title: "Blocked", body: "Blocked-by: marius-patrik/pkg-a#1", labels: [{ name: "df:ready" }] },
+        { number: 3, title: "Unblocked", body: "Blocked-by: marius-patrik/pkg-a#99", labels: [{ name: "df:ready" }] }
+      ]
+    }
+  ], policy);
+
+  assert.deepEqual(
+    plan.candidates.map((candidate: { repository: { repo: string }; issue: { number: number } }) => [
+      candidate.repository.repo,
+      candidate.issue.number
+    ]),
+    [["pkg-b", 3]]
+  );
+});
+
+test("orchestrator escalates unparseable owner blockers as df:ask-owner", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { ASK_OWNER_MARKER, orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-ask-owner-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+
+  const gh = {
+    async request(method: string, path: string, body?: unknown) {
+      calls.push({ method, path, body });
+
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
+        return [{ number: 17, title: "Needs decision", body: "Blocked-by: waiting for owner", labels: [{ name: "df:ready" }] }];
+      }
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
+      if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/17/labels") return {};
+      if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/17/labels/df%3Aready") return {};
+      if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/17/labels/df%3Arunning") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/17/comments") return {};
+
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    registry: { repositories: { "marius-patrik/example": { state: "active" } } },
+    repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
+    writeLedger: false,
+    updateDashboard: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.dispatched, []);
+  assert.deepEqual(result.escalated, [{ repo: "marius-patrik/example", issue: 17, reason: "unparseable-blocked-by" }]);
+  assert.deepEqual(
+    calls.find((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/17/labels")?.body,
+    { labels: ["df:ask-owner"] }
+  );
+  assert.match(
+    calls.find((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/17/comments")?.body.body,
+    new RegExp(ASK_OWNER_MARKER)
+  );
+  assert.equal(calls.some((call) => call.path.endsWith("/actions/workflows/df-work.yml/dispatches")), false);
 });
 
 test("orchestrator updates the L6 dashboard issue after dispatch", async () => {

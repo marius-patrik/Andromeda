@@ -5,12 +5,12 @@
 | Area | State |
 | --- | --- |
 | Repository | `marius-patrik/agent-darkfactory` |
-| Branch | `main` |
-| Issue | n/a |
-| Purpose | GitHub App bot for repository automation |
+| Branch | `df/68-m3-orchestrator-loop-streams` |
+| Issue | `#68` - M3 orchestrator loop & streams |
+| Purpose | GitHub-native DarkFactory control plane for planning, worker dispatch, review/follow-through, and managed repository automation |
 | Version | `0.2.0` |
-| Managed setup | Workspace-backed `.agents/.global`, optional repo-specific `.agents/.project`, GitHub bootstrap, and Codex Review workflow PRs |
-| Release | `v0.2.0` shipped (M2 planning loop) |
+| Managed setup | Workspace-backed `.agents/.global`, optional repo-specific `.agents/.project`, GitHub bootstrap, Codex Review, planning, audit, orchestration, worker, follow-through, and fix-forward workflows |
+| Release | `v0.2.0` shipped (M2 planning loop); M3 orchestration work in progress on issue #68 |
 | CI | GitHub Actions `validate` job |
 
 ## Validation
@@ -28,3 +28,4 @@ Run before committing:
 - Configure `CODEX_AUTH_JSON` in every managed repository where Codex Review should approve pull requests.
 - Enable GitHub repository auto-merge on dogfood target repositories before expecting protected-branch `df:ready` issues to go label-to-merged.
 - Install the GitHub App on all repositories through GitHub's installation UI.
+- Keep privileged DarkFactory control workflows running from the default `dev` branch.
