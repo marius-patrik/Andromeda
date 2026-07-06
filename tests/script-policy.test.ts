@@ -579,9 +579,12 @@ test("df-audit workflow schedules trusted managed-repo audits", async () => {
   assert.match(workflow, /Validate manual audit target repository/);
   assert.match(workflow, /marius-patrik\/fabrica/);
   assert.match(workflow, /must be a marius-patrik repository/);
+  assert.match(workflow, /DF_MANUAL_AUDIT_REPO: \$\{\{ inputs\.repo \}\}/);
+  assert.match(workflow, /repo="\$\{DF_MANUAL_AUDIT_REPO\}"/);
+  assert.doesNotMatch(workflow, /repo="\$\{\{ inputs\.repo \}\}"/);
   assert.match(workflow, /path=\.github\/scripts\/df-audit\.mjs/);
   assert.match(workflow, /permission-actions:\s+read/);
-  assert.match(workflow, /permission-contents:\s+read/);
+  assert.match(workflow, /permission-contents:\s+write/);
   assert.match(workflow, /permission-issues:\s+write/);
   assert.doesNotMatch(workflow, /permission-pull-requests:\s+write/);
   assert.match(workflow, /DF_AUDIT_ALL/);
