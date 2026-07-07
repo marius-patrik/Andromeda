@@ -153,6 +153,7 @@ Managed files:
 - `.github/codex-review.Dockerfile`
 - `.github/codex-review.schema.json`
 - `.github/scripts/run-codex-review.sh`
+- `.github/scripts/validate-codex-review.mjs`
 - `.github/scripts/dark-factory-release-check.mjs`
 
 Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workflow uses control-repository app secrets and is kept only in `marius-patrik/agent-darkfactory`; `df:ready` labels and `/df run` comments in managed repositories are picked up by the next scheduled orchestrator tick or by workflow-run chaining.
