@@ -398,14 +398,22 @@ export async function getBranchProtection(gh, repository, branch) {
 export async function preflightMergePolicy(gh, repository, baseBranch, repo) {
   const branchProtection = await getBranchProtection(gh, repository, baseBranch);
   const autoMergeSupported = repo.allow_auto_merge === true;
+  const requiredContexts = branchProtection.configured
+    ? await getRequiredStatusCheckContexts(gh, repository, baseBranch)
+    : [];
 
-  if (!branchProtection.configured) {
+  if (!branchProtection.configured || requiredContexts.length === 0) {
+    const summary = branchProtection.configured
+      ? `branch protection on \`${baseBranch}\` has no required status checks; green-PR sweep will squash-merge directly after checks`
+      : `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly after checks`;
+
     return {
       blocked: false,
       useAutomerge: false,
       autoMergeSupported,
       branchProtection,
-      summary: `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly after checks`
+      requiredChecks: requiredContexts,
+      summary
     };
   }
 
@@ -415,6 +423,7 @@ export async function preflightMergePolicy(gh, repository, baseBranch, repo) {
       useAutomerge: true,
       autoMergeSupported,
       branchProtection,
+      requiredChecks: requiredContexts,
       summary: `auto-merge is available for \`${baseBranch}\`; GitHub automerge will be attempted`
     };
   }
@@ -422,14 +431,15 @@ export async function preflightMergePolicy(gh, repository, baseBranch, repo) {
   return {
     blocked: true,
     reason: [
-      `Target repository ${repoName(repository)} has branch protection configured on \`${baseBranch}\`,`,
+      `Target repository ${repoName(repository)} has branch protection with required status checks configured on \`${baseBranch}\`,`,
       "so DarkFactory policy requires GitHub auto-merge before dispatching a worker.",
       "Enable repository auto-merge or open managed setup work to enable it, then re-apply `df:ready`."
     ].join(" "),
     useAutomerge: false,
     autoMergeSupported,
     branchProtection,
-    summary: `branch protection is configured on \`${baseBranch}\`, but target repository auto-merge is disabled; worker dispatch is blocked`
+    requiredChecks: requiredContexts,
+    summary: `branch protection with required status checks is configured on \`${baseBranch}\`, but target repository auto-merge is disabled; worker dispatch is blocked`
   };
 }
 
@@ -721,6 +731,108 @@ export function sanitize(value, ...secrets) {
     out = out.split(Buffer.from(`x-access-token:${secret}`).toString("base64")).join("***");
   }
   return out;
+}
+
+export function listPackagePaths(treeEntries) {
+  const packageDirs = new Set();
+  for (const entry of treeEntries || []) {
+    if (entry?.type !== "blob" || typeof entry?.path !== "string" || !entry.path.endsWith("/package.json")) {
+      continue;
+    }
+    const dir = entry.path.slice(0, -"/package.json".length);
+    if (dir.includes("node_modules") || dir.includes("/.") || !dir) {
+      continue;
+    }
+    packageDirs.add(dir);
+  }
+  return [...packageDirs].sort();
+}
+
+export function scaffoldPackagePrd(repositoryName, options = {}) {
+  const { vision = "", packageName = "", isRoot = false } = options;
+  const title = isRoot ? repositoryName : packageName || repositoryName;
+  const firstParagraph = vision || "Define the product vision here, aligned with the agents-mono root product context.";
+
+  return [
+    `# ${title} PRD`,
+    "",
+    `> This file is the **source of truth** for ${title}. The backlog, branches, PRs, and releases are derived from it. Edits to this file are the primary way to steer the product.`,
+    "",
+    "## Vision",
+    "",
+    firstParagraph,
+    "",
+    "## Core loops",
+    "",
+    "- **L1 Sync**: Managed baseline files pushed to every installed repo.",
+    "- **L2 Review**: Review gate on every PR.",
+    "- **L3 Work**: Ready issues become branches, PRs, and merged code.",
+    "- **L4 Planning**: PRD.md edits automatically reconcile sequenced backlog issues.",
+    "",
+    "## Milestones",
+    "",
+    "- **M1 — Scaffold**: Establish this PRD and initial backlog via DarkFactory L4 planning.",
+    "",
+    "## Non-goals",
+    "",
+    "- Multi-tenant / marketplace distribution.",
+    "- A separate web dashboard — GitHub Projects/issues are the dashboard.",
+    "",
+    "## Operating rules",
+    "",
+    "- Issue = contract; acceptance criteria in the issue body are the definition of done.",
+    "- Never force-push, never bypass gates, never merge red."
+  ].join("\n");
+}
+
+export function extractReadmeFirstParagraph(readme) {
+  if (typeof readme !== "string" || !readme.trim()) {
+    return "";
+  }
+  const lines = readme.replace(/\r\n/g, "\n").split("\n");
+  const paragraphs = [];
+  let current = "";
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (current) {
+        paragraphs.push(current.trim());
+        current = "";
+      }
+      continue;
+    }
+    if (trimmed.startsWith("#")) {
+      continue;
+    }
+    current += ` ${trimmed}`;
+  }
+  if (current) {
+    paragraphs.push(current.trim());
+  }
+
+  const first = paragraphs[0] || "";
+  return first.length > 300 ? `${first.slice(0, 297)}...` : first;
+}
+
+export function prdScaffoldPullRequestBody(targetRepoName, paths) {
+  const files = paths.map((p) => `- \`${p}\``).join("\n");
+  return [
+    "<!-- dark-factory:prd-scaffold -->",
+    "## Summary",
+    "",
+    `DarkFactory fleet bootstrap found missing PRD files in \`${targetRepoName}\` and is opening the smallest scaffold PR so L4 planning can reconcile the backlog from PRD sections.`,
+    "",
+    "## Files",
+    "",
+    files,
+    "",
+    "## Notes",
+    "",
+    "- This scaffold is derived from the repository README and the agents-mono root product context. The owner should edit the PRD before merge to reflect the actual product.",
+    "- After merge, DarkFactory L4 planning will parse the PRD and file/update sequenced issues with stable `df-prd:` markers.",
+    "- Parked repositories are never touched."
+  ].join("\n");
 }
 
 function prdIssueTitle(name) {

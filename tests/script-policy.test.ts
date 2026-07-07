@@ -20,6 +20,7 @@ const {
   cleanupTempRoot,
   CODEX_REVIEW_REQUIRED_CONTEXT,
   extractClosingIssueNumbers,
+  extractReadmeFirstParagraph,
   findAuditMarker,
   getBranchProtection,
   getRequiredStatusCheckContexts,
@@ -28,12 +29,15 @@ const {
   isDarkFactoryWorkerPullRequest,
   isParkedRepo,
   listActiveManagedRepos,
+  listPackagePaths,
   parsePrdItems,
   plannedIssueLabelDiff,
   preflightMergePolicy,
   prdIssueBody,
+  prdScaffoldPullRequestBody,
   reconcileLabelDiff,
   repoName,
+  scaffoldPackagePrd,
   taskClassFromLabels,
   withCodexReviewRequiredContext
 } = dfLib;
@@ -87,6 +91,46 @@ test("parsePrdItems treats checked PRD checkboxes as a completion signal", () =>
   assert.equal(openItem.completed, false);
   assert.equal(doneItem.completed, true);
   assert.equal(doneItem.marker, openItem.marker);
+});
+
+test("listPackagePaths finds package.json directories excluding node_modules", () => {
+  const paths = listPackagePaths([
+    { type: "blob", path: "package.json" },
+    { type: "blob", path: "packages/core/package.json" },
+    { type: "blob", path: "packages/ui/package.json" },
+    { type: "blob", path: "node_modules/lib/package.json" },
+    { type: "blob", path: "packages/core/index.ts" }
+  ]);
+
+  assert.deepEqual(paths, ["packages/core", "packages/ui"]);
+});
+
+test("scaffoldPackagePrd generates a minimal PRD with vision and product name", () => {
+  const prd = scaffoldPackagePrd("marius-patrik/example", {
+    vision: "Example product vision.",
+    packageName: "core",
+    isRoot: false
+  });
+
+  assert.match(prd, /# core PRD/);
+  assert.match(prd, /Example product vision\./);
+  assert.match(prd, /## Core loops/);
+  assert.match(prd, /## Milestones/);
+});
+
+test("extractReadmeFirstParagraph skips headings and returns first text paragraph", () => {
+  const readme = "# Example\n\nFirst paragraph.\nMore first.\n\nSecond paragraph.";
+  assert.equal(extractReadmeFirstParagraph(readme), "First paragraph. More first.");
+  assert.equal(extractReadmeFirstParagraph(""), "");
+  assert.equal(extractReadmeFirstParagraph(null), "");
+});
+
+test("prdScaffoldPullRequestBody includes the scaffold marker and file list", () => {
+  const body = prdScaffoldPullRequestBody("marius-patrik/example", ["PRD.md", "packages/core/PRD.md"]);
+
+  assert.match(body, /<!-- dark-factory:prd-scaffold -->/);
+  assert.match(body, /- `PRD.md`/);
+  assert.match(body, /- `packages\/core\/PRD.md`/);
 });
 
 test("task class labels map to Codex reasoning effort", () => {
@@ -282,6 +326,26 @@ test("Codex Review verdict validator enforces the managed schema shape", () => {
       "property 'approved' must be boolean",
       "property 'blocking_findings[0]' must be string"
     ]
+  );
+});
+
+test("Codex Review verdict validator recognizes the infra failure marker against the managed schema", async () => {
+  const schema = JSON.parse(await readFile(new URL("../.github/codex-review.schema.json", import.meta.url), "utf8"));
+
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: false, _infra_failure: true, summary: "quota", blocking_findings: ["quota exhausted"], non_blocking_notes: [] },
+      schema
+    ),
+    []
+  );
+
+  assert.deepEqual(
+    validateReviewAgainstSchema(
+      { approved: false, _infra_failure: "yes", summary: "bad", blocking_findings: [], non_blocking_notes: [] },
+      schema
+    ),
+    ["property '_infra_failure' must be boolean"]
   );
 });
 
@@ -544,7 +608,8 @@ test("df-plan workflow reacts safely to PRD edits on the trusted default branch"
   assert.match(workflow, /marius-patrik\/fabrica/);
   assert.match(workflow, /must be a marius-patrik repository/);
   assert.match(workflow, /permission-issues:\s+write/);
-  assert.doesNotMatch(workflow, /permission-pull-requests:\s+write/);
+  assert.match(workflow, /permission-pull-requests:\s+write/);
+  assert.match(workflow, /permission-contents:\s+write/);
   assert.doesNotMatch(workflow, /DARK_FACTORY_CONTROL_REF/);
 });
 
@@ -583,7 +648,8 @@ test("df-audit script performs deterministic repo audits and files findings as i
   assert.match(source, /df:audit/);
   assert.match(source, /writeRunLedger/);
   assert.match(source, /codex_calls:\s*0/);
-  assert.match(source, /listActiveManagedRepos\(gh, CONTROL_REPO, \{ registry \}\)/);
+  assert.match(source, /listActiveManagedRepos\(gh, controlRepo, \{ registry \}\)/);
+  assert.match(source, /auditSubmoduleState/);
   assert.doesNotMatch(source, /\bcodex\s+exec\b|CODEX_AUTH_JSON|DF_WORKER_IMAGE|docker\s+run/);
 });
 
@@ -755,6 +821,30 @@ test("df-work merge-policy preflight blocks protected branches when target auto-
   assert.equal(policy.autoMergeSupported, false);
   assert.match(policy.summary, /auto-merge is disabled/);
   assert.match(policy.reason, /requires GitHub auto-merge before dispatching a worker/);
+});
+
+test("df-work merge-policy preflight uses direct sweep when branch protection has no required checks", async () => {
+  const repository = { owner: "marius-patrik", repo: "example" };
+  const policy = await preflightMergePolicy(
+    {
+      request: async (method: string, pathName: string) => {
+        if (method === "GET" && pathName.endsWith("/protection")) {
+          return { required_status_checks: null };
+        }
+        throw new Error(`unexpected mocked request: ${method} ${pathName}`);
+      }
+    },
+    repository,
+    "dev",
+    { allow_auto_merge: false }
+  );
+
+  assert.equal(policy.blocked, false);
+  assert.equal(policy.useAutomerge, false);
+  assert.equal(policy.autoMergeSupported, false);
+  assert.deepEqual(policy.requiredChecks, []);
+  assert.match(policy.summary, /no required status checks/);
+  assert.match(policy.summary, /green-PR sweep will squash-merge directly after checks/);
 });
 
 test("df-work blocks target auto-merge setup failures before clone or provider worker", async () => {
@@ -1496,6 +1586,73 @@ test("df-sweep merges green app-authored worker PRs even when the worker issue i
   assert.equal(result.sha, "merged-blocked-issue-sha");
   assert.ok(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/8/merge"));
   assert.equal(calls.some((call) => call.method === "POST" && call.pathName === "/repos/marius-patrik/active/issues/8/labels"), false);
+});
+
+test("df-sweep direct-merges protected branch with no required checks instead of arming automerge", async () => {
+  const repository = { owner: "marius-patrik", repo: "active" };
+  const pull = workerPull({
+    number: 50,
+    checkConclusion: "SUCCESS",
+    includeCodexReview: false,
+    author: "app/darkfactory-agent"
+  });
+  const calls: Array<{ method: string; pathName: string; body?: any }> = [];
+  const graphqlCalls: string[] = [];
+
+  configureSweepRuntime({
+    controlRepo: { owner: "marius-patrik", repo: "agent-darkfactory" },
+    dataRepo: "marius-patrik/darkfactory-data",
+    gh: {
+      graphql: async (query: string, variables: { number: number }) => {
+        graphqlCalls.push(query);
+        return {
+          repository: {
+            pullRequest: {
+              ...(variables.number === 50 ? pull : {}),
+              id: `PR_${variables.number}`,
+              mergeable: "MERGEABLE",
+              statusCheckRollup: {
+                contexts: {
+                  nodes: (variables.number === 50 ? pull : { statusCheckRollup: [] }).statusCheckRollup
+                }
+              }
+            }
+          }
+        };
+      },
+      request: async (method: string, pathName: string, body?: any) => {
+        calls.push({ method, pathName, body });
+        if (method === "GET" && pathName.endsWith("/protection")) {
+          return { required_status_checks: null };
+        }
+        if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+          const error: Error & { status?: number } = new Error("Missing managed config");
+          error.status = 404;
+          throw error;
+        }
+        if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/50") {
+          return { labels: [] };
+        }
+        if (method === "GET" && pathName === "/repos/marius-patrik/active/issues/50/comments?per_page=100") {
+          return [];
+        }
+        if (method === "PUT" && pathName === "/repos/marius-patrik/active/pulls/50/merge") {
+          return { sha: "direct-merged-protected-no-checks-sha" };
+        }
+        if (method === "POST" && pathName === "/repos/marius-patrik/active/issues/50/comments") return {};
+        if (method === "PATCH" && pathName === "/repos/marius-patrik/active/issues/50") return {};
+        throw new Error(`unexpected mocked request: ${method} ${pathName}`);
+      }
+    }
+  });
+
+  const result = await considerSweepPullRequest(repository, pull);
+
+  assert.equal(result.action, "merge");
+  assert.equal(result.base, "dev");
+  assert.equal(result.sha, "direct-merged-protected-no-checks-sha");
+  assert.ok(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/50/merge"));
+  assert.equal(graphqlCalls.some((query) => query.includes("enablePullRequestAutoMerge")), false);
 });
 
 test("df-orchestrate workflow validates trusted refs before privileged tokens", async () => {
