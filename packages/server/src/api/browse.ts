@@ -1,42 +1,55 @@
-import type { FastifyInstance } from "fastify";
+import express, { type Router } from "express";
 import { BundleError, type KnowledgeBase } from "@okf-agent/core";
 import { availableProviders, loadProviderConfig } from "@okf-agent/core";
 
 /** Deterministic browse API — no LLM involved, browsing never costs tokens. */
-export function registerBrowseRoutes(app: FastifyInstance, kb: KnowledgeBase): void {
-  app.get("/api/tree", async () => kb.listTree());
+export function browseRouter(kb: KnowledgeBase): Router {
+  const router = express.Router();
 
-  app.get<{ Querystring: { path: string } }>("/api/concept", async (request, reply) => {
+  router.get("/tree", async (_req, res) => {
+    res.json(await kb.listTree());
+  });
+
+  router.get("/concept", async (req, res) => {
+    const path = String(req.query.path ?? "");
     try {
-      return await kb.readConcept(request.query.path);
+      res.json(await kb.readConcept(path));
     } catch (err) {
       if (err instanceof BundleError) {
-        return reply.status(err.code === "NOT_FOUND" ? 404 : 400).send({ error: err.message });
+        res.status(err.code === "NOT_FOUND" ? 404 : 400).json({ error: err.message });
+        return;
       }
       throw err;
     }
   });
 
-  app.get<{ Querystring: { q?: string; type?: string; tag?: string } }>(
-    "/api/search",
-    async (request) => {
-      const { q = "", type, tag } = request.query;
-      return kb.search(q, { type, tags: tag ? [tag] : undefined });
-    }
-  );
+  router.get("/search", async (req, res) => {
+    const q = String(req.query.q ?? "");
+    const type = req.query.type ? String(req.query.type) : undefined;
+    const tag = req.query.tag ? String(req.query.tag) : undefined;
+    res.json(await kb.search(q, { type, tags: tag ? [tag] : undefined }));
+  });
 
-  app.get("/api/log", async () => kb.readLog());
+  router.get("/log", async (_req, res) => {
+    res.json(await kb.readLog());
+  });
 
-  app.get("/api/validate", async () => kb.validate());
+  router.get("/validate", async (_req, res) => {
+    res.json(await kb.validate());
+  });
 
-  app.get("/api/types", async () => kb.listTypes());
+  router.get("/types", async (_req, res) => {
+    res.json(await kb.listTypes());
+  });
 
-  app.get("/api/config", async () => {
+  router.get("/config", (_req, res) => {
     const config = loadProviderConfig();
-    return {
+    res.json({
       providers: availableProviders(),
       defaultProvider: config.provider,
       defaultModel: config.model,
-    };
+    });
   });
+
+  return router;
 }

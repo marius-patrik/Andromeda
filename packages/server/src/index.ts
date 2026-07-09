@@ -1,13 +1,12 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import Fastify from "fastify";
-import cors from "@fastify/cors";
-import fastifyStatic from "@fastify/static";
+import express from "express";
+import cors from "cors";
 import { KnowledgeBase } from "@okf-agent/core";
-import { registerMcpHttp } from "./mcp/http.js";
-import { registerBrowseRoutes } from "./api/browse.js";
-import { registerChatRoute } from "./api/chat.js";
+import { mcpRouter } from "./mcp/http.js";
+import { browseRouter } from "./api/browse.js";
+import { chatRouter } from "./api/chat.js";
 
 const bundleRoot = process.env.BUNDLE_ROOT;
 if (!bundleRoot) {
@@ -19,28 +18,41 @@ const kb = new KnowledgeBase(bundleRoot, {
   gitAutocommit: process.env.GIT_AUTOCOMMIT === "true",
 });
 
-const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
-await app.register(cors, { origin: true });
+const app = express();
 
-registerBrowseRoutes(app, kb);
-registerChatRoute(app, kb);
-registerMcpHttp(app, kb);
-
-// Serve the built web UI in production (single container).
-const webDist = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../web/dist"
+// Reflect the request origin; expose Mcp-Session-Id so browser MCP clients can
+// read it back off the initialize response.
+app.use(
+  cors({
+    origin: true,
+    exposedHeaders: ["Mcp-Session-Id"],
+    allowedHeaders: [
+      "Content-Type",
+      "Accept",
+      "Authorization",
+      "Mcp-Session-Id",
+      "Mcp-Protocol-Version",
+      "Last-Event-ID",
+    ],
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+  })
 );
+app.use(express.json({ limit: "4mb" }));
+
+app.use("/mcp", mcpRouter(kb));
+app.use("/api", browseRouter(kb));
+app.use("/api", chatRouter(kb));
+
+// Serve the built web UI in production (single container), with SPA fallback.
+const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
 if (existsSync(webDist)) {
-  await app.register(fastifyStatic, { root: webDist, prefix: "/" });
-  app.setNotFoundHandler((request, reply) => {
-    if (request.url.startsWith("/api") || request.url.startsWith("/mcp")) {
-      return reply.status(404).send({ error: "not found" });
-    }
-    return reply.sendFile("index.html"); // SPA fallback
+  app.use(express.static(webDist));
+  app.get(/^(?!\/(api|mcp)).*/, (_req, res) => {
+    res.sendFile(path.join(webDist, "index.html"));
   });
 }
 
 const port = Number(process.env.PORT ?? 3800);
-await app.listen({ port, host: "0.0.0.0" });
-console.log(`okf-agent serving bundle ${bundleRoot} on :${port} (web + /api + /mcp)`);
+app.listen(port, "0.0.0.0", () => {
+  console.log(`okf-agent serving bundle ${bundleRoot} on :${port} (web + /api + /mcp)`);
+});
