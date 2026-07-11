@@ -1,42 +1,14 @@
 {
   "schemaVersion": 1,
-  "description": "DarkFactory managed repository lifecycle registry. Only active repositories are eligible for plan, orchestrate, and follow-through sweeps.",
+  "description": "DarkFactory repository registry for the single Agent OS product and its canonical data authority.",
   "repositories": {
-    "marius-patrik/agent-darkfactory": {
-      "state": "active",
-      "note": "DarkFactory control repository."
-    },
-    "marius-patrik/dream": {
-      "state": "active",
-      "note": "Dogfood target from the DarkFactory PRD."
-    },
-    "marius-patrik/agents-plugin": {
-      "state": "active",
-      "note": "Dogfood target from the DarkFactory PRD."
-    },
     "marius-patrik/agents-manager": {
       "state": "active",
-      "note": "Canonical Agent OS source repository and product integration root."
+      "note": "Canonical Agent OS source, control repository, and product integration root."
     },
     "marius-patrik/agents-data": {
       "state": "active",
       "note": "Canonical private Agent OS data and managed repository policy source."
-    },
-    "marius-patrik/skyblock-agent": {
-      "state": "parked",
-      "note": "Owner-directed product repository exclusion."
-    },
-    "marius-patrik/fabrica": {
-      "state": "parked",
-      "note": "Owner-directed product repository exclusion."
-    },
-    "marius-patrik/singularity": {
-      "state": "parked",
-      "note": "Owner-directed exclusion."
-    },
-    "marius-patrik/life-support": {
-      "state": "parked",
-      "note": "Owner-directed exclusion."
     }
   }
 }

@@ -40,18 +40,6 @@ export interface ManagedRepositoryRef {
 const MANAGED_COMMON_DIRS = [".github", ".darkfactory"] as const;
 const MANAGED_COMMON_FILES = [AGENTS_ENTRYPOINT_PATH] as const;
 const EXCLUDED_MANAGED_FILE_PATHS = new Set([".github/workflows/df-event-forward.yml"]);
-const PACKAGE_MANAGED_FILES = [
-  DARK_FACTORY_PLAN_WORKFLOW_PATH,
-  DARK_FACTORY_FOLLOW_THROUGH_WORKFLOW_PATH,
-  DARK_FACTORY_ORCHESTRATE_WORKFLOW_PATH,
-  DARK_FACTORY_WORKFLOW_PATH,
-  DARK_FACTORY_SCRIPT_LIB_PATH,
-  DARK_FACTORY_ENFORCEMENT_SCRIPT_PATH,
-  DARK_FACTORY_PLAN_SCRIPT_PATH,
-  DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH,
-  DARK_FACTORY_SWEEP_SCRIPT_PATH,
-  DARK_FACTORY_WORK_SCRIPT_PATH
-] as const;
 export function readManagedFiles(repository?: ManagedRepositoryRef): ManagedFile[] {
   const managedRoot = resolveManagedContentRoot();
   const files = new Map<string, ManagedFile>();
@@ -69,7 +57,8 @@ export function readManagedFiles(repository?: ManagedRepositoryRef): ManagedFile
     }
   }
 
-  for (const filePath of PACKAGE_MANAGED_FILES) {
+  const managedConfig = readManagedConfig([...files.values()]);
+  for (const filePath of managedConfig.packageFiles) {
     if (files.has(filePath)) {
       throw new Error(`Managed data duplicates package-owned payload: ${filePath}`);
     }
@@ -99,11 +88,7 @@ export function readManagedFiles(repository?: ManagedRepositoryRef): ManagedFile
     files.delete(filePath);
   }
 
-  const requiredPaths = requiredManagedFilePaths([...files.values()]);
-  const undeclaredPackagePayloads = PACKAGE_MANAGED_FILES.filter((filePath) => !requiredPaths.includes(filePath));
-  if (undeclaredPackagePayloads.length > 0) {
-    throw new Error(`Managed config omits package-owned payloads: ${undeclaredPackagePayloads.join(", ")}`);
-  }
+  const requiredPaths = managedConfig.requiredFiles;
   const missingRequired = requiredPaths.filter((filePath) => !files.has(filePath));
   if (missingRequired.length > 0) {
     throw new Error(`Managed file source is missing required payloads: ${missingRequired.join(", ")}`);
@@ -120,7 +105,11 @@ export function requiredManagedFilePaths(files?: readonly ManagedFile[]): string
   return readManagedConfig(files).requiredFiles;
 }
 
-function readManagedConfig(files?: readonly ManagedFile[]): { requiredFiles: string[]; removedFiles: string[] } {
+function readManagedConfig(files?: readonly ManagedFile[]): {
+  packageFiles: string[];
+  requiredFiles: string[];
+  removedFiles: string[];
+} {
   const config = files?.find((file) => file.path === DARK_FACTORY_MANAGED_CONFIG_PATH)
     ?? readManagedFile(resolveProjectRoot(), DARK_FACTORY_MANAGED_CONFIG_PATH);
   if (!config) throw new Error(`Managed file source is missing ${DARK_FACTORY_MANAGED_CONFIG_PATH}`);
@@ -134,15 +123,23 @@ function readManagedConfig(files?: readonly ManagedFile[]): { requiredFiles: str
   if (
     !isRecord(parsed) ||
     parsed.schemaVersion !== 1 ||
+    !isPathArray(parsed.packageFiles) ||
     !isPathArray(parsed.requiredFiles) ||
     !isPathArray(parsed.removedFiles)
   ) {
     throw new Error(
-      `${DARK_FACTORY_MANAGED_CONFIG_PATH} must define schemaVersion 1 with requiredFiles and removedFiles path arrays`
+      `${DARK_FACTORY_MANAGED_CONFIG_PATH} must define schemaVersion 1 with packageFiles, requiredFiles, and removedFiles path arrays`
     );
   }
+  const packageFiles = [...new Set(parsed.packageFiles)];
+  const requiredFiles = [...new Set(parsed.requiredFiles)];
+  const undeclaredPackagePayloads = packageFiles.filter((filePath) => !requiredFiles.includes(filePath));
+  if (undeclaredPackagePayloads.length > 0) {
+    throw new Error(`Managed config packageFiles must also be requiredFiles: ${undeclaredPackagePayloads.join(", ")}`);
+  }
   return {
-    requiredFiles: [...new Set(parsed.requiredFiles)],
+    packageFiles,
+    requiredFiles,
     removedFiles: [...new Set(parsed.removedFiles)]
   };
 }

@@ -1,7 +1,20 @@
 {
   "schemaVersion": 1,
   "managedBy": "darkfactory",
+  "dataRepo": "marius-patrik/agents-data",
   "requiredSecrets": ["CODEX_AUTH_JSON"],
+  "packageFiles": [
+    ".github/workflows/df-plan.yml",
+    ".github/workflows/df-follow-through.yml",
+    ".github/workflows/df-orchestrate.yml",
+    ".github/workflows/df-work.yml",
+    ".github/scripts/df-lib.mjs",
+    ".github/scripts/df-enforcement.mjs",
+    ".github/scripts/df-plan.mjs",
+    ".github/scripts/df-orchestrate.mjs",
+    ".github/scripts/df-sweep.mjs",
+    ".github/scripts/df-work.mjs"
+  ],
   "requiredFiles": [
     "AGENTS.md",
     ".darkfactory/branching-policy.md",

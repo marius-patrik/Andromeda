@@ -20,6 +20,9 @@ function readConfig() {
   if (config.schemaVersion !== 1) {
     throw new Error("Managed repository config must use schemaVersion 1.");
   }
+  if (!Array.isArray(config.packageFiles) || !config.packageFiles.every(isNonEmptyString)) {
+    throw new Error("Managed repository config packageFiles must be an array of paths.");
+  }
   if (!Array.isArray(config.requiredFiles) || !config.requiredFiles.every(isNonEmptyString)) {
     throw new Error("Managed repository config requiredFiles must be an array of paths.");
   }
@@ -35,6 +38,10 @@ function isNonEmptyString(value) {
 
 try {
   const config = readConfig();
+  const requiredFiles = new Set(config.requiredFiles);
+  for (const file of config.packageFiles) {
+    if (!requiredFiles.has(file)) fail("Package-owned managed file is not declared as required.", file);
+  }
   for (const file of config.requiredFiles) {
     if (!existsSync(file)) fail("Missing DarkFactory managed file.", file);
   }

@@ -53,6 +53,7 @@ async function seedCanonicalManagedSource(root: string): Promise<{ managedRoot: 
     const content = filePath === DARK_FACTORY_MANAGED_CONFIG_PATH
       ? `${JSON.stringify({
         schemaVersion: 1,
+        packageFiles: [...PACKAGE_MANAGED_PATHS],
         requiredFiles,
         removedFiles: [
           ".darkfactory/release-conventions.md",

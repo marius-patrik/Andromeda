@@ -8,4 +8,4 @@ canonical Agent OS product state.
 - Component repositories do not define independent version, tag, or release authority.
 - State and data repositories may commit directly to `main` when their own policy permits it.
 
-This branching policy is tracked by `marius-patrik/agent-darkfactory#17`.
+This policy is owned by the canonical `marius-patrik/agents-manager` source repository.
