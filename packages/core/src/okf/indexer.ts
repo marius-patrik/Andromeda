@@ -20,7 +20,8 @@ export async function regenerateIndex(bundle: Bundle, dir = "/"): Promise<string
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      dirLines.push(`* [${entry.name}](${entry.name}/) - subdirectory`);
+      const summary = await summarizeDirectory(path.join(absDir, entry.name));
+      dirLines.push(`* [${entry.name}](${entry.name}/) - ${summary}`);
       continue;
     }
     if (!entry.name.endsWith(".md") || RESERVED_FILENAMES.has(entry.name)) continue;
@@ -43,7 +44,10 @@ export async function regenerateIndex(bundle: Bundle, dir = "/"): Promise<string
   if (isRoot) sections.push(`---\nokf_version: "0.1"\n---\n`);
   sections.push(`# ${capitalize(dirName)}\n`);
   if (conceptLines.length > 0) sections.push(conceptLines.join("\n") + "\n");
-  if (dirLines.length > 0) sections.push(`## Subdirectories\n\n${dirLines.join("\n")}\n`);
+  if (dirLines.length > 0) {
+    const heading = isRoot ? "Memory Segments" : "Subdirectories";
+    sections.push(`## ${heading}\n\n${dirLines.join("\n")}\n`);
+  }
 
   const content = sections.join("\n");
   await fs.writeFile(path.join(absDir, "index.md"), content, "utf-8");
@@ -64,4 +68,52 @@ export async function regenerateIndexChain(bundle: Bundle, dir: string): Promise
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * One-line deterministic summary of a directory's contents for index listings:
+ * concept count, distinct types, and the first few titles — always derivable,
+ * always current, no LLM.
+ */
+async function summarizeDirectory(absDir: string): Promise<string> {
+  const titles: string[] = [];
+  const types = new Set<string>();
+  let count = 0;
+
+  const walk = async (dir: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.name.startsWith(".")) continue;
+      const child = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(child);
+      } else if (entry.name.endsWith(".md") && !RESERVED_FILENAMES.has(entry.name)) {
+        count++;
+        try {
+          const { frontmatter } = parseDoc(await fs.readFile(child, "utf-8"));
+          if (typeof frontmatter.type === "string" && frontmatter.type) types.add(frontmatter.type);
+          if (titles.length < 3) {
+            titles.push(
+              typeof frontmatter.title === "string" && frontmatter.title
+                ? frontmatter.title
+                : entry.name.replace(/\.md$/, "")
+            );
+          }
+        } catch {
+          if (titles.length < 3) titles.push(entry.name.replace(/\.md$/, ""));
+        }
+      }
+    }
+  };
+  await walk(absDir);
+
+  if (count === 0) return "empty";
+  const typeList = [...types].sort().join(", ");
+  const titleList = titles.join(", ") + (count > titles.length ? ", …" : "");
+  return `${count} concept${count === 1 ? "" : "s"}${typeList ? ` (${typeList})` : ""}: ${titleList}`;
 }

@@ -87,7 +87,9 @@ describe("index regeneration (spec §6)", () => {
     );
     const rootIndex = await fs.readFile(path.join(root, "index.md"), "utf-8");
     expect(rootIndex).toContain('okf_version: "0.1"');
-    expect(rootIndex).toMatch(/\* \[tables\]\(tables\/\)/);
+    expect(rootIndex).toContain("## Memory Segments");
+    // Segment lines summarize contents: count, types, titles — not just "subdirectory".
+    expect(rootIndex).toContain("* [tables](tables/) - 1 concept (Table): Customers");
 
     const dirIndex = await fs.readFile(path.join(root, "tables/index.md"), "utf-8");
     expect(dirIndex).toContain("* [Customers](customers.md) - Customer records");
