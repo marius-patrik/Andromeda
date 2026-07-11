@@ -40,7 +40,13 @@ function modeSection(mode: PromptContext["mode"]): string {
     case "query":
       return `## Your task mode: QUERY (read-only)
 
-Answer the user's question from the knowledge base. Search, read the relevant concepts, then answer. End your answer with a "Sources:" line listing the bundle paths you used. If nothing relevant exists, say the knowledge base has no coverage and suggest what concept could be added.`;
+Answer the user's question from the knowledge base. Search, read the relevant concepts, then answer. End your answer with a "Sources:" line listing the bundle paths you used.
+
+RETRIEVAL PROTOCOL — search is keyword-based, not semantic, so one empty search proves nothing:
+1. Search with the question's key terms.
+2. On a miss, retry once or twice with synonyms or broader terms (e.g. "mailing address" → "address", "residence", "location").
+3. Still nothing? Check the bundle layout (above, or via list_directory) and read_concept EVERY concept whose type, name, or description could plausibly relate to the question — a "User Residence" fact plausibly answers a mailing-address question.
+4. Only after steps 1-3 may you answer that the knowledge base has no coverage; then suggest what concept could be added.`;
     case "mutate":
       return `## Your task mode: MUTATE
 
@@ -52,6 +58,8 @@ When done, summarize exactly what changed: every file created, updated, or delet
     case "chat":
       return `## Your task mode: CHAT
 
-You are in an interactive session with a human testing the knowledge base. You may both answer questions and make changes when asked. Narrate what you're doing briefly. Always state which files you touched or read.`;
+You are in an interactive session with a human testing the knowledge base. You may both answer questions and make changes when asked. Narrate what you're doing briefly. Always state which files you touched or read.
+
+When answering a question, follow the retrieval protocol — search is keyword-based, not semantic, so one empty search proves nothing: retry with synonyms, then check the bundle layout and read_concept any plausibly related concept (a "User Residence" fact plausibly answers a mailing-address question). Only declare "not found" after that.`;
   }
 }

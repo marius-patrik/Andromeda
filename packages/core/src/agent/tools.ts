@@ -29,13 +29,25 @@ export function buildReadTools(kb: KnowledgeBase) {
   return {
     search_knowledge: tool({
       description:
-        "Search the knowledge base by keywords, optionally filtered by concept type and/or tags. Returns ranked hits with paths and snippets.",
+        "Search the knowledge base by keywords, optionally filtered by concept type and/or tags. Returns ranked hits with paths and snippets. NOTE: matching is keyword-based, not semantic — a miss does NOT mean the knowledge is absent; it may be worded differently.",
       inputSchema: z.object({
         query: z.string().describe("Keywords to search for. May be empty when filtering by type/tags only."),
         type: z.string().optional().describe("Exact concept type filter"),
         tags: z.array(z.string()).optional().describe("Require ALL of these tags"),
       }),
-      execute: async ({ query, type, tags }) => kb.search(query, { type, tags }),
+      execute: async ({ query, type, tags }) => {
+        const hits = await kb.search(query, { type, tags });
+        if (hits.length > 0) return hits;
+        // Keyword miss ≠ knowledge absent. Put the map in the tool result so
+        // the model's next step is to read plausible concepts, not give up.
+        const tree = formatTree(await kb.listTree());
+        return {
+          hits: [],
+          notice:
+            "No keyword matches — but this search is literal, not semantic. The knowledge may exist under different wording. Before concluding it is absent: (1) retry with 1-2 synonyms or broader terms, (2) review the layout below and read_concept ANY concept whose type, name, or description could plausibly relate to the question.",
+          bundle_layout: tree,
+        };
+      },
     }),
     read_concept: tool({
       description: "Read one concept document in full: frontmatter and markdown body.",
