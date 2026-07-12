@@ -75,6 +75,22 @@ export async function writeTextAtomic(filePath: string, content: string, mode = 
 export async function writeTextExclusive(filePath: string, content: string, mode = 0o600): Promise<boolean> {
   const directory = path.dirname(filePath);
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") {
+    let destination;
+    try {
+      destination = await open(filePath, "wx", mode);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+    try {
+      await destination.writeFile(content, "utf8");
+      await destination.sync();
+    } finally {
+      await destination.close();
+    }
+    return true;
+  }
   const temporary = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   const handle = await open(temporary, "wx", mode);
   try {
@@ -90,14 +106,12 @@ export async function writeTextExclusive(filePath: string, content: string, mode
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
     }
-    if (process.platform !== "win32") {
-      await chmod(filePath, mode);
-      const directoryHandle = await open(directory, "r");
-      try {
-        await directoryHandle.sync();
-      } finally {
-        await directoryHandle.close();
-      }
+    await chmod(filePath, mode);
+    const directoryHandle = await open(directory, "r");
+    try {
+      await directoryHandle.sync();
+    } finally {
+      await directoryHandle.close();
     }
     return true;
   } finally {
@@ -106,10 +120,11 @@ export async function writeTextExclusive(filePath: string, content: string, mode
 }
 
 export async function writeTextIfChanged(filePath: string, content: string, mode = 0o600): Promise<boolean> {
-  if (await exists(filePath)) {
-    const current = await readFile(filePath, "utf8");
-    if (current === content) return false;
+  if (!(await exists(filePath))) {
+    if (await writeTextExclusive(filePath, content, mode)) return true;
   }
+  const current = await readFile(filePath, "utf8");
+  if (current === content) return false;
   await writeTextAtomic(filePath, content, mode);
   return true;
 }

@@ -23,8 +23,10 @@ export PATH="$HOME/.agents/bin:$PATH"
 The installer maintains one checkout at
 `$AGENTS_USER_HOME/marius-patrik/Andromeda` (or an explicit absolute
 `AGENTS_ROOT`), one state root at `$AGENTS_USER_HOME/.agents` (or an explicit
-absolute `AGENTS_HOME`), and one regular launcher file at
-`$AGENTS_HOME/bin/agents`. It does not use Bun global linking. Because
+absolute `AGENTS_HOME`), and one platform-native launcher file: `agents` on
+POSIX or `agents.cmd` on Windows. It does not use Bun global linking. Because
+the Windows launcher is a native batch entrypoint, PowerShell and `cmd.exe`
+do not depend on executing a Bash script without an extension. The
 `AGENTS_HOME/bin` is owned by Agent OS, installation removes every other entry
 from that directory; provider executables remain under
 `$AGENTS_HOME/clis/<provider>/bin` and are pinned when present.

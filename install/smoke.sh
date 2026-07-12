@@ -50,10 +50,16 @@ within_sandbox "$AGENTS_USER_HOME" || die "AGENTS_USER_HOME escapes the disposab
 within_sandbox "$AGENTS_ROOT" || die "AGENTS_ROOT escapes the disposable smoke sandbox"
 [ "$AGENTS_HOME" != "/Users/user/.agents" ] || die "refusing to smoke-test against live personal state"
 
-launcher="$AGENTS_HOME/bin/agents"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) launcher="$AGENTS_HOME/bin/agents.cmd" ;;
+  *) launcher="$AGENTS_HOME/bin/agents" ;;
+esac
 [ -f "$launcher" ] || die "agents launcher is missing: $launcher"
 [ ! -L "$launcher" ] || die "agents launcher must be a regular file, not a symlink"
-[ -x "$launcher" ] || die "agents launcher is not executable"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *) [ -x "$launcher" ] || die "agents launcher is not executable" ;;
+esac
 
 entry_count="$(find "$AGENTS_HOME/bin" -mindepth 1 -maxdepth 1 -print | wc -l | tr -d '[:space:]')"
 [ "$entry_count" = "1" ] || die "AGENTS_HOME/bin must contain only the agents launcher"

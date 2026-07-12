@@ -108,6 +108,30 @@ write_export() {
   printf "export %s='%s'\n" "$name" "$escaped"
 }
 
+is_windows() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+launcher_path() {
+  if is_windows; then
+    printf '%s/bin/agents.cmd\n' "$AGENTS_HOME"
+  else
+    printf '%s/bin/agents\n' "$AGENTS_HOME"
+  fi
+}
+
+write_cmd_set() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    *%*|*'!'*) die "Windows launcher paths may not contain percent or exclamation characters: $value" ;;
+  esac
+  printf 'set "%s=%s"\r\n' "$name" "$value"
+}
+
 native_path() {
   local value="$1"
   case "$(uname -s)" in
@@ -126,8 +150,10 @@ source_identity() {
 
 install_launcher() {
   local bin_dir="$AGENTS_HOME/bin"
-  local launcher="$bin_dir/agents"
+  local launcher
   local temporary bun_bin entry
+
+  launcher="$(launcher_path)"
 
   mkdir -p "$bin_dir"
   chmod 700 "$bin_dir"
@@ -144,48 +170,87 @@ install_launcher() {
     rm -rf -- "$launcher"
   fi
 
-  bun_bin="$(command -v bun)"
-  temporary="$(mktemp "$bin_dir/.agents-launcher.XXXXXX")"
-  {
-    echo '#!/usr/bin/env bash'
-    echo 'set -euo pipefail'
-    echo 'for name in $(compgen -e); do'
-    echo '  case "$name" in ROMMIE_*|AGENTOS_*) unset "$name" ;; esac'
-    echo 'done'
-    write_export HOME "$(native_path "$AGENTS_USER_HOME")"
-    write_export AGENTS_HOME "$(native_path "$AGENTS_HOME")"
-    write_export AGENTS_USER_HOME "$(native_path "$AGENTS_USER_HOME")"
-    write_export AGENTS_ROOT "$(native_path "$AGENTS_ROOT")"
-    write_export AGENTS_WORKSPACE "$(native_path "$AGENTS_HOME/runtime/workspaces")"
-    write_export AGENTS_CLIS "$(native_path "$AGENTS_HOME/clis")"
-    write_export AGENTS_HARNESSES "$(native_path "$AGENTS_HOME/harnesses")"
-    write_export AGENTS_SKILLS "$(native_path "$AGENTS_HOME/skills")"
-    write_export AGENTS_PLUGINS "$(native_path "$AGENTS_HOME/plugins")"
-    write_export AGENTS_HOOKS "$(native_path "$AGENTS_HOME/hooks")"
-    write_export AGENTS_TEMPLATES "$(native_path "$AGENTS_HOME/templates")"
-    write_export AGENTS_SECRETS "$(native_path "$AGENTS_HOME/secrets")"
-    write_export AGENTS_SESSIONS "$(native_path "$AGENTS_HOME/sessions")"
-    write_export AGENTS_IDENTITY "$(native_path "$AGENTS_HOME/identity")"
-    write_export AGENTS_MEMORY "$(native_path "$AGENTS_HOME/memory")"
-    write_export AGENTS_ORCHESTRATOR "$(native_path "$AGENTS_HOME/orchestrator")"
-    write_export AGENTS_CREDITS "$(native_path "$AGENTS_HOME/credits.json")"
-    write_export AGENTS_DATA_REPOS "$(native_path "$AGENTS_HOME/data-repos.json")"
-    write_export AGENTS_ENVIRONMENTS "$(native_path "$AGENTS_HOME/environments.json")"
-    write_export AGENTS_CONFIG "$(native_path "$AGENTS_HOME/config.json")"
-    write_export AGENTS_SYSTEM_DATA_ROOT "$(native_path "$AGENTS_ROOT/data/agent-os")"
-    write_export AGENTS_BUN "$(native_path "$bun_bin")"
-    write_export AGENTS_ENTRYPOINT "$(native_path "$AGENTS_ROOT/packages/core/src/manager/cli.ts")"
-    echo 'exec "$AGENTS_BUN" "$AGENTS_ENTRYPOINT" "$@"'
-  } >"$temporary"
+  if is_windows; then
+    command -v bun.exe >/dev/null 2>&1 || die "a native bun.exe is required for the Windows launcher"
+    bun_bin="$(command -v bun.exe)"
+    temporary="$(mktemp "$bin_dir/.agents-launcher.XXXXXX.cmd")"
+    {
+      printf '@echo off\r\n'
+      printf 'setlocal\r\n'
+      printf 'for /f "tokens=1 delims==" %%%%V in ('\''set ROMMIE_ 2^>nul'\'') do set "%%%%V="\r\n'
+      printf 'for /f "tokens=1 delims==" %%%%V in ('\''set AGENTOS_ 2^>nul'\'') do set "%%%%V="\r\n'
+      write_cmd_set HOME "$(native_path "$AGENTS_USER_HOME")"
+      write_cmd_set AGENTS_HOME "$(native_path "$AGENTS_HOME")"
+      write_cmd_set AGENTS_USER_HOME "$(native_path "$AGENTS_USER_HOME")"
+      write_cmd_set AGENTS_ROOT "$(native_path "$AGENTS_ROOT")"
+      write_cmd_set AGENTS_WORKSPACE "$(native_path "$AGENTS_HOME/runtime/workspaces")"
+      write_cmd_set AGENTS_CLIS "$(native_path "$AGENTS_HOME/clis")"
+      write_cmd_set AGENTS_HARNESSES "$(native_path "$AGENTS_HOME/harnesses")"
+      write_cmd_set AGENTS_SKILLS "$(native_path "$AGENTS_HOME/skills")"
+      write_cmd_set AGENTS_PLUGINS "$(native_path "$AGENTS_HOME/plugins")"
+      write_cmd_set AGENTS_HOOKS "$(native_path "$AGENTS_HOME/hooks")"
+      write_cmd_set AGENTS_TEMPLATES "$(native_path "$AGENTS_HOME/templates")"
+      write_cmd_set AGENTS_SECRETS "$(native_path "$AGENTS_HOME/secrets")"
+      write_cmd_set AGENTS_SESSIONS "$(native_path "$AGENTS_HOME/sessions")"
+      write_cmd_set AGENTS_IDENTITY "$(native_path "$AGENTS_HOME/identity")"
+      write_cmd_set AGENTS_MEMORY "$(native_path "$AGENTS_HOME/memory")"
+      write_cmd_set AGENTS_ORCHESTRATOR "$(native_path "$AGENTS_HOME/orchestrator")"
+      write_cmd_set AGENTS_CREDITS "$(native_path "$AGENTS_HOME/credits.json")"
+      write_cmd_set AGENTS_DATA_REPOS "$(native_path "$AGENTS_HOME/data-repos.json")"
+      write_cmd_set AGENTS_ENVIRONMENTS "$(native_path "$AGENTS_HOME/environments.json")"
+      write_cmd_set AGENTS_CONFIG "$(native_path "$AGENTS_HOME/config.json")"
+      write_cmd_set AGENTS_SYSTEM_DATA_ROOT "$(native_path "$AGENTS_ROOT/data/agent-os")"
+      write_cmd_set AGENTS_BUN "$(native_path "$bun_bin")"
+      write_cmd_set AGENTS_ENTRYPOINT "$(native_path "$AGENTS_ROOT/packages/core/src/manager/cli.ts")"
+      printf '"%%AGENTS_BUN%%" "%%AGENTS_ENTRYPOINT%%" %%*\r\n'
+      printf 'exit /b %%errorlevel%%\r\n'
+    } >"$temporary"
+  else
+    bun_bin="$(command -v bun)"
+    temporary="$(mktemp "$bin_dir/.agents-launcher.XXXXXX")"
+    {
+      echo '#!/usr/bin/env bash'
+      echo 'set -euo pipefail'
+      echo 'for name in $(compgen -e); do'
+      echo '  case "$name" in ROMMIE_*|AGENTOS_*) unset "$name" ;; esac'
+      echo 'done'
+      write_export HOME "$AGENTS_USER_HOME"
+      write_export AGENTS_HOME "$AGENTS_HOME"
+      write_export AGENTS_USER_HOME "$AGENTS_USER_HOME"
+      write_export AGENTS_ROOT "$AGENTS_ROOT"
+      write_export AGENTS_WORKSPACE "$AGENTS_HOME/runtime/workspaces"
+      write_export AGENTS_CLIS "$AGENTS_HOME/clis"
+      write_export AGENTS_HARNESSES "$AGENTS_HOME/harnesses"
+      write_export AGENTS_SKILLS "$AGENTS_HOME/skills"
+      write_export AGENTS_PLUGINS "$AGENTS_HOME/plugins"
+      write_export AGENTS_HOOKS "$AGENTS_HOME/hooks"
+      write_export AGENTS_TEMPLATES "$AGENTS_HOME/templates"
+      write_export AGENTS_SECRETS "$AGENTS_HOME/secrets"
+      write_export AGENTS_SESSIONS "$AGENTS_HOME/sessions"
+      write_export AGENTS_IDENTITY "$AGENTS_HOME/identity"
+      write_export AGENTS_MEMORY "$AGENTS_HOME/memory"
+      write_export AGENTS_ORCHESTRATOR "$AGENTS_HOME/orchestrator"
+      write_export AGENTS_CREDITS "$AGENTS_HOME/credits.json"
+      write_export AGENTS_DATA_REPOS "$AGENTS_HOME/data-repos.json"
+      write_export AGENTS_ENVIRONMENTS "$AGENTS_HOME/environments.json"
+      write_export AGENTS_CONFIG "$AGENTS_HOME/config.json"
+      write_export AGENTS_SYSTEM_DATA_ROOT "$AGENTS_ROOT/data/agent-os"
+      write_export AGENTS_BUN "$bun_bin"
+      write_export AGENTS_ENTRYPOINT "$AGENTS_ROOT/packages/core/src/manager/cli.ts"
+      echo 'exec "$AGENTS_BUN" "$AGENTS_ENTRYPOINT" "$@"'
+    } >"$temporary"
+  fi
   chmod 700 "$temporary"
   mv -f "$temporary" "$launcher"
 }
 
 install_default_capabilities() {
-  local launcher="$AGENTS_HOME/bin/agents"
+  local launcher
   local skill_root="$AGENTS_ROOT/packages/core/capabilities/skills"
   local identity_root="$AGENTS_ROOT/packages/core/capabilities/identity"
   local skill_path name
+
+  launcher="$(launcher_path)"
 
   [ -d "$skill_root" ] || die "bundled skill floor is missing: $skill_root"
   [ -d "$identity_root" ] || die "bundled identity is missing: $identity_root"
@@ -198,8 +263,10 @@ install_default_capabilities() {
 }
 
 pin_installed_providers() {
-  local launcher="$AGENTS_HOME/bin/agents"
+  local launcher
   local provider candidate
+
+  launcher="$(launcher_path)"
   for provider in codex claude kimi agy; do
     for candidate in "$AGENTS_HOME/clis/$provider/bin"/*; do
       [ -x "$candidate" ] || continue
@@ -220,13 +287,15 @@ main() {
   install_or_update_checkout
   install_launcher
 
-  "$AGENTS_HOME/bin/agents" state init
-  "$AGENTS_HOME/bin/agents" state record-install
+  local launcher
+  launcher="$(launcher_path)"
+  "$launcher" state init
+  "$launcher" state record-install
   install_default_capabilities
   pin_installed_providers
-  "$AGENTS_HOME/bin/agents" state doctor
+  "$launcher" state doctor
 
-  echo "Agent OS is ready: $AGENTS_HOME/bin/agents"
+  echo "Agent OS is ready: $launcher"
   echo "Add $AGENTS_HOME/bin to PATH to invoke agents by name."
 }
 

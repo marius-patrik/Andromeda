@@ -290,7 +290,7 @@ async function providerRegistryCheck(state: SharedState, tools: ToolStatus[]): P
     const registry = await readProviderRegistry(state);
     const installed = tools.filter(
       (tool): tool is ToolStatus & { id: ProviderId } =>
-        tool.id !== "agents" && (tool.location === "canonical" || tool.location === "split"),
+        tool.id !== "agents" && (tool.location === "canonical" || tool.location === "app-owned" || tool.location === "split"),
     );
     const failures: Array<{ id: ProviderId; issues: string[] }> = [];
     const verified: Array<{ id: ProviderId; version: string; executable: string }> = [];
@@ -434,9 +434,15 @@ async function registryIntegrityCheck(state: SharedState): Promise<StateDoctorCh
   }
 }
 
+export function launcherNameForPlatform(platform: NodeJS.Platform): string {
+  return platform === "win32" ? "agents.cmd" : "agents";
+}
+
 async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
   const binDirectory = path.join(state.stateDir, "bin");
-  const launcher = path.join(binDirectory, "agents");
+  const launcherName = launcherNameForPlatform(process.platform);
+  const launcher = path.join(binDirectory, launcherName);
+  const windows = process.platform === "win32";
   const issues: string[] = [];
   try {
     const directoryInfo = await lstat(binDirectory);
@@ -445,7 +451,9 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
       issues.push(`bin mode is ${modeString(directoryInfo.mode)}, expected 0o700`);
     }
     const entries = await readdir(binDirectory, { withFileTypes: true });
-    if (entries.length !== 1 || entries[0]?.name !== "agents") issues.push("bin must contain exactly one agents launcher");
+    if (entries.length !== 1 || entries[0]?.name !== launcherName) {
+      issues.push(`bin must contain exactly one ${launcherName} launcher`);
+    }
     const launcherInfo = await lstat(launcher);
     if (!launcherInfo.isFile() || launcherInfo.isSymbolicLink()) issues.push("agents launcher must be a physical file");
     if (process.platform !== "win32" && (launcherInfo.mode & 0o777) !== 0o700) {
@@ -460,13 +468,16 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
       ["AGENTS_WORKSPACE", state.workspaceDir],
       ["AGENTS_SYSTEM_DATA_ROOT", systemDataPath(state.root)],
     ] as const) {
-      const binding = `export ${name}=${shellQuote(value)}`;
+      const binding = windows ? `set "${name}=${value}"` : `export ${name}=${shellQuote(value)}`;
       if (!content.includes(binding)) {
-        issues.push(`agents launcher is missing canonical binding: export ${name}=${value}`);
+        issues.push(`agents launcher is missing canonical binding: ${name}=${value}`);
       }
     }
     const cliPath = path.join(state.root, "packages", "core", "src", "manager", "cli.ts");
-    if (!content.includes(`export AGENTS_ENTRYPOINT=${shellQuote(cliPath)}`)) {
+    const entrypointBinding = windows
+      ? `set "AGENTS_ENTRYPOINT=${cliPath}"`
+      : `export AGENTS_ENTRYPOINT=${shellQuote(cliPath)}`;
+    if (!content.includes(entrypointBinding)) {
       issues.push(`agents launcher is missing canonical binding: ${cliPath}`);
     }
     if (content.includes("export AGENTS_DATA=")) issues.push("agents launcher exports the removed AGENTS_DATA parent path");
@@ -534,6 +545,7 @@ export async function doctorState(state: SharedState): Promise<StateDoctorReport
   }
 
   const invalidToolRoots = tools.filter((tool) => tool.location === "split" || tool.location === "forbidden");
+  const appOwnedToolRoots = tools.filter((tool) => tool.location === "app-owned");
   const checks: StateDoctorCheck[] = [
     {
       id: "state_root",
@@ -552,9 +564,14 @@ export async function doctorState(state: SharedState): Promise<StateDoctorReport
       ok: invalidToolRoots.length === 0,
       message:
         invalidToolRoots.length === 0
-          ? "provider state exists only under the canonical root"
+          ? appOwnedToolRoots.length > 0
+            ? `provider authority is canonical; app-owned desktop roots coexist for ${appOwnedToolRoots.map((tool) => tool.id).join(", ")}`
+            : "provider state exists only under the canonical root"
           : `forbidden standalone or split provider state: ${invalidToolRoots.map((tool) => tool.id).join(", ")}`,
-      details: { failures: invalidToolRoots.map((tool) => tool.id) },
+      details: {
+        failures: invalidToolRoots.map((tool) => tool.id),
+        appOwned: appOwnedToolRoots.map((tool) => tool.id),
+      },
     },
     await providerRegistryCheck(state, tools),
     {

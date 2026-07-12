@@ -43,7 +43,14 @@ async function fakeDocker(root: string): Promise<{ dir: string; log: string; env
     await Bun.write(script, `#!/bin/sh\necho "$*" >> "${log}"\n`);
     await Bun.$`chmod +x ${script}`;
   }
-  return { dir, log, env: { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` } };
+  return {
+    dir,
+    log,
+    env: {
+      PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}`,
+      AGENTS_DOCKER_BIN: script,
+    },
+  };
 }
 
 async function runAgents(
@@ -208,6 +215,7 @@ describe("agents os CLI", () => {
       await Bun.write(dockerfile, "FROM scratch\n");
       await mkdir(path.join(root, "data", "agent-os"), { recursive: true });
       const build = await runAgents(root, ["os", "image", "build", "--image", "agents-os"], env);
+      if (build.code !== 0) throw new Error(build.stderr);
       expect(build.code).toBe(0);
       const doctor = await runAgents(root, ["os", "doctor"], env);
       expect(doctor.code).toBe(0);

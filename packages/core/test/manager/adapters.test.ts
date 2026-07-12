@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { commandInvocation } from "../../src/manager/process-command";
 import path from "node:path";
 import { chmod, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
@@ -6,6 +7,24 @@ import { adapterEnv, adapterHome, adapters, doctorAdapter, pinAdapter } from "..
 import { sharedState, sharedStateAt } from "../../src/manager/state";
 
 describe("CLI adapters", () => {
+  test("builds platform-safe command invocations", () => {
+    expect(commandInvocation("C:\\tools\\provider.cmd", ["--version"], {}, "win32")).toEqual([
+      "cmd.exe",
+      "/d",
+      "/s",
+      "/c",
+      "C:\\tools\\provider.cmd",
+      "--version",
+    ]);
+    expect(commandInvocation("C:\\tools\\provider.exe", ["--version"], {}, "win32")).toEqual([
+      "C:\\tools\\provider.exe",
+      "--version",
+    ]);
+    expect(commandInvocation("missing-provider", ["--version"], { PATH: "" }, "linux")).toEqual([
+      "missing-provider",
+      "--version",
+    ]);
+  });
   test("codex, claude, kimi, and agy expose rooted homes", () => {
     const state = sharedState(path.join("repo"));
 
