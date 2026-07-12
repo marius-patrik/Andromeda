@@ -13,6 +13,7 @@ import {
 } from "../../src/harness/session";
 import { doctorState } from "../../src/manager/state-doctor";
 import {
+  disableEventSync,
   enableEventSync,
   eventSyncStatus,
   exportEventBundle,
@@ -130,6 +131,9 @@ describe("encrypted cross-machine event exchange", () => {
       await expect(importEventBundle(target, bundle, { failAfter: 1 })).rejects.toThrow("simulated interrupted");
       expect(await eventSyncStatus(target)).toMatchObject({ committedImports: 0, preparedImports: 1 });
       expect((await doctorState(target)).checks.find((check) => check.id === "sync_safety")?.ok).toBe(false);
+      await disableEventSync(target);
+      expect((await doctorState(target)).checks.find((check) => check.id === "sync_safety")?.ok).toBe(false);
+      await enableEventSync(target);
       const recovered = await importEventBundle(target, bundle);
       expect(recovered.projectionHash).toBeTruthy();
       expect(await eventSyncStatus(target)).toMatchObject({ committedImports: 1, preparedImports: 0 });

@@ -285,17 +285,40 @@ async function syncSafetyCheck(state: SharedState): Promise<StateDoctorCheck> {
     }
   }
   let preparedImports = 0;
+  const importJournalIssues: string[] = [];
   if (importsKind === "directory") {
     for (const entry of await readdir(importsPath, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const match = entry.name.match(/^([a-f0-9]{64})\.json$/);
+      if (!entry.isFile() || entry.isSymbolicLink() || !match) {
+        importJournalIssues.push(`invalid import journal entry: ${entry.name}`);
+        continue;
+      }
       try {
-        const journal = JSON.parse(await readFile(path.join(importsPath, entry.name), "utf8")) as { state?: unknown };
+        const journal = JSON.parse(await readFile(path.join(importsPath, entry.name), "utf8")) as {
+          schemaVersion?: unknown;
+          payloadHash?: unknown;
+          state?: unknown;
+          paths?: unknown;
+        };
+        if (
+          journal.schemaVersion !== 1 ||
+          journal.payloadHash !== match[1] ||
+          (journal.state !== "prepared" && journal.state !== "committed") ||
+          !Array.isArray(journal.paths)
+        ) {
+          importJournalIssues.push(`malformed import journal: ${entry.name}`);
+          continue;
+        }
         if (journal.state === "prepared") preparedImports += 1;
-      } catch {
-        preparedImports += 1;
+      } catch (error) {
+        importJournalIssues.push(`unreadable import journal ${entry.name}: ${(error as Error).message}`);
       }
     }
   }
+  const importsSafe =
+    (importsKind === "missing" || importsKind === "directory") &&
+    preparedImports === 0 &&
+    importJournalIssues.length === 0;
   const enabledSafely =
     configKind === "file" &&
     parseError === null &&
@@ -305,11 +328,11 @@ async function syncSafetyCheck(state: SharedState): Promise<StateDoctorCheck> {
     transport === "encrypted-bundle" &&
     keyValid &&
     importsKind === "directory" &&
-    preparedImports === 0;
+    importsSafe;
   const retiredArtifacts = [retiredConfigKind !== "missing" ? "state-sync.json" : null, retiredRepoKind !== "missing" ? "state-repo" : null].filter(
     (item): item is string => item !== null,
   );
-  const ok = (disabled || enabledSafely) && retiredArtifacts.length === 0;
+  const ok = ((disabled && importsSafe) || enabledSafely) && retiredArtifacts.length === 0;
   return {
     id: "sync_safety",
     ok,
@@ -331,6 +354,7 @@ async function syncSafetyCheck(state: SharedState): Promise<StateDoctorCheck> {
       keyValid,
       importsDirectoryPresent: importsKind === "directory",
       preparedImports,
+      importJournalIssues,
       retiredConfigPresent: retiredConfigKind !== "missing",
       retiredRepoPresent: retiredRepoKind !== "missing",
       parseError,
