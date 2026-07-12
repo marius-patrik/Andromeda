@@ -250,6 +250,9 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
         except DuplicateClientError:
             await websocket.close(code=4409, reason="client_id is already attached")
             return
+        except TimeoutError:
+            await websocket.close(code=1013, reason="session replay deadline exceeded")
+            return
         while True:
             raw = await websocket.receive_bytes()
             if len(raw) > int(os.environ.get("GATEWAY_WS_MAX_FRAME_BYTES", str(1024 * 1024))):

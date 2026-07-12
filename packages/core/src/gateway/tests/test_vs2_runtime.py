@@ -237,6 +237,27 @@ async def test_attach_replay_is_an_atomic_boundary_before_live_delivery():
     assert socket.sequences[:2] == [1, 2]
 
 
+@pytest.mark.asyncio
+async def test_attach_replay_uses_one_total_deadline(monkeypatch):
+    class SlowSocket:
+        async def send_bytes(self, payload: bytes) -> None:
+            await asyncio.Event().wait()
+
+    monkeypatch.setenv("GATEWAY_WS_REPLAY_TIMEOUT_SECONDS", "0.02")
+    monkeypatch.setenv("GATEWAY_WS_SEND_TIMEOUT_SECONDS", "1")
+    hub = SessionHub("ws://gateway", "gateway")
+    record = hub.create(session_id="bounded-replay")
+    await hub.publish(record, ServerFrame(frame=Oneof("status", Status(state="one"))))  # type: ignore[arg-type]
+    await hub.publish(record, ServerFrame(frame=Oneof("status", Status(state="two"))))  # type: ignore[arg-type]
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(hub.attach(record, "slow", SlowSocket()), timeout=0.2)  # type: ignore[arg-type]
+    assert "slow" not in record.clients
+    await asyncio.wait_for(
+        hub.publish(record, ServerFrame(frame=Oneof("status", Status(state="after-timeout")))),  # type: ignore[arg-type]
+        timeout=0.2,
+    )
+
+
 def test_durable_budget_exhaustion_degrades_cloud_to_local(monkeypatch, tmp_path):
     registry = _registry(tmp_path)
     budget_path = tmp_path / "credits.json"

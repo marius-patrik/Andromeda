@@ -69,10 +69,12 @@ incomplete mTLS configuration fails closed.
 
 Relay writes are concurrent per publication and bounded by
 `GATEWAY_WS_SEND_TIMEOUT_SECONDS` (default 5 seconds), so one slow peer cannot
-hold every healthy peer indefinitely. `GATEWAY_WS_MAX_FRAME_BYTES` is an
-application processing limit after Starlette receives a message; deployments
-that need a transport-level buffer cap must enforce it at the ASGI server or
-edge proxy.
+hold every healthy peer indefinitely. An attaching client's complete history
+replay has a separate total `GATEWAY_WS_REPLAY_TIMEOUT_SECONDS` deadline
+(default 5 seconds), rather than multiplying the send timeout by every retained
+frame. `GATEWAY_WS_MAX_FRAME_BYTES` is an application processing limit after
+Starlette receives a message; deployments that need a transport-level buffer
+cap must enforce it at the ASGI server or edge proxy.
 
 ## Durable budgets and cluster axes
 

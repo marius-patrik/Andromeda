@@ -114,8 +114,10 @@ class SessionHub:
         async with record.relay_lock:
             if client_id in record.clients:
                 raise DuplicateClientError(f"client_id {client_id!r} is already attached")
-            for frame in record.history:
-                await self._send(websocket, frame.to_binary())
+            replay_timeout = max(0.01, float(os.environ.get("GATEWAY_WS_REPLAY_TIMEOUT_SECONDS", "5")))
+            async with asyncio.timeout(replay_timeout):
+                for frame in record.history:
+                    await self._send(websocket, frame.to_binary())
             record.clients[client_id] = websocket
         await self.publish_attach(record, client_id, "attached")
 
