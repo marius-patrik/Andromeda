@@ -67,6 +67,13 @@ verification result without the edge token, are never accepted as proof. The
 same gate runs before both HTTP handling and WebSocket acceptance. Invalid or
 incomplete mTLS configuration fails closed.
 
+Relay writes are concurrent per publication and bounded by
+`GATEWAY_WS_SEND_TIMEOUT_SECONDS` (default 5 seconds), so one slow peer cannot
+hold every healthy peer indefinitely. `GATEWAY_WS_MAX_FRAME_BYTES` is an
+application processing limit after Starlette receives a message; deployments
+that need a transport-level buffer cap must enforce it at the ASGI server or
+edge proxy.
+
 ## Durable budgets and cluster axes
 
 `GATEWAY_BUDGETS_PATH` (or `AGENTS_CREDITS`) is a read-only durable budget

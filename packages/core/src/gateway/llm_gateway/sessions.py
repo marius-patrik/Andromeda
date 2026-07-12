@@ -7,11 +7,15 @@ import os
 import uuid
 from dataclasses import dataclass, field
 
-from agent_os.v1.common_pb import RunStatus
-from agent_os.v1.session_frames_pb import AttachState, ServerFrame, SessionEvent, SessionEventKind
+from agent_os.v1.common_pb import RunStatus, Task
+from agent_os.v1.session_frames_pb import AttachState, PlanState, PlanStep, ServerFrame, SessionEvent, SessionEventKind
 from agent_os.v1.sessions_pb import AttachInfo, Session
 from fastapi import WebSocket
 from protobuf import Oneof
+
+
+class DuplicateClientError(ValueError):
+    """Raised when a live relay client already owns a client identifier."""
 
 
 @dataclass
@@ -20,6 +24,7 @@ class SessionRecord:
     title: str
     agent: str
     owner_node: str
+    task: Task | None = None
     live: bool = True
     history: list[ServerFrame] = field(default_factory=list)
     clients: dict[str, WebSocket] = field(default_factory=dict)
@@ -59,6 +64,9 @@ class SessionHub:
     def get(self, session_id: str) -> SessionRecord | None:
         return self._sessions.get(session_id)
 
+    def discard(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+
     def list(self, filter_text: str = "", live_only: bool = False) -> list[SessionRecord]:
         needle = filter_text.casefold()
         return [
@@ -93,16 +101,29 @@ class SessionHub:
             owner_node=record.owner_node,
         )
 
+    async def seed_task(self, record: SessionRecord, task: Task) -> None:
+        record.task = Task.from_binary(task.to_binary())
+        steps = [PlanStep(text=item, status=RunStatus.RUNNING) for item in task.inputs]
+        if task.acceptance:
+            steps.append(PlanStep(text=f"Acceptance: {task.acceptance}"))
+        plan = PlanState(title=task.goal or record.title, steps=steps)
+        event = SessionEvent(kind=SessionEventKind.PLAN, payload=Oneof("plan", plan))  # type: ignore[arg-type]
+        await self.publish(record, ServerFrame(frame=Oneof("session_event", event)))  # type: ignore[arg-type]
+
     async def attach(self, record: SessionRecord, client_id: str, websocket: WebSocket) -> None:
         async with record.relay_lock:
+            if client_id in record.clients:
+                raise DuplicateClientError(f"client_id {client_id!r} is already attached")
             for frame in record.history:
-                await websocket.send_bytes(frame.to_binary())
+                await self._send(websocket, frame.to_binary())
             record.clients[client_id] = websocket
         await self.publish_attach(record, client_id, "attached")
 
-    async def detach(self, record: SessionRecord, client_id: str) -> None:
+    async def detach(self, record: SessionRecord, client_id: str, websocket: WebSocket) -> None:
         async with record.relay_lock:
-            detached = record.clients.pop(client_id, None) is not None
+            detached = record.clients.get(client_id) is websocket
+            if detached:
+                record.clients.pop(client_id)
         if detached:
             await self.publish_attach(record, client_id, "detached")
 
@@ -124,17 +145,15 @@ class SessionHub:
         history_limit = max(1, int(os.environ.get("GATEWAY_SESSION_HISTORY_FRAMES", "1000")))
         if len(record.history) > history_limit:
             del record.history[: len(record.history) - history_limit]
-        delivered = 0
-        broken: list[str] = []
         payload = frame.to_binary()
-        for client_id, websocket in list(record.clients.items()):
-            if client_id == exclude:
-                continue
-            try:
-                await websocket.send_bytes(payload)
-                delivered += 1
-            except Exception:
-                broken.append(client_id)
+        targets = [(client_id, websocket) for client_id, websocket in record.clients.items() if client_id != exclude]
+        results = await asyncio.gather(*(self._send(websocket, payload) for _, websocket in targets), return_exceptions=True)
+        broken = [client_id for (client_id, _), result in zip(targets, results, strict=True) if isinstance(result, BaseException)]
         for client_id in broken:
             record.clients.pop(client_id, None)
-        return delivered
+        return len(targets) - len(broken)
+
+    @staticmethod
+    async def _send(websocket: WebSocket, payload: bytes) -> None:
+        timeout = max(0.01, float(os.environ.get("GATEWAY_WS_SEND_TIMEOUT_SECONDS", "5")))
+        await asyncio.wait_for(websocket.send_bytes(payload), timeout=timeout)

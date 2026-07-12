@@ -55,6 +55,31 @@ class SwitcherStore:
         source = source or self._project or self._global
         return _copy_state(source)
 
+    def clear_session(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+
+    def seed_session(self, session_id: str, desired: SwitcherState) -> SwitcherState:
+        previous = self._sessions.get(session_id)
+        try:
+            updates = (
+                (SwitcherAxis.FABRIC, desired.fabric.name.lower() if desired.fabric is not Fabric.UNSPECIFIED else ""),
+                (SwitcherAxis.PROVIDER, desired.provider),
+                (SwitcherAxis.MODEL, desired.model),
+                (SwitcherAxis.HOST, desired.host),
+                (SwitcherAxis.AGENT, desired.agent),
+            )
+            state = self.state(session_id)
+            for axis, value in updates:
+                if value:
+                    state = self.set(axis, value, SwitcherScope.SESSION, session_id)
+            return state
+        except Exception:
+            if previous is None:
+                self._sessions.pop(session_id, None)
+            else:
+                self._sessions[session_id] = previous
+            raise
+
     def set(self, axis: SwitcherAxis, value: str, scope: SwitcherScope, session_id: str = "") -> SwitcherState:
         if axis is SwitcherAxis.UNSPECIFIED:
             raise ConnectError(Code.INVALID_ARGUMENT, "switcher axis is required")

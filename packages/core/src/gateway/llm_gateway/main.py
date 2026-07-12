@@ -42,7 +42,7 @@ from llm_gateway.task_routing import TaskRouter, TaskRoutingError
 from llm_gateway.health import HealthChecker
 from llm_gateway.control_plane import HealthControlPlane, RegistryControlPlane, SessionControlPlane, SwitcherControlPlane
 from llm_gateway.mtls import has_verified_client, mtls_mode, mtls_required
-from llm_gateway.sessions import SessionHub
+from llm_gateway.sessions import DuplicateClientError, SessionHub
 from llm_gateway.switchers import SwitcherStore
 from llm_gateway.trace import TraceLogger
 
@@ -75,7 +75,7 @@ async def lifespan(app: FastAPI):
         os.environ.get("GATEWAY_NODE_ID", "gateway"),
     )
     registry_control = RegistryControlPlane(switcher_store)
-    session_control = SessionControlPlane(session_hub)
+    session_control = SessionControlPlane(session_hub, switcher_store)
     switcher_control = SwitcherControlPlane(switcher_store)
     health_control = HealthControlPlane(health_checker, switcher_store, router.quota)
     yield
@@ -242,11 +242,14 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     client_id = websocket.query_params.get("client_id") or f"client-{uuid.uuid4().hex[:12]}"
     record = session_hub.get_or_create(session_id)
-    if client_id in record.clients:
-        await websocket.close(code=4409, reason="client_id is already attached")
-        return
+    attached = False
     try:
-        await session_hub.attach(record, client_id, websocket)
+        try:
+            await session_hub.attach(record, client_id, websocket)
+            attached = True
+        except DuplicateClientError:
+            await websocket.close(code=4409, reason="client_id is already attached")
+            return
         while True:
             raw = await websocket.receive_bytes()
             if len(raw) > int(os.environ.get("GATEWAY_WS_MAX_FRAME_BYTES", str(1024 * 1024))):
@@ -285,7 +288,8 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
-        await session_hub.detach(record, client_id)
+        if attached:
+            await session_hub.detach(record, client_id, websocket)
 
 
 if __name__ == "__main__":

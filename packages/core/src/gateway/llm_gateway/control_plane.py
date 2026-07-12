@@ -99,11 +99,21 @@ class RegistryControlPlane:
 
 
 class SessionControlPlane:
-    def __init__(self, sessions: SessionHub) -> None:
+    def __init__(self, sessions: SessionHub, switchers: SwitcherStore) -> None:
         self.sessions = sessions
+        self.switchers = switchers
 
     async def create_session(self, request: CreateSessionRequest, ctx: Any) -> CreateSessionResponse:
         record = self.sessions.create(agent=request.agent, title=request.title)
+        try:
+            if request.switcher is not None:
+                self.switchers.seed_session(record.id, request.switcher)
+            if request.task is not None:
+                await self.sessions.seed_task(record, request.task)
+        except Exception:
+            self.switchers.clear_session(record.id)
+            self.sessions.discard(record.id)
+            raise
         return CreateSessionResponse(session=record.message(), attach=self.sessions.attach_info(record))
 
     async def list_sessions(self, request: ListSessionsRequest, ctx: Any) -> ListSessionsResponse:

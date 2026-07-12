@@ -10,13 +10,15 @@ from fastapi.testclient import TestClient
 from protobuf import Oneof
 from starlette.websockets import WebSocketDisconnect
 
-from agent_os.v1.common_pb import Fabric, SwitcherAxis, SwitcherScope
+from agent_os.v1.common_pb import Fabric, SwitcherAxis, SwitcherScope, SwitcherState, Task
 from agent_os.v1.session_frames_pb import ClientFrame, ServerFrame, Status, UserInput
+from agent_os.v1.sessions_pb import CreateSessionRequest
+from llm_gateway.control_plane import SessionControlPlane
 from llm_gateway.main import app
 from llm_gateway.quota import QuotaTracker
 from llm_gateway.registry import ModelRegistry
 from llm_gateway.router import Router, RoutingError
-from llm_gateway.sessions import SessionHub
+from llm_gateway.sessions import DuplicateClientError, SessionHub
 from llm_gateway.switchers import SwitcherStore
 from llm_gateway.trace import TraceLogger
 
@@ -91,6 +93,35 @@ def test_switcher_update_preserves_unrelated_axes(monkeypatch, tmp_path):
     assert {option.value for option in store.options(SwitcherAxis.MODEL)} == {"alternate-local"}
 
 
+@pytest.mark.asyncio
+async def test_create_session_applies_task_and_switcher_seed(tmp_path):
+    registry = _registry(tmp_path)
+    switchers = SwitcherStore(registry)
+    hub = SessionHub("ws://gateway", "gateway")
+    control = SessionControlPlane(hub, switchers)
+    response = await control.create_session(
+        CreateSessionRequest(
+            agent="codex",
+            title="seeded",
+            task=Task(goal="Ship safely", inputs=["run gates"], acceptance="all green", source="test"),
+            switcher=SwitcherState(
+                fabric=Fabric.LOCAL,
+                provider="local",
+                model="local-general",
+                agent="codex",
+            ),
+        ),
+        None,
+    )
+    record = hub.get(response.session.id)
+    assert record is not None
+    assert record.task is not None and record.task.goal == "Ship safely"
+    assert record.history[0].frame is not None
+    assert record.history[0].frame.field == "session_event"
+    assert switchers.state(record.id).model == "local-general"
+    assert switchers.state(record.id).agent == "codex"
+
+
 def test_binary_websocket_relay_supports_multiple_clients(client):
     with client.websocket_connect("/v1/sessions/relay/ws?client_id=a") as first:
         assert ServerFrame.from_binary(first.receive_bytes()).seq == 1
@@ -127,26 +158,51 @@ def test_websocket_mtls_rejects_spoofed_identity_header(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_relay_drops_broken_client_without_blocking_healthy_delivery():
+async def test_relay_drops_broken_or_slow_client_without_blocking_healthy_delivery(monkeypatch):
     class Socket:
-        def __init__(self, broken: bool = False) -> None:
+        def __init__(self, broken: bool = False, slow: bool = False) -> None:
             self.broken = broken
+            self.slow = slow
             self.payloads: list[bytes] = []
 
         async def send_bytes(self, payload: bytes) -> None:
             if self.broken:
                 raise RuntimeError("closed")
+            if self.slow:
+                await asyncio.Event().wait()
             self.payloads.append(payload)
 
+    monkeypatch.setenv("GATEWAY_WS_SEND_TIMEOUT_SECONDS", "0.02")
     hub = SessionHub("ws://gateway", "gateway")
     record = hub.create(session_id="broken-relay")
     broken = Socket(broken=True)
+    slow = Socket(slow=True)
     healthy = Socket()
-    record.clients = {"broken": broken, "healthy": healthy}  # type: ignore[dict-item]
-    delivered = await hub.publish(record, ServerFrame(frame=Oneof("status", Status(state="running"))))  # type: ignore[arg-type]
+    record.clients = {"broken": broken, "slow": slow, "healthy": healthy}  # type: ignore[dict-item]
+    delivered = await asyncio.wait_for(
+        hub.publish(record, ServerFrame(frame=Oneof("status", Status(state="running")))),  # type: ignore[arg-type]
+        timeout=0.2,
+    )
     assert delivered == 1
     assert list(record.clients) == ["healthy"]
     assert len(healthy.payloads) == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_client_attach_is_atomic_and_stale_detach_cannot_evict_owner():
+    class Socket:
+        async def send_bytes(self, payload: bytes) -> None:
+            pass
+
+    hub = SessionHub("ws://gateway", "gateway")
+    record = hub.create(session_id="duplicate-client")
+    owner = Socket()
+    duplicate = Socket()
+    await hub.attach(record, "shared", owner)  # type: ignore[arg-type]
+    with pytest.raises(DuplicateClientError):
+        await hub.attach(record, "shared", duplicate)  # type: ignore[arg-type]
+    await hub.detach(record, "shared", duplicate)  # type: ignore[arg-type]
+    assert record.clients == {"shared": owner}
 
 
 @pytest.mark.asyncio
