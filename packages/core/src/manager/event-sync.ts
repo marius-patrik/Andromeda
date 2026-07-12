@@ -608,21 +608,42 @@ async function publishPreparedImport(
   incoming: Map<string, string>,
   journalPath: string,
   prepared: ImportJournal,
-  options: { failAfter?: number; beforeProjection?: () => Promise<void> } = {},
+  options: {
+    failAfter?: number;
+    afterValidationBeforePublication?: () => Promise<void>;
+    beforeProjection?: () => Promise<void>;
+  } = {},
 ): Promise<EventSyncResult> {
   await validateMergedEvents(state, incoming);
+  await options.afterValidationBeforePublication?.();
   let imported = 0;
+  const created = new Map<string, string>();
   for (const [relativePath, content] of incoming) {
     const target = path.join(state.stateDir, ...relativePath.split("/"));
     await ensurePhysicalDirectoryChain(state.stateDir, path.dirname(target));
     await assertPhysicalPathUnderRoot(state.stateDir, target, { allowMissing: true, leaf: "file" });
-    if (await writeTextExclusive(target, content)) imported += 1;
+    if (await writeTextExclusive(target, content)) {
+      imported += 1;
+      created.set(target, content);
+    }
     else if ((await readFile(target, "utf8")) !== content) throw new Error(`immutable event collision: ${relativePath}`);
     if (options.failAfter !== undefined && imported >= options.failAfter) {
       throw new Error("simulated interrupted event import");
     }
   }
   await options.beforeProjection?.();
+  try {
+    await validateMergedEvents(state, new Map());
+  } catch (error) {
+    for (const [target, content] of [...created.entries()].reverse()) {
+      try {
+        if ((await readFile(target, "utf8")) === content) await rm(target, { force: true });
+      } catch (rollbackError) {
+        if ((rollbackError as NodeJS.ErrnoException).code !== "ENOENT") throw rollbackError;
+      }
+    }
+    throw error;
+  }
   const finalProjectionHash = await rebuildImportedProjectionsWhileLocked(state, incoming);
   const committed: ImportJournal = {
     ...prepared,
@@ -738,7 +759,11 @@ export async function exportEventBundle(
 export async function importEventBundle(
   state: SharedState,
   inputPath: string,
-  options: { failAfter?: number; beforeProjection?: () => Promise<void> } = {},
+  options: {
+    failAfter?: number;
+    afterValidationBeforePublication?: () => Promise<void>;
+    beforeProjection?: () => Promise<void>;
+  } = {},
 ): Promise<EventSyncResult> {
   return withStateFileLock(state, "event-sync-import", async () => {
     const config = await readConfig(state);

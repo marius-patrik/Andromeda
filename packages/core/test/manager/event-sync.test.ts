@@ -223,6 +223,54 @@ describe("encrypted cross-machine event exchange", () => {
     }
   });
 
+  test("same-machine appends cannot cross the validation-publication lock boundary", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-same-machine-race-"));
+    try {
+      const target = await exchangeState(path.join(root, "target"));
+      const source = await exchangeState(path.join(root, "source"));
+      const targetManifest = JSON.parse(await readFile(path.join(target.stateDir, "manifest.json"), "utf8")) as {
+        machineId: string;
+      };
+      const sourceManifestPath = path.join(source.stateDir, "manifest.json");
+      const sourceManifest = JSON.parse(await readFile(sourceManifestPath, "utf8")) as Record<string, unknown>;
+      sourceManifest.machineId = targetManifest.machineId;
+      await writeFile(sourceManifestPath, `${JSON.stringify(sourceManifest, null, 2)}\n`);
+      await rememberMemory(source, {
+        scope: "project",
+        subject: "Andromeda",
+        predicate: "incoming-same-machine",
+        value: "first",
+        evidence,
+      });
+      const bundle = path.join(root, "events.bundle.json");
+      await exportEventBundle(source, bundle);
+
+      let appendSettled = false;
+      let concurrentAppend: ReturnType<typeof rememberMemory> | undefined;
+      const imported = await importEventBundle(target, bundle, {
+        afterValidationBeforePublication: async () => {
+          concurrentAppend = rememberMemory(target, {
+            scope: "project",
+            subject: "Andromeda",
+            predicate: "local-same-machine",
+            value: "second",
+            evidence,
+          });
+          void concurrentAppend.finally(() => {
+            appendSettled = true;
+          });
+          await Bun.sleep(75);
+          expect(appendSettled).toBe(false);
+        },
+      });
+      expect(imported.imported).toBe(1);
+      await concurrentAppend;
+      expect((await doctorState(target)).checks.find((check) => check.id === "memory_integrity")?.ok).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("tampering, immutable collisions, and secret memory fail before publication", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-denied-"));
     try {
