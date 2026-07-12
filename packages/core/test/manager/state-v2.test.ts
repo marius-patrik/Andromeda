@@ -1,11 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ensureSharedState, sharedStateAt } from "../../src/manager/state";
-import { readStateManifest, stateV2Paths, writeTextExclusive } from "../../src/manager/state-v2";
+import { readStateManifest, stateV2Paths, writeTextAtomic, writeTextExclusive } from "../../src/manager/state-v2";
 
 describe("Agent OS state v2 bootstrap", () => {
+  test("concurrent atomic replacements leave one complete value and no temp files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-v2-atomic-"));
+    const destination = path.join(root, "projection.json");
+    const contents = Array.from({ length: 32 }, (_, index) => JSON.stringify({ index, body: "x".repeat(64_000) }));
+    try {
+      await Promise.all(contents.map((content) => writeTextAtomic(destination, content)));
+      expect(contents).toContain(await readFile(destination, "utf8"));
+      expect((await readdir(root)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("exclusive seeds become visible only after their complete content is durable", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-v2-exclusive-"));
     const destination = path.join(root, "seed.txt");

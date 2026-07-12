@@ -4,6 +4,7 @@ import { chmod, link, lstat, mkdir, open, readFile, readdir, rm } from "node:fs/
 import type { SharedState } from "./state";
 import {
   ensureStateV2,
+  retryWindowsFileOperation,
   stateV2Paths,
   writeTextAtomic,
   type AgentStateManifest,
@@ -521,7 +522,7 @@ async function tryCreatePrivateFile(filePath: string, content: string): Promise<
   }
   try {
     try {
-      await link(temporary, filePath);
+      await retryWindowsFileOperation(() => link(temporary, filePath));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
@@ -530,7 +531,7 @@ async function tryCreatePrivateFile(filePath: string, content: string): Promise<
     await syncDirectory(directory);
     return true;
   } finally {
-    await rm(temporary, { force: true });
+    await retryWindowsFileOperation(() => rm(temporary, { force: true }));
   }
 }
 
@@ -834,6 +835,10 @@ async function writeProjectionFileIfChanged(filePath: string, content: string): 
 async function removeStaleProjectionEntries(directory: string, expected: Set<string>): Promise<void> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (expected.has(entry.name)) continue;
+    // State-v2 publishers prepare complete bytes beside the destination and
+    // then publish with an atomic link/rename. Concurrent projection cleanup
+    // must not delete another writer's unpublished source file.
+    if (/^\..+\.\d+\.[0-9a-f-]{36}\.tmp$/i.test(entry.name)) continue;
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) throw new Error(`unexpected memory projection directory: ${entryPath}`);
     await rm(entryPath, { force: true });
@@ -900,22 +905,22 @@ async function acquireMemoryLock(
     if (await tryCreatePrivateFile(lockPath, `${JSON.stringify(document, null, 2)}\n`)) {
       return async () => {
         try {
-          const current = JSON.parse(await readFile(lockPath, "utf8")) as Partial<MemoryLock>;
-          if (current.token === token) await rm(lockPath, { force: true });
+          const current = JSON.parse(await retryWindowsFileOperation(() => readFile(lockPath, "utf8"))) as Partial<MemoryLock>;
+          if (current.token === token) await retryWindowsFileOperation(() => rm(lockPath, { force: true }));
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
       };
     }
     try {
-      const existing = JSON.parse(await readFile(lockPath, "utf8")) as Partial<MemoryLock>;
+      const existing = JSON.parse(await retryWindowsFileOperation(() => readFile(lockPath, "utf8"))) as Partial<MemoryLock>;
       if (typeof existing.expiresAt !== "string" || !Number.isFinite(Date.parse(existing.expiresAt))) {
         throw new Error(`invalid canonical memory lock: ${lockPath}`);
       }
       if (Date.parse(existing.expiresAt) <= Date.now()) {
         const staleToken = existing.token;
-        const current = JSON.parse(await readFile(lockPath, "utf8")) as Partial<MemoryLock>;
-        if (current.token === staleToken) await rm(lockPath, { force: true });
+        const current = JSON.parse(await retryWindowsFileOperation(() => readFile(lockPath, "utf8"))) as Partial<MemoryLock>;
+        if (current.token === staleToken) await retryWindowsFileOperation(() => rm(lockPath, { force: true }));
         continue;
       }
     } catch (error) {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { chmod, link, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type { SharedState } from "./state";
 
 export const STATE_SCHEMA_VERSION = 2 as const;
@@ -58,18 +59,71 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
-export async function writeTextAtomic(filePath: string, content: string, mode = 0o600): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  const handle = await open(temporary, "wx", mode);
+const TRANSIENT_WINDOWS_PUBLICATION_ERRORS = new Set(["EACCES", "EBUSY", "ENOENT", "EPERM"]);
+const atomicPublicationTails = new Map<string, Promise<void>>();
+
+async function serializeAtomicPublication(filePath: string, operation: () => Promise<void>): Promise<void> {
+  const previous = atomicPublicationTails.get(filePath) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  atomicPublicationTails.set(filePath, current);
   try {
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
+    await current;
   } finally {
-    await handle.close();
+    if (atomicPublicationTails.get(filePath) === current) atomicPublicationTails.delete(filePath);
   }
-  await rename(temporary, filePath);
-  if (process.platform !== "win32") await chmod(filePath, mode);
+}
+
+export async function retryWindowsFileOperation<T>(operation: () => Promise<T>): Promise<T> {
+  if (process.platform !== "win32") {
+    return await operation();
+  }
+  const attempts = 8;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (!TRANSIENT_WINDOWS_PUBLICATION_ERRORS.has(code) || attempt === attempts - 1) throw error;
+      await delay(Math.min(80, 5 * 2 ** attempt));
+    }
+  }
+  throw new Error("unreachable Windows file-operation retry state");
+}
+
+async function publishAtomicReplacement(temporary: string, filePath: string): Promise<void> {
+  try {
+    await retryWindowsFileOperation(() => rename(temporary, filePath));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "";
+    if (process.platform !== "win32" || !TRANSIENT_WINDOWS_PUBLICATION_ERRORS.has(code)) throw error;
+    // Bun/Windows can keep refusing rename-over-existing after every bounded
+    // retry. These files are replaceable projections written under a state
+    // lock, so fall back to remove+rename: readers may briefly see ENOENT but
+    // can never observe partial bytes. Immutable authorities use the exclusive
+    // hard-link path below and never enter this fallback.
+    await retryWindowsFileOperation(() => rm(filePath, { force: true }));
+    await retryWindowsFileOperation(() => rename(temporary, filePath));
+  }
+}
+
+export async function writeTextAtomic(filePath: string, content: string, mode = 0o600): Promise<void> {
+  await serializeAtomicPublication(filePath, async () => {
+    await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
+    const handle = await open(temporary, "wx", mode);
+    try {
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      await publishAtomicReplacement(temporary, filePath);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+    if (process.platform !== "win32") await chmod(filePath, mode);
+  });
 }
 
 export async function writeTextExclusive(filePath: string, content: string, mode = 0o600): Promise<boolean> {
@@ -85,7 +139,7 @@ export async function writeTextExclusive(filePath: string, content: string, mode
   }
   try {
     try {
-      await link(temporary, filePath);
+      await retryWindowsFileOperation(() => link(temporary, filePath));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
