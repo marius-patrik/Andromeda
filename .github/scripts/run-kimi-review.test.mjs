@@ -450,7 +450,7 @@ test("malformed response diagnostics expose only bounded metadata", async () => 
   );
 });
 
-test("refreshes an expired OAuth token before the review request", async () => {
+test("refreshes an OAuth token that cannot cover the full review horizon", async () => {
   const calls = [];
   let rotated;
   const fetchImpl = async (url, init) => {
@@ -462,7 +462,11 @@ test("refreshes an expired OAuth token before the review request", async () => {
   };
   await requestReview({
     prompt: "review",
-    credential: { access_token: "expired", refresh_token: "refresh", expires_at: 1 },
+    credential: {
+      access_token: "expiring",
+      refresh_token: "refresh",
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    },
     fetchImpl,
     env: {},
     onCredentialRefresh: async (credential) => {
@@ -475,4 +479,86 @@ test("refreshes an expired OAuth token before the review request", async () => {
   assert.equal(rotated.access_token, "fresh");
   assert.equal(rotated.refresh_token, "refresh");
   assert.ok(rotated.expires_at > Math.floor(Date.now() / 1000));
+});
+
+test("refreshes and retries exactly once when a long review returns 401", async () => {
+  const chatAuthorizations = [];
+  let chatCalls = 0;
+  let refreshCalls = 0;
+  const fetchImpl = async (url, init) => {
+    if (url.endsWith("/api/oauth/token")) {
+      refreshCalls += 1;
+      return new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600 }), { status: 200 });
+    }
+    chatCalls += 1;
+    chatAuthorizations.push(init.headers.authorization);
+    if (chatCalls === 1) return new Response("expired", { status: 401 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validReview) } }] }), {
+      status: 200,
+    });
+  };
+  const review = await requestReview({
+    prompt: "review",
+    credential: {
+      access_token: "old",
+      refresh_token: "refresh",
+      expires_at: Math.floor(Date.now() / 1000) + 3_600,
+    },
+    fetchImpl,
+    env: {},
+  });
+  assert.equal(review.approved, true);
+  assert.deepEqual(chatAuthorizations, ["Bearer old", "Bearer fresh"]);
+  assert.equal(refreshCalls, 1);
+});
+
+test("a second 401 fails closed without rotating twice", async () => {
+  let chatCalls = 0;
+  let refreshCalls = 0;
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/api/oauth/token")) {
+      refreshCalls += 1;
+      return new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600 }), { status: 200 });
+    }
+    chatCalls += 1;
+    return new Response("expired", { status: 401 });
+  };
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: {
+        access_token: "old",
+        refresh_token: "refresh",
+        expires_at: Math.floor(Date.now() / 1000) + 3_600,
+      },
+      fetchImpl,
+      env: {},
+    }),
+    /HTTP 401/,
+  );
+  assert.equal(chatCalls, 2);
+  assert.equal(refreshCalls, 1);
+});
+
+test("a failed 401 rotation stops without retrying the stale credential", async () => {
+  let chatCalls = 0;
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/api/oauth/token")) return new Response("unavailable", { status: 500 });
+    chatCalls += 1;
+    return new Response("expired", { status: 401 });
+  };
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: {
+        access_token: "old",
+        refresh_token: "refresh",
+        expires_at: Math.floor(Date.now() / 1000) + 3_600,
+      },
+      fetchImpl,
+      env: {},
+    }),
+    /credential refresh after HTTP 401 failed/,
+  );
+  assert.equal(chatCalls, 1);
 });

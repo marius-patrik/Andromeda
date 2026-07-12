@@ -203,7 +203,9 @@ export async function requestReview({
   waitImpl = delay,
 }) {
   let active = credential;
-  if (Number(active.expires_at || 0) <= Math.floor(Date.now() / 1000) + 60) {
+  const timeoutMs = reviewTimeoutMs(env.KIMI_REVIEW_TIMEOUT_MS);
+  const credentialHorizon = Math.floor(Date.now() / 1000) + Math.ceil(timeoutMs / 1_000) + 60;
+  if (Number(active.expires_at || 0) <= credentialHorizon) {
     active = await refreshCredential(active, fetchImpl, env);
     await onCredentialRefresh?.(active);
   }
@@ -232,11 +234,13 @@ export async function requestReview({
   });
   let response;
   let lastError;
+  let refreshedAfter401 = false;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     response = undefined;
     let retryDelay = 1_000;
+    let attemptResponse;
     try {
-      const attemptResponse = await fetchImpl(`${base}/chat/completions`, {
+      attemptResponse = await fetchImpl(`${base}/chat/completions`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${active.access_token}`,
@@ -244,18 +248,35 @@ export async function requestReview({
           accept: "application/json",
         },
         body: requestBody,
-        signal: AbortSignal.timeout(reviewTimeoutMs(env.KIMI_REVIEW_TIMEOUT_MS)),
+        signal: AbortSignal.timeout(timeoutMs),
       });
-      if (attemptResponse.ok || (attemptResponse.status !== 429 && attemptResponse.status < 500)) {
-        response = attemptResponse;
-        break;
-      }
-      lastError = new Error(`Kimi review API failed with retryable HTTP ${attemptResponse.status}`);
-      retryDelay = retryDelayMs(attemptResponse);
-      await attemptResponse.body?.cancel?.().catch(() => {});
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }
+    if (!attemptResponse) {
+      if (attempt < 2) await waitImpl(retryDelay);
+      continue;
+    }
+    if (attemptResponse.status === 401 && active.refresh_token && !refreshedAfter401 && attempt < 2) {
+      await attemptResponse.body?.cancel?.().catch(() => {});
+      try {
+        active = await refreshCredential(active, fetchImpl, env);
+        await onCredentialRefresh?.(active);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Kimi credential refresh after HTTP 401 failed: ${message}`);
+      }
+      refreshedAfter401 = true;
+      lastError = new Error("Kimi review authorization expired during the review request");
+      continue;
+    }
+    if (attemptResponse.ok || (attemptResponse.status !== 429 && attemptResponse.status < 500)) {
+      response = attemptResponse;
+      break;
+    }
+    lastError = new Error(`Kimi review API failed with retryable HTTP ${attemptResponse.status}`);
+    retryDelay = retryDelayMs(attemptResponse);
+    await attemptResponse.body?.cancel?.().catch(() => {});
     if (attempt < 2) await waitImpl(retryDelay);
   }
   if (!response) throw lastError ?? new Error("Kimi review API request failed");
