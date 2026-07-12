@@ -435,7 +435,7 @@ async function registryIntegrityCheck(state: SharedState): Promise<StateDoctorCh
 }
 
 export function launcherNameForPlatform(platform: NodeJS.Platform): string {
-  return platform === "win32" ? "agents.cmd" : "agents";
+  return platform === "win32" ? "agents.ps1" : "agents";
 }
 
 async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
@@ -461,6 +461,7 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
     }
     const content = await readFile(launcher, "utf8");
     const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+    const powerShellQuote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
     for (const [name, value] of [
       ["AGENTS_HOME", state.stateDir],
       ["AGENTS_USER_HOME", state.userHome],
@@ -468,14 +469,14 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
       ["AGENTS_WORKSPACE", state.workspaceDir],
       ["AGENTS_SYSTEM_DATA_ROOT", systemDataPath(state.root)],
     ] as const) {
-      const binding = windows ? `set "${name}=${value}"` : `export ${name}=${shellQuote(value)}`;
+      const binding = windows ? `$env:${name} = ${powerShellQuote(value)}` : `export ${name}=${shellQuote(value)}`;
       if (!content.includes(binding)) {
         issues.push(`agents launcher is missing canonical binding: ${name}=${value}`);
       }
     }
     const cliPath = path.join(state.root, "packages", "core", "src", "manager", "cli.ts");
     const entrypointBinding = windows
-      ? `set "AGENTS_ENTRYPOINT=${cliPath}"`
+      ? `$env:AGENTS_ENTRYPOINT = ${powerShellQuote(cliPath)}`
       : `export AGENTS_ENTRYPOINT=${shellQuote(cliPath)}`;
     if (!content.includes(entrypointBinding)) {
       issues.push(`agents launcher is missing canonical binding: ${cliPath}`);

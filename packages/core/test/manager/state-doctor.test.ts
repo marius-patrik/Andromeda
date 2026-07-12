@@ -46,7 +46,7 @@ async function ensureDoctorProduct(state: ReturnType<typeof tempState>): Promise
   const launcher = path.join(bin, launcherNameForPlatform(process.platform));
   const launcherContent =
     process.platform === "win32"
-      ? `@echo off\r\nset "AGENTS_HOME=${state.stateDir}"\r\nset "AGENTS_USER_HOME=${state.userHome}"\r\nset "AGENTS_ROOT=${state.root}"\r\nset "AGENTS_WORKSPACE=${state.workspaceDir}"\r\nset "AGENTS_SYSTEM_DATA_ROOT=${systemDataPath(state.root)}"\r\nset "AGENTS_ENTRYPOINT=${path.join(state.root, "packages", "core", "src", "manager", "cli.ts")}"\r\nbun "%AGENTS_ENTRYPOINT%" %*\r\n`
+      ? `$env:AGENTS_HOME = '${state.stateDir.replaceAll("'", "''")}'\n$env:AGENTS_USER_HOME = '${state.userHome.replaceAll("'", "''")}'\n$env:AGENTS_ROOT = '${state.root.replaceAll("'", "''")}'\n$env:AGENTS_WORKSPACE = '${state.workspaceDir.replaceAll("'", "''")}'\n$env:AGENTS_SYSTEM_DATA_ROOT = '${systemDataPath(state.root).replaceAll("'", "''")}'\n$env:AGENTS_ENTRYPOINT = '${path.join(state.root, "packages", "core", "src", "manager", "cli.ts").replaceAll("'", "''")}'\n& bun $env:AGENTS_ENTRYPOINT @args\n`
       : `#!/usr/bin/env bash\nexport AGENTS_HOME=${shellQuote(state.stateDir)}\nexport AGENTS_USER_HOME=${shellQuote(state.userHome)}\nexport AGENTS_ROOT=${shellQuote(state.root)}\nexport AGENTS_WORKSPACE=${shellQuote(state.workspaceDir)}\nexport AGENTS_SYSTEM_DATA_ROOT=${shellQuote(systemDataPath(state.root))}\nexport AGENTS_ENTRYPOINT=${shellQuote(path.join(state.root, "packages", "core", "src", "manager", "cli.ts"))}\nexec bun "$AGENTS_ENTRYPOINT" "$@"\n`;
   await writeFile(
     launcher,
@@ -62,7 +62,7 @@ async function ensureDoctorProduct(state: ReturnType<typeof tempState>): Promise
 
 describe("read-only Agent OS state doctor", () => {
   test("selects one platform-native launcher name", () => {
-    expect(launcherNameForPlatform("win32")).toBe("agents.cmd");
+    expect(launcherNameForPlatform("win32")).toBe("agents.ps1");
     expect(launcherNameForPlatform("darwin")).toBe("agents");
     expect(launcherNameForPlatform("linux")).toBe("agents");
   });

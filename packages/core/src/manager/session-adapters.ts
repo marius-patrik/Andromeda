@@ -179,7 +179,7 @@ function findBinary(names: string[], provider?: CliSessionProvider): string | nu
   if (provider) {
     const canonicalBin = path.join(resolvePersonalAgentsHome(), "clis", provider, "bin");
     const candidates = names.flatMap((name) =>
-      process.platform === "win32" ? [`${name}.exe`, `${name}.cmd`, `${name}.bat`, name] : [name],
+      process.platform === "win32" ? [`${name}.exe`, `${name}.ps1`, name] : [name],
     );
     for (const name of candidates) {
       const candidate = path.join(canonicalBin, name);

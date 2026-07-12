@@ -323,6 +323,6 @@ start/end timestamps, result, and rollback instructions under
     identity into every managed provider turn.
 11. The master director thread is imported as the first canonical orchestrator
     session, and the installed boundary contains one platform-native `agents`
-    launcher (`agents` on POSIX, `agents.cmd` on Windows).
+    launcher (`agents` on POSIX, `agents.ps1` on Windows).
 12. Exact Recovery parity was verified before removing the live `global`,
     `shared`, and multi-agent trees; the doctor rejects their reappearance.

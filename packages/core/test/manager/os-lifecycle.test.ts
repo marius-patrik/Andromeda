@@ -36,9 +36,9 @@ async function fakeDocker(root: string): Promise<{ dir: string; log: string; env
   const dir = path.join(root, "bin");
   const log = path.join(root, "docker-calls.log");
   await mkdir(dir, { recursive: true });
-  const script = path.join(dir, process.platform === "win32" ? "docker.cmd" : "docker");
+  const script = path.join(dir, process.platform === "win32" ? "docker.ps1" : "docker");
   if (process.platform === "win32") {
-    await Bun.write(script, `@echo off\r\necho %* >> "${log}"\r\n`);
+    await Bun.write(script, `Add-Content -LiteralPath '${log.replaceAll("'", "''")}' -Value ($args -join ' ')\n`);
   } else {
     await Bun.write(script, `#!/bin/sh\necho "$*" >> "${log}"\n`);
     await Bun.$`chmod +x ${script}`;
@@ -401,9 +401,12 @@ describe("agents os CLI", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-os-create-fail-"));
     try {
       const { dir, env } = await fakeDocker(root);
-      const failing = path.join(dir, process.platform === "win32" ? "docker.cmd" : "docker");
+      const failing = path.join(dir, process.platform === "win32" ? "docker.ps1" : "docker");
       if (process.platform === "win32") {
-        await Bun.write(failing, `@echo off\r\necho %* >> "${path.join(root, "docker-calls.log")}"\r\necho %* | findstr /C:"container create" >nul && exit /b 1\r\n`);
+        await Bun.write(
+          failing,
+          `Add-Content -LiteralPath '${path.join(root, "docker-calls.log").replaceAll("'", "''")}' -Value ($args -join ' ')\nif (($args -join ' ') -like '*container create*') { exit 1 }\n`,
+        );
       } else {
         await Bun.write(
           failing,
@@ -509,11 +512,11 @@ describe("agents os CLI", () => {
       const before = await runAgents(root, ["os", "status", "agents-os-deploy", "--json"]);
       expect(before.code).toBe(0);
 
-      const failing = path.join(dir, process.platform === "win32" ? "docker.cmd" : "docker");
+      const failing = path.join(dir, process.platform === "win32" ? "docker.ps1" : "docker");
       if (process.platform === "win32") {
         await Bun.write(
           failing,
-          `@echo off\r\necho %* >> "${path.join(root, "docker-calls.log")}"\r\necho %* | findstr /C:"container create" >nul && exit /b 1\r\n`,
+          `Add-Content -LiteralPath '${path.join(root, "docker-calls.log").replaceAll("'", "''")}' -Value ($args -join ' ')\nif (($args -join ' ') -like '*container create*') { exit 1 }\n`,
         );
       } else {
         await Bun.write(
