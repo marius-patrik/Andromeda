@@ -541,8 +541,15 @@ describe("encrypted cross-machine event exchange", () => {
         value: "canonical machine 906f1326-7ced-41f3-97d5-69df9dd6ad2f",
         evidence,
       });
+      await rememberMemory(source, {
+        scope: "project",
+        subject: "repository",
+        predicate: "canonical-slug",
+        value: "marius.patrik/andromeda.platform-long-repository-name",
+        evidence,
+      });
       const exported = await exportEventBundle(source, path.join(root, "safe-identifiers.bundle.json"));
-      expect(exported.entries).toBe(5);
+      expect(exported.entries).toBe(6);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

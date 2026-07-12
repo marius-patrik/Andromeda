@@ -265,7 +265,7 @@ function secretLikeText(value: string): boolean {
     // Remove only a credential-free HTTP(S) origin. Repository slugs and opaque
     // path/query material remain in the entropy scan.
     .replace(/\bhttps?:\/\/(?:\[[^\]]+\]|[^\s/:@]+)(?::\d+)?(?=\/)/gi, "");
-  for (const candidate of entropyInput.match(/[A-Za-z0-9_+\/-]{32,}={0,2}/g) ?? []) {
+  for (const candidate of entropyInput.match(/[A-Za-z0-9_+.\/-]{32,}={0,2}/g) ?? []) {
     if (UUID.test(candidate)) continue;
     if (/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(candidate)) continue;
     // Bare GitHub-style owner/repository slugs in prose are identifiers. Requiring
