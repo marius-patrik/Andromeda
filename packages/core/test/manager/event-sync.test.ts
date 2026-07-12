@@ -166,6 +166,23 @@ describe("encrypted cross-machine event exchange", () => {
       await writeFile(tampered, `${JSON.stringify(envelope)}\n`);
       await expect(importEventBundle(target, tampered)).rejects.toThrow("authentication failed");
 
+      const authenticEnvelope = JSON.parse(await readFile(bundle, "utf8")) as { nonce: string; authTag: string };
+      const shortTag = {
+        ...authenticEnvelope,
+        authTag: Buffer.from(Buffer.from(authenticEnvelope.authTag, "base64").subarray(0, 8)).toString("base64"),
+      };
+      const shortTagBundle = path.join(root, "short-tag.bundle.json");
+      await writeFile(shortTagBundle, `${JSON.stringify(shortTag)}\n`);
+      await expect(importEventBundle(target, shortTagBundle)).rejects.toThrow("authentication tag must be exactly 16 bytes");
+
+      const shortNonce = {
+        ...authenticEnvelope,
+        nonce: Buffer.from(Buffer.from(authenticEnvelope.nonce, "base64").subarray(0, 8)).toString("base64"),
+      };
+      const shortNonceBundle = path.join(root, "short-nonce.bundle.json");
+      await writeFile(shortNonceBundle, `${JSON.stringify(shortNonce)}\n`);
+      await expect(importEventBundle(target, shortNonceBundle)).rejects.toThrow("nonce must be exactly 12 bytes");
+
       const eventRoot = path.join(source.stateDir, "memory", "events");
       const [machine] = await readdir(eventRoot);
       const [eventName] = await readdir(path.join(eventRoot, machine));

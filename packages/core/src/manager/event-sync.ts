@@ -101,6 +101,18 @@ function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function canonicalBase64(value: string, field: string, expectedBytes?: number): Buffer {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error(`event exchange ${field} is not canonical base64`);
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.toString("base64") !== value) throw new Error(`event exchange ${field} is not canonical base64`);
+  if (expectedBytes !== undefined && decoded.byteLength !== expectedBytes) {
+    throw new Error(`event exchange ${field} must be exactly ${expectedBytes} bytes`);
+  }
+  return decoded;
+}
+
 function syncConfigPath(state: SharedState): string {
   return path.join(stateV2Paths(state).syncDir, "config.json");
 }
@@ -426,7 +438,7 @@ export async function exportEventBundle(state: SharedState, outputPath: string):
   if (Buffer.byteLength(plaintext) > MAX_BUNDLE_BYTES) throw new Error("event exchange bundle is too large");
   const payloadHash = sha256(plaintext);
   const nonce = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", key, nonce);
+  const cipher = createCipheriv("aes-256-gcm", key, nonce, { authTagLength: 16 });
   cipher.setAAD(Buffer.from(`${AAD_PREFIX}${payloadHash}`));
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const envelope: BundleEnvelope = {
@@ -466,14 +478,17 @@ export async function importEventBundle(
       throw new Error("invalid event exchange envelope");
     }
     const payloadHash = envelope.payloadHash;
+    const nonce = canonicalBase64(envelope.nonce, "nonce", 12);
+    const authTag = canonicalBase64(envelope.authTag, "authentication tag", 16);
+    const ciphertext = canonicalBase64(envelope.ciphertext, "ciphertext");
     const key = await keyMaterial(state);
     let plaintextBytes: Buffer;
     try {
-      const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.nonce, "base64"));
+      const decipher = createDecipheriv("aes-256-gcm", key, nonce, { authTagLength: 16 });
       decipher.setAAD(Buffer.from(`${AAD_PREFIX}${payloadHash}`));
-      decipher.setAuthTag(Buffer.from(envelope.authTag, "base64"));
+      decipher.setAuthTag(authTag);
       plaintextBytes = Buffer.concat([
-        decipher.update(Buffer.from(envelope.ciphertext, "base64")),
+        decipher.update(ciphertext),
         decipher.final(),
       ]);
     } catch {
