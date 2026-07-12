@@ -39,6 +39,19 @@ async function git(root: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+// submodule status is positional: the leading status byte of the first line must
+// survive, so this variant returns stdout without trimming.
+async function gitRaw(root: string, args: string[]): Promise<string> {
+  const child = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (code !== 0) throw new Error(stderr.trim() || `git ${args.join(" ")} exited with ${code}`);
+  return stdout;
+}
+
 async function currentSource(state: SharedState): Promise<Omit<SourceInstallRecord, "schemaVersion" | "recordedAt">> {
   const root = path.resolve(state.root);
   const info = await lstat(root);
@@ -54,7 +67,7 @@ async function currentSource(state: SharedState): Promise<Omit<SourceInstallReco
   if (!repository || !branch) throw new Error("canonical source checkout requires an origin and named branch");
   const commit = await git(root, ["rev-parse", "HEAD"]);
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("canonical source commit is invalid");
-  const componentOutput = await git(root, ["submodule", "status", "--recursive"]);
+  const componentOutput = await gitRaw(root, ["submodule", "status", "--recursive"]);
   const components: SourceComponentPin[] = [];
   for (const line of componentOutput.split("\n").filter(Boolean)) {
     const match = line.match(/^ ([a-f0-9]{40}) (\S+)(?: .*)?$/);

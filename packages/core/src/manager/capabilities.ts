@@ -508,7 +508,8 @@ async function normalizeModes(
 async function syncTree(root: string, entries: TreeEntry[]): Promise<void> {
   for (const entry of entries) {
     if (entry.kind !== "file") continue;
-    const handle = await open(path.join(root, entry.relativePath), "r");
+    // Windows denies fsync on read-only handles; FlushFileBuffers needs write access.
+    const handle = await open(path.join(root, entry.relativePath), process.platform === "win32" ? "r+" : "r");
     try {
       await handle.sync();
     } finally {
@@ -1452,7 +1453,8 @@ async function validateIdentityBundle(root: string): Promise<ValidatedTree> {
   if (!(await exists(personaPath)))
     throw new Error("identity bundle requires persona.md");
   const persona = await readFile(personaPath, "utf8");
-  if (!persona.startsWith("# Rommie\n"))
+  // Tolerate CRLF checkouts on Windows; the contract is the heading, not the EOL byte.
+  if (!/^# Rommie\r?\n/.test(persona))
     throw new Error("identity persona must begin with '# Rommie'");
 
   const rolesDir = path.join(root, "roles");
