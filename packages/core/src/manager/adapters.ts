@@ -113,7 +113,9 @@ async function exists(file: string): Promise<boolean> {
 
 async function findBinary(state: SharedState, id: CliId, names: string[]): Promise<string | null> {
   const canonicalBin = path.join(adapterHome(state, id), "bin");
-  for (const name of names) {
+  // Windows spawning requires the real extension; extensionless PE files are not runnable.
+  const candidates = names.flatMap((name) => (process.platform === "win32" ? [`${name}.exe`, name] : [name]));
+  for (const name of candidates) {
     const candidate = path.join(canonicalBin, name);
     if (fs.existsSync(candidate) && !providerBinarySafetyReason(candidate)) return candidate;
   }
