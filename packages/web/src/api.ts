@@ -35,6 +35,19 @@ export interface ConformanceReport {
   issues: { path: string; severity: "error" | "warning"; message: string }[];
 }
 
+export interface GraphNode {
+  path: string;
+  title?: string;
+  type?: string;
+  description?: string;
+  links: number;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: { source: string; target: string }[];
+}
+
 export interface AppConfig {
   providers: string[];
   defaultProvider: string;
@@ -53,5 +66,6 @@ export const api = {
   search: (q: string) => get<SearchHit[]>(`/api/search?q=${encodeURIComponent(q)}`),
   log: () => get<LogEntry[]>("/api/log"),
   validate: () => get<ConformanceReport>("/api/validate"),
+  graph: () => get<GraphData>("/api/graph"),
   config: () => get<AppConfig>("/api/config"),
 };

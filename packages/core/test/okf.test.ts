@@ -233,6 +233,29 @@ describe("lint (graph health)", () => {
   });
 });
 
+describe("graph export", () => {
+  it("returns nodes with metadata/degree and deduped edges", async () => {
+    await kb.writeConcept("/a.md", { type: "T", title: "A", description: "alpha" }, "See [B](/b.md) and again [B](/b.md).", "add");
+    await kb.writeConcept("/b.md", { type: "U", title: "B" }, "Back to [A](/a.md).", "add");
+    await kb.writeConcept("/c.md", { type: "T", title: "C" }, "island", "add");
+
+    const graph = await kb.graph();
+    expect(graph.nodes.length).toBe(3);
+    const a = graph.nodes.find((n) => n.path === "/a.md")!;
+    expect(a.title).toBe("A");
+    expect(a.description).toBe("alpha");
+    expect(a.links).toBe(2); // one out (deduped), one in
+    expect(graph.nodes.find((n) => n.path === "/c.md")!.links).toBe(0);
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        { source: "/a.md", target: "/b.md" },
+        { source: "/b.md", target: "/a.md" },
+      ])
+    );
+    expect(graph.edges.length).toBe(2); // duplicate A→B link counted once
+  });
+});
+
 describe("mutation serialization", () => {
   it("concurrent writes all land and log all entries", async () => {
     await Promise.all(

@@ -6,6 +6,7 @@ import { appendLog, readLog } from "./logger.js";
 import { searchBundle, listTypes, type SearchOptions } from "./search.js";
 import { validateBundle } from "./validate.js";
 import { lintBundle, type LintReport } from "./lint.js";
+import { buildGraph, type GraphData } from "./graph.js";
 import type {
   Concept,
   ConceptFrontmatter,
@@ -65,6 +66,11 @@ export class KnowledgeBase {
   /** Graph health: orphaned concepts + broken links (deterministic, no LLM). */
   lint(): Promise<LintReport> {
     return lintBundle(this.bundle);
+  }
+
+  /** Inter-concept link graph (nodes + edges) for visualization. */
+  graph(): Promise<GraphData> {
+    return buildGraph(this.bundle);
   }
 
   // ── Mutations (serialized; auto index + log + optional commit) ──────

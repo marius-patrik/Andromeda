@@ -38,6 +38,10 @@ export function browseRouter(kb: KnowledgeBase): Router {
     res.json(await kb.validate());
   });
 
+  router.get("/graph", async (_req, res) => {
+    res.json(await kb.graph());
+  });
+
   router.get("/types", async (_req, res) => {
     res.json(await kb.listTypes());
   });

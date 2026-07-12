@@ -4,8 +4,13 @@ import { Tree } from "./components/Tree";
 import { ConceptView } from "./components/ConceptView";
 import { LogView } from "./components/LogView";
 import { ChatPanel } from "./components/ChatPanel";
+import { GraphView } from "./components/GraphView";
 
-type View = { kind: "concept"; path: string } | { kind: "log" } | { kind: "empty" };
+type View =
+  | { kind: "concept"; path: string }
+  | { kind: "log" }
+  | { kind: "graph" }
+  | { kind: "empty" };
 
 export default function App() {
   const [tree, setTree] = useState<TreeNode | null>(null);
@@ -36,9 +41,11 @@ export default function App() {
     }
   }, [view]);
 
-  // Re-load the open concept after chat mutations.
+  // Re-load the open concept (and graph) after chat mutations.
+  const [graphRefreshKey, setGraphRefreshKey] = useState(0);
   const onMutation = useCallback(() => {
     refresh();
+    setGraphRefreshKey((k) => k + 1);
     setView((v) => ({ ...v }));
   }, [refresh]);
 
@@ -120,19 +127,25 @@ export default function App() {
             onClick={() => setView({ kind: "log" })}
             className={`flex-1 px-3 py-2 hover:bg-zinc-800 ${view.kind === "log" ? "text-cyan-300" : "text-zinc-400"}`}
           >
-            Update log
+            Log
+          </button>
+          <button
+            onClick={() => setView({ kind: "graph" })}
+            className={`flex-1 border-l border-zinc-800 px-3 py-2 hover:bg-zinc-800 ${view.kind === "graph" ? "text-cyan-300" : "text-zinc-400"}`}
+          >
+            Graph
           </button>
           <button
             onClick={() => setChatOpen(!chatOpen)}
             className="flex-1 border-l border-zinc-800 px-3 py-2 text-zinc-400 hover:bg-zinc-800"
           >
-            {chatOpen ? "Hide chat" : "Show chat"}
+            {chatOpen ? "Hide chat" : "Chat"}
           </button>
         </div>
       </aside>
 
       {/* Main */}
-      <main className="min-w-0 flex-1 overflow-y-auto">
+      <main className={`min-w-0 flex-1 ${view.kind === "graph" ? "overflow-hidden" : "overflow-y-auto"}`}>
         {error && <p className="p-6 text-sm text-red-400">{error}</p>}
         {!error && view.kind === "empty" && (
           <div className="flex h-full items-center justify-center text-zinc-600">
@@ -143,6 +156,9 @@ export default function App() {
           <ConceptView concept={concept} onNavigate={openConcept} />
         )}
         {!error && view.kind === "log" && <LogView entries={log} onNavigate={openConcept} />}
+        {!error && view.kind === "graph" && (
+          <GraphView refreshKey={graphRefreshKey} onNavigate={openConcept} />
+        )}
       </main>
 
       {/* Chat */}
