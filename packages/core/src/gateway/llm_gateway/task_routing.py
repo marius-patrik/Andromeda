@@ -140,13 +140,13 @@ class TaskRouter:
         self.quota = quota or QuotaTracker()
         self.tracer = tracer
 
-    def resolve(self, task_class: str) -> RouteResolution:
+    def resolve(self, task_class: str, *, allow_cloud: bool = False) -> RouteResolution:
         candidates = self.policy.candidates_for(task_class)
         inspected: list[dict[str, Any]] = []
         selected: tuple[RouteCandidate, ModelEntry] | None = None
         for candidate in candidates:
             entry = self.registry.get(candidate.model_id)
-            status = self._candidate_status(candidate, entry)
+            status = self._candidate_status(candidate, entry, allow_cloud)
             inspected.append(
                 {
                     "provider": candidate.provider,
@@ -183,14 +183,17 @@ class TaskRouter:
             return resolution
         raise TaskRoutingError(f"No available model route for task class '{task_class}'")
 
-    @staticmethod
-    def _candidate_status(candidate: RouteCandidate, entry: ModelEntry | None) -> str | None:
+    def _candidate_status(self, candidate: RouteCandidate, entry: ModelEntry | None, allow_cloud: bool) -> str | None:
         if entry is None:
             return "model_not_found"
         if entry.provider != candidate.provider:
             return f"provider_mismatch:{entry.provider}"
         if not entry.enabled:
             return "model_disabled"
+        if entry.cloud and not allow_cloud:
+            return "cloud_disabled"
+        if entry.cloud and self.quota.is_exhausted(entry.provider):
+            return "budget_exhausted"
         return None
 
     @staticmethod

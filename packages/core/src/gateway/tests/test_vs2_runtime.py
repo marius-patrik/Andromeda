@@ -1,0 +1,204 @@
+"""Regression coverage for the real VS2 Connect, WebSocket, mTLS, and budget surfaces."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from protobuf import Oneof
+from starlette.websockets import WebSocketDisconnect
+
+from agent_os.v1.common_pb import SwitcherAxis, SwitcherScope
+from agent_os.v1.session_frames_pb import ClientFrame, ServerFrame, Status, UserInput
+from llm_gateway.main import app
+from llm_gateway.quota import QuotaTracker
+from llm_gateway.registry import ModelRegistry
+from llm_gateway.router import Router
+from llm_gateway.sessions import SessionHub
+from llm_gateway.switchers import SwitcherStore
+from llm_gateway.trace import TraceLogger
+
+
+@pytest.fixture
+def client(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTS_HOME", str(tmp_path / ".agents"))
+    monkeypatch.setenv("GATEWAY_MTLS_MODE", "off")
+    with TestClient(app) as value:
+        yield value
+
+
+def test_generated_connect_handler_serves_registry_rpc(client):
+    response = client.post(
+        "/agent_os.v1.RegistryService/ListModels",
+        content="{}",
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert {model["id"] for model in response.json()["models"]} == {
+        "qwen3-8b",
+        "coder-32b-awq",
+        "qwen2.5-7b-q4",
+        "conv-7b-1m",
+        "conv-14b-1m",
+    }
+
+
+def test_switcher_update_preserves_unrelated_axes(monkeypatch, tmp_path):
+    registry = _registry(tmp_path)
+    monkeypatch.setenv("GATEWAY_CLUSTER_HOSTS", "s001=http://s001:8001")
+    store = SwitcherStore(registry)
+    before = store.state()
+    after = store.set(SwitcherAxis.HOST, "s001", SwitcherScope.GLOBAL)
+    assert after.host == "s001"
+    assert after.fabric is before.fabric
+    assert after.provider == before.provider
+    assert after.model == before.model
+    assert after.agent == before.agent
+    fabrics = {option.value: option.available for option in store.options(SwitcherAxis.FABRIC)}
+    assert fabrics == {"local": True, "cluster": True, "cloud": True}
+
+
+def test_binary_websocket_relay_supports_multiple_clients(client):
+    with client.websocket_connect("/v1/sessions/relay/ws?client_id=a") as first:
+        assert ServerFrame.from_binary(first.receive_bytes()).seq == 1
+        with client.websocket_connect("/v1/sessions/relay/ws?client_id=b") as second:
+            assert ServerFrame.from_binary(second.receive_bytes()).seq == 1
+            assert ServerFrame.from_binary(second.receive_bytes()).seq == 2
+            assert ServerFrame.from_binary(first.receive_bytes()).seq == 2
+            first.send_bytes(ClientFrame(frame=Oneof("user_input", UserInput(text="hello"))).to_binary())
+            relayed = ServerFrame.from_binary(second.receive_bytes())
+            assert relayed.seq == 3
+            assert relayed.frame is not None
+            assert relayed.frame.field == "status"
+            assert relayed.frame.value.detail == "hello"
+
+
+def test_websocket_mtls_rejects_spoofed_identity_header(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTS_HOME", str(tmp_path / ".agents"))
+    monkeypatch.setenv("GATEWAY_MTLS_MODE", "require")
+    with TestClient(app) as client:
+        with pytest.raises(WebSocketDisconnect) as rejected:
+            with client.websocket_connect(
+                "/v1/sessions/secure/ws",
+                headers={"x-forwarded-client-cert": "By=spoofed;Hash=not-proof"},
+            ):
+                pass
+        assert rejected.value.code == 4401
+        with client.websocket_connect(
+            "/v1/sessions/secure/ws?client_id=verified",
+            headers={"x-client-cert-verified": "SUCCESS"},
+        ) as websocket:
+            assert ServerFrame.from_binary(websocket.receive_bytes()).seq == 1
+
+
+@pytest.mark.asyncio
+async def test_relay_drops_broken_client_without_blocking_healthy_delivery():
+    class Socket:
+        def __init__(self, broken: bool = False) -> None:
+            self.broken = broken
+            self.payloads: list[bytes] = []
+
+        async def send_bytes(self, payload: bytes) -> None:
+            if self.broken:
+                raise RuntimeError("closed")
+            self.payloads.append(payload)
+
+    hub = SessionHub("ws://gateway", "gateway")
+    record = hub.create(session_id="broken-relay")
+    broken = Socket(broken=True)
+    healthy = Socket()
+    record.clients = {"broken": broken, "healthy": healthy}  # type: ignore[dict-item]
+    delivered = await hub.publish(record, ServerFrame(frame=Oneof("status", Status(state="running"))))  # type: ignore[arg-type]
+    assert delivered == 1
+    assert list(record.clients) == ["healthy"]
+    assert len(healthy.payloads) == 1
+
+
+def test_durable_budget_exhaustion_degrades_cloud_to_local(monkeypatch, tmp_path):
+    registry = _registry(tmp_path)
+    budget_path = tmp_path / "credits.json"
+    budget_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "claude": {
+                        "requests": 1,
+                        "tokensIn": 8,
+                        "tokensOut": 4,
+                        "budget": {"maxTokens": 12},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("AGENTS_CREDITS", str(budget_path))
+    tracer = TraceLogger(trace_dir=tmp_path / "traces")
+    router = Router(registry, tracer, quota=QuotaTracker())
+    try:
+        assert router.resolve_model("cloud-general", allow_cloud=True).id == "local-general"
+    finally:
+        tracer.close()
+
+
+def test_cloud_route_requires_opt_in_and_fails_closed_on_bad_budget(monkeypatch, tmp_path):
+    registry = _registry(tmp_path)
+    tracer = TraceLogger(trace_dir=tmp_path / "traces")
+    router = Router(registry, tracer, quota=QuotaTracker())
+    try:
+        assert router.resolve_model("cloud-general").id == "local-general"
+        assert router.resolve_model("cloud-general", allow_cloud=True).id == "cloud-general"
+        budget_path = tmp_path / "bad-credits.json"
+        budget_path.write_text("not-json", encoding="utf-8")
+        monkeypatch.setenv("GATEWAY_BUDGETS_PATH", str(budget_path))
+        assert router.resolve_model("cloud-general", allow_cloud=True).id == "local-general"
+    finally:
+        tracer.close()
+
+
+def _registry(tmp_path) -> ModelRegistry:
+    registry_path = tmp_path / "models.yaml"
+    schema_path = tmp_path / "schema.json"
+    schema_path.write_text(json.dumps({"type": "object"}), encoding="utf-8")
+    registry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "gateway-registry-v1",
+                "models": {
+                    "local-general": {
+                        "id": "local-general",
+                        "provider": "local",
+                        "model": "local-general",
+                        "api_base": "http://127.0.0.1:8001/v1",
+                        "role": "general",
+                        "context_length": 4096,
+                        "enabled": True,
+                    },
+                    "cluster-coder": {
+                        "id": "cluster-coder",
+                        "provider": "local",
+                        "model": "cluster-coder",
+                        "api_base": "http://s001:8001/v1",
+                        "role": "coding",
+                        "context_length": 4096,
+                        "enabled": True,
+                        "extra": {"node_id": "s001"},
+                    },
+                    "cloud-general": {
+                        "id": "cloud-general",
+                        "provider": "claude",
+                        "model": "claude-sonnet",
+                        "api_base": "https://cloud.invalid/v1",
+                        "role": "general",
+                        "context_length": 4096,
+                        "enabled": True,
+                        "cloud": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return ModelRegistry(registry_path, schema_path, tmp_path / "missing-inferctl.yaml")
