@@ -13,7 +13,7 @@ Explicit temporary or live state commands must always set all three roots:
 ```sh
 AGENTS_HOME=/absolute/.agents \
 AGENTS_USER_HOME=/absolute/user-home \
-AGENTS_ROOT=/absolute/agents-manager \
+AGENTS_ROOT=/absolute/Andromeda \
   bun run agents -- state doctor
 ```
 

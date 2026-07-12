@@ -1,6 +1,6 @@
 # Project
 
-Agent OS is one personal-agent product. This `agents-manager` repository owns
+Agent OS is one personal-agent product. This `Andromeda` repository owns
 the implementation; `agents` is the only operator/runtime CLI and
 `/Users/user/.agents` is the personal installation's only state root.
 

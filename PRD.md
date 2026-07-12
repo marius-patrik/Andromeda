@@ -1,11 +1,11 @@
-# Agent OS / agents-manager PRD
+# Agent OS / Andromeda PRD
 
 ## Overview
 
 Agent OS is a single personal agent system that can execute through multiple
 models, provider CLIs, harnesses, and machines without creating competing
 identity, memory, session, or configuration authorities. The
-`agents-manager` repository implements the system, and its `agents` CLI is the
+`Andromeda` repository implements the system, and its `agents` CLI is the
 single management and runtime surface.
 
 [Canonical State and Memory v2](docs/state-memory-v2.md) is the authoritative
@@ -15,7 +15,7 @@ capabilities around it.
 ## Naming and authority
 
 - **Agent OS** — final product name.
-- **agents-manager** — repository and package surface.
+- **Andromeda** — repository. npm package surface stays `@marius-patrik/agents-manager` (recorded exception).
 - **agents** — CLI command.
 - **`~/.agents` / `AGENTS_HOME`** — only authoritative runtime state root.
 - **`packages/core`** — consolidated code package; its domain folders are not
@@ -243,7 +243,7 @@ No obsolete `os/` package topology is part of the final product.
 ## Installation and validation
 
 The supported source install maintains one checkout of
-`marius-patrik/agents-manager`, writes one regular `AGENTS_HOME/bin/agents`
+`marius-patrik/Andromeda`, writes one regular `AGENTS_HOME/bin/agents`
 launcher, initializes explicit canonical roots, pins installed providers, and
 runs `agents state doctor`. It uses no global package-manager link. Old product
 checkout locations and installers are not supported update paths.

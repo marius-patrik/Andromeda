@@ -16,12 +16,12 @@ Requirements: Bun 1.1 or newer and Git. Provider CLIs (`codex`, `claude`,
 `kimi`, and `agy`) are optional unless their adapters are being used.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/marius-patrik/agents-manager/dev/install/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/marius-patrik/Andromeda/dev/install/install.sh | bash
 export PATH="$HOME/.agents/bin:$PATH"
 ```
 
 The installer maintains one checkout at
-`$AGENTS_USER_HOME/Projects/agents-manager` (or an explicit absolute
+`$AGENTS_USER_HOME/marius-patrik/Andromeda` (or an explicit absolute
 `AGENTS_ROOT`), one state root at `$AGENTS_USER_HOME/.agents` (or an explicit
 absolute `AGENTS_HOME`), and one regular launcher file at
 `$AGENTS_HOME/bin/agents`. It does not use Bun global linking. Because
@@ -37,8 +37,8 @@ checkout with a different origin or branch fails closed.
 ## Development setup
 
 ```sh
-git clone --branch dev https://github.com/marius-patrik/agents-manager.git "$HOME/Projects/agents-manager"
-cd "$HOME/Projects/agents-manager"
+git clone --branch dev https://github.com/marius-patrik/Andromeda.git "$HOME/marius-patrik/Andromeda"
+cd "$HOME/marius-patrik/Andromeda"
 bun install --frozen-lockfile
 AGENTS_HOME="$HOME/.agents" AGENTS_USER_HOME="$HOME" AGENTS_ROOT="$PWD" \
   bun run agents -- state init
@@ -50,7 +50,7 @@ ready. Do not use an old product checkout or installer as an update source.
 ## Product naming
 
 - **Agent OS** is the final product.
-- **agents-manager** is this repository and package surface.
+- **Andromeda** is this repository. The npm package surface remains `@marius-patrik/agents-manager` as a recorded exception until a package rename is scheduled.
 - **agents** is the CLI.
 - `packages/core` is the consolidated implementation package containing the
   manager, contracts, harness, gateway, inference, and plugin domains.
