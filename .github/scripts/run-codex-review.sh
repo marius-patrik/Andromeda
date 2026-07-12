@@ -64,8 +64,13 @@ if [ ! -s "${ISSUE_CONTEXT}" ]; then
 fi
 
 DIFF_FILE="$(mktemp)"
+GENERATED_FILE="$(mktemp)"
 PROMPT_FILE="$(mktemp)"
 PR_BODY_FILE="$(mktemp)"
+cleanup_review_temp() {
+  rm -f "${DIFF_FILE}" "${GENERATED_FILE}" "${PROMPT_FILE}" "${PR_BODY_FILE}"
+}
+trap cleanup_review_temp EXIT
 printf '%s\n' "${PR_BODY}" > "${PR_BODY_FILE}"
 DIFF_EXCLUDES=(
   ':!dist/**'
@@ -73,10 +78,21 @@ DIFF_EXCLUDES=(
   ':!coverage/**'
   ':!node_modules/**'
   ':!packages/web/dist/**'
+  ':!packages/core/src/core/contracts-go/gen/**'
+  ':!packages/core/src/core/clients/shared-ts/src/gen/**'
+  ':!packages/core/src/gateway/agent_os/**'
+  ':!packages/core/src/inference/python-agent/agent/gen/**'
+)
+GENERATED_PATHS=(
+  'packages/core/src/core/contracts-go/gen/**'
+  'packages/core/src/core/clients/shared-ts/src/gen/**'
+  'packages/core/src/gateway/agent_os/**'
+  'packages/core/src/inference/python-agent/agent/gen/**'
 )
 git diff --stat "${BASE_REF}...HEAD" -- . "${DIFF_EXCLUDES[@]}" > "${DIFF_FILE}"
 printf '\n--- FULL DIFF ---\n' >> "${DIFF_FILE}"
 git diff --find-renames "${BASE_REF}...HEAD" -- . "${DIFF_EXCLUDES[@]}" >> "${DIFF_FILE}"
+git diff --find-renames --name-status "${BASE_REF}...HEAD" -- "${GENERATED_PATHS[@]}" > "${GENERATED_FILE}"
 
 {
 cat <<EOF
@@ -119,6 +135,13 @@ append_capped_file "${ISSUE_CONTEXT}" "linked issue context" 220000
 
 cat <<EOF
 
+Generated payload file summary (bodies omitted; review generators and CI verification):
+EOF
+
+append_capped_file "${GENERATED_FILE}" "generated payload file summary" 40000
+
+cat <<EOF
+
 EOF
 
 append_capped_file "${DIFF_FILE}" "PR diff" 520000
@@ -140,6 +163,9 @@ fi
 
 if [ -n "${PROMPT_EXPORT}" ]; then
   cp "${PROMPT_FILE}" "${PROMPT_EXPORT}"
+  # The review container runs as root while the provider-isolated takeover runs
+  # as the host runner. The prompt contains repository context, not credentials.
+  chmod 0644 "${PROMPT_EXPORT}"
 fi
 PROMPT_DIGEST="$(sha256sum "${PROMPT_FILE}" | awk '{print $1}')"
 

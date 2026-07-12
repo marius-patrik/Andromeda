@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
-import { parseCredential, parseReview, persistRefreshedCredential, requestReview, shouldTakeOver } from "./run-kimi-review.mjs";
+import {
+  parseCredential,
+  parseReview,
+  persistRefreshedCredential,
+  requestReview,
+  reviewChunkChars,
+  reviewMaxTokens,
+  reviewTimeoutMs,
+  shouldTakeOver,
+} from "./run-kimi-review.mjs";
 
 const validReview = {
   approved: true,
@@ -23,10 +32,52 @@ test("parses fenced review JSON into the canonical result shape", () => {
   assert.deepEqual(Object.keys(review), ["approved", "summary", "blocking_findings", "non_blocking_notes"]);
 });
 
+test("recovers the final review object after unrelated balanced JSON", () => {
+  const review = parseReview(`scratch {"phase":"analysis"}\nfinal ${JSON.stringify(validReview)}\ntrailing`);
+  assert.equal(review.approved, true);
+  assert.deepEqual(review.blocking_findings, []);
+});
+
+test("multiple schema-valid objects combine into a fail-closed verdict", () => {
+  const scratch = JSON.stringify(validReview);
+  const final = JSON.stringify({
+    approved: false,
+    summary: "Final review found a blocker.",
+    blocking_findings: ["blocking final finding"],
+    non_blocking_notes: [],
+  });
+  const review = parseReview(`scratch ${scratch}\nfinal ${final}`);
+  assert.equal(review.approved, false);
+  assert.deepEqual(review.blocking_findings, ["blocking final finding"]);
+
+  const reversed = parseReview(`scratch ${final}\nfinal ${scratch}`);
+  assert.equal(reversed.approved, false);
+  assert.deepEqual(reversed.blocking_findings, ["blocking final finding"]);
+});
+
 test("blocking findings always force a failed normalized verdict", () => {
   const review = parseReview(JSON.stringify({ ...validReview, approved: true, blocking_findings: ["unsafe"] }));
   assert.equal(review.approved, false);
   assert.deepEqual(review.blocking_findings, ["unsafe"]);
+});
+
+test("invalid review shapes report the missing contract without echoing model content", () => {
+  assert.throws(
+    () => parseReview('{"verdict":"approved","private":"do not echo"}'),
+    (error) => {
+      assert.match(error.message, /review\.approved must be boolean/);
+      assert.doesNotMatch(error.message, /do not echo/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => parseReview('not-json-private-content'),
+    (error) => {
+      assert.match(error.message, /response was not parseable JSON/);
+      assert.doesNotMatch(error.message, /private-content/);
+      return true;
+    },
+  );
 });
 
 test("takeover dispatch uses only the trusted automation exit code", () => {
@@ -36,8 +87,33 @@ test("takeover dispatch uses only the trusted automation exit code", () => {
   assert.equal(shouldTakeOver("42"), true);
 });
 
+test("takeover timeout is long enough for large reviews and remains bounded", () => {
+  assert.equal(reviewTimeoutMs(), 900_000);
+  assert.equal(reviewTimeoutMs("900000"), 900_000);
+  assert.throws(() => reviewTimeoutMs("29999"), /between 30000 and 900000/);
+  assert.throws(() => reviewTimeoutMs("0xdbba0"), /between 30000 and 900000/);
+  assert.throws(() => reviewTimeoutMs("invalid"), /between 30000 and 900000/);
+});
+
+test("large-review completion budget is decimal-configurable and bounded", () => {
+  assert.equal(reviewMaxTokens(), 16_384);
+  assert.equal(reviewMaxTokens("32768"), 32_768);
+  assert.throws(() => reviewMaxTokens("4095"), /between 4096 and 32768/);
+  assert.throws(() => reviewMaxTokens("0x4000"), /between 4096 and 32768/);
+  assert.throws(() => reviewMaxTokens("invalid"), /between 4096 and 32768/);
+});
+
+test("review prompt chunks are configurable and bounded", () => {
+  assert.equal(reviewChunkChars(), 40_000);
+  assert.equal(reviewChunkChars("100000"), 100_000);
+  assert.throws(() => reviewChunkChars("9999"), /between 10000 and 100000/);
+  assert.throws(() => reviewChunkChars("0x9c40"), /between 10000 and 100000/);
+  assert.throws(() => reviewChunkChars("invalid"), /between 10000 and 100000/);
+});
+
 test("workflow isolates Codex and Kimi credentials in separate provider steps", async () => {
   const workflow = await readFile(".github/workflows/codex-review.yml", "utf8");
+  assert.match(workflow, /timeout-minutes: 45/);
   const codexStep = workflow.match(/- name: Run Codex review[\s\S]*?(?=\n\s{6}- name:)/)?.[0] || "";
   const kimiStep = workflow.match(/- name: Run credential-isolated Kimi takeover[\s\S]*?(?=\n\s{6}- name:)/)?.[0] || "";
   assert.match(codexStep, /CODEX_AUTH_JSON:/);
@@ -45,6 +121,22 @@ test("workflow isolates Codex and Kimi credentials in separate provider steps", 
   assert.match(kimiStep, /KIMI_AUTH_JSON:/);
   assert.doesNotMatch(kimiStep, /CODEX_AUTH_JSON:/);
   assert.match(kimiStep, /steps\.review\.outputs\.takeover == 'true'/);
+});
+
+test("review prompt budgets generated payloads as a file summary", async () => {
+  const runner = await readFile(".github/scripts/run-codex-review.sh", "utf8");
+  for (const path of [
+    "packages/core/src/core/contracts-go/gen/**",
+    "packages/core/src/core/clients/shared-ts/src/gen/**",
+    "packages/core/src/gateway/agent_os/**",
+    "packages/core/src/inference/python-agent/agent/gen/**",
+  ]) {
+    assert.match(runner, new RegExp(path.replaceAll("/", "\\/").replaceAll("*", "\\*")));
+  }
+  assert.match(runner, /git diff --find-renames --name-status/);
+  assert.match(runner, /Generated payload file summary/);
+  assert.match(runner, /trap cleanup_review_temp EXIT/);
+  assert.match(runner, /rm -f .*GENERATED_FILE/);
 });
 
 test("persists rotated credentials through an in-memory gh stdin pipe", async () => {
@@ -137,6 +229,7 @@ test("missing Codex auth exports the immutable prompt before requesting takeover
     });
     assert.equal(result.status, 42, result.stderr);
     assert.match(await readFile(prompt, "utf8"), /Managed repository agent context:\nrules/);
+    assert.equal((await stat(prompt)).mode & 0o777, 0o644);
     assert.equal(JSON.parse(await readFile(output, "utf8")).approved, false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -206,10 +299,224 @@ test("uses the review API without placing credentials in model input", async () 
   assert.equal(request.init.headers.authorization, "Bearer top-secret");
   assert.doesNotMatch(request.init.body, /top-secret/);
   assert.match(request.init.body, /review this diff/);
+  assert.match(request.init.body, /blocking_findings/);
+  assert.match(request.init.body, /non_blocking_notes/);
   assert.equal(JSON.parse(request.init.body).temperature, 1);
+  assert.equal(JSON.parse(request.init.body).max_tokens, 16_384);
+  assert.match(JSON.parse(request.init.body).prompt_cache_key, /^[a-f0-9]{64}$/);
 });
 
-test("refreshes an expired OAuth token before the review request", async () => {
+test("reviews large prompts in bounded segments and combines findings fail-closed", async () => {
+  const requests = [];
+  const segmentReviews = [
+    { ...validReview, summary: "A".repeat(700) },
+    {
+      approved: false,
+      summary: "B".repeat(700),
+      blocking_findings: ["segment blocker"],
+      non_blocking_notes: [],
+    },
+    { ...validReview, summary: "C".repeat(700) },
+  ];
+  const fetchImpl = async (_url, init) => {
+    requests.push(JSON.parse(init.body));
+    const review = segmentReviews[requests.length - 1];
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(review) } }] }), {
+      status: 200,
+    });
+  };
+  const sharedContext = [
+    "PR body quoted a marker",
+    "--- FULL DIFF ---",
+    "shared issue and repository context",
+    "--- FULL DIFF ---",
+    "",
+  ].join("\n");
+  const review = await requestReview({
+    prompt: `${sharedContext}${"x".repeat(85_000)}`,
+    credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3_600 },
+    fetchImpl,
+    env: { KIMI_REVIEW_CHUNK_CHARS: "40000" },
+  });
+  assert.equal(requests.length, 3);
+  assert.match(requests[0].messages[1].content, /Review segment 1 of 3/);
+  assert.match(requests[2].messages[1].content, /Review segment 3 of 3/);
+  assert.ok(requests.every((request) => request.messages[1].content.includes(sharedContext)));
+  assert.notEqual(requests[0].prompt_cache_key, requests[1].prompt_cache_key);
+  assert.equal(review.approved, false);
+  assert.deepEqual(review.blocking_findings, ["segment blocker"]);
+  assert.match(review.summary, /3 segments/);
+  assert.equal(review.summary.length, 1_500);
+});
+
+test("large prompts fail closed when shared context cannot be preserved", async () => {
+  let calls = 0;
+  await assert.rejects(
+    requestReview({
+      prompt: "x".repeat(40_001),
+      credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3_600 },
+      fetchImpl: async () => { calls += 1; },
+      env: { KIMI_REVIEW_CHUNK_CHARS: "40000" },
+    }),
+    /missing the generated full-diff boundary/,
+  );
+  assert.equal(calls, 0);
+});
+
+test("retries one transient provider failure with the same cached prompt", async () => {
+  const bodies = [];
+  let calls = 0;
+  const fetchImpl = async (_url, init) => {
+    calls += 1;
+    bodies.push(init.body);
+    if (calls === 1) throw new TypeError("fetch failed");
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validReview) } }] }), {
+      status: 200,
+    });
+  };
+  const waits = [];
+  const review = await requestReview({
+    prompt: "large review",
+    credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3600 },
+    fetchImpl,
+    env: {},
+    waitImpl: async (milliseconds) => waits.push(milliseconds),
+  });
+  assert.equal(review.approved, true);
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [1_000]);
+  assert.equal(bodies[0], bodies[1]);
+});
+
+test("does not retry a non-retryable provider response", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return new Response("bad request", { status: 400 });
+  };
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3600 },
+      fetchImpl,
+      env: {},
+      waitImpl: async () => assert.fail("non-retryable response must not wait"),
+    }),
+    /HTTP 400/,
+  );
+  assert.equal(calls, 1);
+});
+
+test("honors bounded Retry-After and cancels a retryable response body", async () => {
+  let calls = 0;
+  let cancelled = 0;
+  const waits = [];
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        ok: false,
+        status: 429,
+        headers: new Headers({ "retry-after": "2" }),
+        body: { cancel: async () => { cancelled += 1; } },
+      };
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validReview) } }] }), {
+      status: 200,
+    });
+  };
+  const review = await requestReview({
+    prompt: "review",
+    credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3600 },
+    fetchImpl,
+    env: {},
+    waitImpl: async (milliseconds) => waits.push(milliseconds),
+  });
+  assert.equal(review.approved, true);
+  assert.equal(cancelled, 1);
+  assert.deepEqual(waits, [2_000]);
+});
+
+test("the latest failure wins after mixed retry failures", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response("unavailable", { status: 503 });
+    }
+    throw new TypeError("latest fetch failed");
+  };
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3600 },
+      fetchImpl,
+      env: {},
+      waitImpl: async () => {},
+    }),
+    /latest fetch failed/,
+  );
+  assert.equal(calls, 2);
+});
+
+test("both retryable HTTP attempts fail closed with the final status", async () => {
+  const statuses = [503, 502];
+  let calls = 0;
+  const fetchImpl = async () => new Response("unavailable", { status: statuses[calls++] });
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3600 },
+      fetchImpl,
+      env: {},
+      waitImpl: async () => {},
+    }),
+    /retryable HTTP 502/,
+  );
+  assert.equal(calls, 2);
+});
+
+test("reports completion truncation distinctly from malformed JSON", async () => {
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({ choices: [{ finish_reason: "length", message: { content: '{"approved":' } }] }),
+      { status: 200 },
+    );
+  await assert.rejects(
+    requestReview({
+      prompt: "large review",
+      credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3600 },
+      fetchImpl,
+      env: {},
+    }),
+    /completion-token limit/,
+  );
+});
+
+test("malformed response diagnostics expose only bounded metadata", async () => {
+  const privateContent = "not-json-private-model-content";
+  const fetchImpl = async () =>
+    new Response(
+      JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: privateContent } }] }),
+      { status: 200 },
+    );
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: { access_token: "token", expires_at: Math.floor(Date.now() / 1000) + 3600 },
+      fetchImpl,
+      env: {},
+    }),
+    (error) => {
+      assert.match(error.message, /finish_reason=stop/);
+      assert.match(error.message, new RegExp(`content_chars=${privateContent.length}`));
+      assert.doesNotMatch(error.message, /private-model-content/);
+      return true;
+    },
+  );
+});
+
+test("refreshes an OAuth token that cannot cover the full review horizon", async () => {
   const calls = [];
   let rotated;
   const fetchImpl = async (url, init) => {
@@ -221,7 +528,11 @@ test("refreshes an expired OAuth token before the review request", async () => {
   };
   await requestReview({
     prompt: "review",
-    credential: { access_token: "expired", refresh_token: "refresh", expires_at: 1 },
+    credential: {
+      access_token: "expiring",
+      refresh_token: "refresh",
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+    },
     fetchImpl,
     env: {},
     onCredentialRefresh: async (credential) => {
@@ -234,4 +545,86 @@ test("refreshes an expired OAuth token before the review request", async () => {
   assert.equal(rotated.access_token, "fresh");
   assert.equal(rotated.refresh_token, "refresh");
   assert.ok(rotated.expires_at > Math.floor(Date.now() / 1000));
+});
+
+test("refreshes and retries exactly once when a long review returns 401", async () => {
+  const chatAuthorizations = [];
+  let chatCalls = 0;
+  let refreshCalls = 0;
+  const fetchImpl = async (url, init) => {
+    if (url.endsWith("/api/oauth/token")) {
+      refreshCalls += 1;
+      return new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600 }), { status: 200 });
+    }
+    chatCalls += 1;
+    chatAuthorizations.push(init.headers.authorization);
+    if (chatCalls === 1) return new Response("expired", { status: 401 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(validReview) } }] }), {
+      status: 200,
+    });
+  };
+  const review = await requestReview({
+    prompt: "review",
+    credential: {
+      access_token: "old",
+      refresh_token: "refresh",
+      expires_at: Math.floor(Date.now() / 1000) + 3_600,
+    },
+    fetchImpl,
+    env: {},
+  });
+  assert.equal(review.approved, true);
+  assert.deepEqual(chatAuthorizations, ["Bearer old", "Bearer fresh"]);
+  assert.equal(refreshCalls, 1);
+});
+
+test("a second 401 fails closed without rotating twice", async () => {
+  let chatCalls = 0;
+  let refreshCalls = 0;
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/api/oauth/token")) {
+      refreshCalls += 1;
+      return new Response(JSON.stringify({ access_token: "fresh", expires_in: 3600 }), { status: 200 });
+    }
+    chatCalls += 1;
+    return new Response("expired", { status: 401 });
+  };
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: {
+        access_token: "old",
+        refresh_token: "refresh",
+        expires_at: Math.floor(Date.now() / 1000) + 3_600,
+      },
+      fetchImpl,
+      env: {},
+    }),
+    /HTTP 401/,
+  );
+  assert.equal(chatCalls, 2);
+  assert.equal(refreshCalls, 1);
+});
+
+test("a failed 401 rotation stops without retrying the stale credential", async () => {
+  let chatCalls = 0;
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/api/oauth/token")) return new Response("unavailable", { status: 500 });
+    chatCalls += 1;
+    return new Response("expired", { status: 401 });
+  };
+  await assert.rejects(
+    requestReview({
+      prompt: "review",
+      credential: {
+        access_token: "old",
+        refresh_token: "refresh",
+        expires_at: Math.floor(Date.now() / 1000) + 3_600,
+      },
+      fetchImpl,
+      env: {},
+    }),
+    /credential refresh after HTTP 401 failed/,
+  );
+  assert.equal(chatCalls, 1);
 });

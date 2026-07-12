@@ -42,6 +42,7 @@ class ModelEntry:
         self.configured_enabled: bool = bool(data["enabled"])
         self.enabled: bool = self.configured_enabled
         self.extra: dict[str, Any] = deepcopy(data.get("extra", {}))
+        self.cloud: bool = bool(data.get("cloud", self.extra.get("cloud", self.provider != "local")))
         self.inferctl_managed: bool = bool(self.extra.get("inferctl_managed", False))
         if self.api_base is None and not self.inferctl_managed:
             raise RegistryError(f"model {self.id} requires api_base unless inferctl_managed")
@@ -55,6 +56,11 @@ class ModelEntry:
             "role": self.role,
             "context_length": self.context_length,
         }
+
+
+def is_local_entry(entry: ModelEntry) -> bool:
+    """Return true only for an on-host local backend, never cloud or cluster."""
+    return not entry.cloud and not (entry.extra.get("node_id") or entry.extra.get("backend_node_id"))
 
 
 class ModelRegistry:

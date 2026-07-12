@@ -14,7 +14,7 @@
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "name": {"type": "string"},
-          "provider": {"const": "local"},
+          "provider": {"type": "string", "minLength": 1},
           "model": {"type": "string", "minLength": 1},
           "api_base": {"type": "string", "format": "uri"},
           "role": {"enum": ["general", "coding", "conversation", "judge"]},
@@ -23,10 +23,15 @@
           "gpu": {"type": ["string", "null"]},
           "tensor_parallel": {"type": ["integer", "null"], "minimum": 1},
           "enabled": {"type": "boolean"},
+          "cloud": {"type": "boolean"},
           "extra": {
             "type": "object",
-            "properties": {"inferctl_managed": {"type": "boolean"}},
-            "additionalProperties": false
+            "properties": {
+              "inferctl_managed": {"type": "boolean"},
+              "node_id": {"type": "string"},
+              "backend_node_id": {"type": "string"}
+            },
+            "additionalProperties": true
           }
         },
         "allOf": [
