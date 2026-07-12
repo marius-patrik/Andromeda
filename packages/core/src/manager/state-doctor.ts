@@ -452,7 +452,7 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
       issues.push(`agents launcher mode is ${modeString(launcherInfo.mode)}, expected 0o700`);
     }
     const content = await readFile(launcher, "utf8");
-    const escaped = (value: string): string => value.replaceAll("\\", "\\\\").replaceAll(" ", "\\ ");
+    const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
     for (const [name, value] of [
       ["AGENTS_HOME", state.stateDir],
       ["AGENTS_USER_HOME", state.userHome],
@@ -460,13 +460,13 @@ async function launcherCheck(state: SharedState): Promise<StateDoctorCheck> {
       ["AGENTS_WORKSPACE", state.workspaceDir],
       ["AGENTS_SYSTEM_DATA_ROOT", systemDataPath(state.root)],
     ] as const) {
-      const bindings = [`export ${name}=${value}`, `export ${name}=${escaped(value)}`];
-      if (!bindings.some((binding) => content.includes(binding))) {
+      const binding = `export ${name}=${shellQuote(value)}`;
+      if (!content.includes(binding)) {
         issues.push(`agents launcher is missing canonical binding: export ${name}=${value}`);
       }
     }
     const cliPath = path.join(state.root, "packages", "core", "src", "manager", "cli.ts");
-    if (![cliPath, escaped(cliPath)].some((candidate) => content.includes(candidate))) {
+    if (!content.includes(`export AGENTS_ENTRYPOINT=${shellQuote(cliPath)}`)) {
       issues.push(`agents launcher is missing canonical binding: ${cliPath}`);
     }
     if (content.includes("export AGENTS_DATA=")) issues.push("agents launcher exports the removed AGENTS_DATA parent path");

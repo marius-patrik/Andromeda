@@ -101,7 +101,8 @@ install_or_update_checkout() {
 write_export() {
   local name="$1"
   local value="$2"
-  printf 'export %s=%q\n' "$name" "$value"
+  local escaped="${value//\'/\'\\\'\'}"
+  printf "export %s='%s'\n" "$name" "$escaped"
 }
 
 native_path() {
@@ -169,7 +170,9 @@ install_launcher() {
     write_export AGENTS_ENVIRONMENTS "$(native_path "$AGENTS_HOME/environments.json")"
     write_export AGENTS_CONFIG "$(native_path "$AGENTS_HOME/config.json")"
     write_export AGENTS_SYSTEM_DATA_ROOT "$(native_path "$AGENTS_ROOT/data/agent-os")"
-    printf 'exec %q %q "$@"\n' "$(native_path "$bun_bin")" "$(native_path "$AGENTS_ROOT/packages/core/src/manager/cli.ts")"
+    write_export AGENTS_BUN "$(native_path "$bun_bin")"
+    write_export AGENTS_ENTRYPOINT "$(native_path "$AGENTS_ROOT/packages/core/src/manager/cli.ts")"
+    echo 'exec "$AGENTS_BUN" "$AGENTS_ENTRYPOINT" "$@"'
   } >"$temporary"
   chmod 700 "$temporary"
   mv -f "$temporary" "$launcher"
