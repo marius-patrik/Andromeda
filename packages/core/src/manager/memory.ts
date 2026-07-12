@@ -514,14 +514,14 @@ async function tryCreatePrivateFile(filePath: string, content: string): Promise<
   const directory = path.dirname(filePath);
   await ensurePrivateDirectory(directory);
   const temporary = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  const handle = await open(temporary, "wx", 0o600);
   try {
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
+    const handle = await open(temporary, "wx", 0o600);
+    try {
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     try {
       await retryWindowsFileOperation(() => link(temporary, filePath));
     } catch (error) {

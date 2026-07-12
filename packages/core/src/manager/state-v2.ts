@@ -91,38 +91,29 @@ export async function retryWindowsFileOperation<T>(operation: () => Promise<T>):
 }
 
 async function publishAtomicReplacement(temporary: string, filePath: string): Promise<void> {
-  try {
-    await retryWindowsFileOperation(() => rename(temporary, filePath));
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code ?? "";
-    if (process.platform !== "win32" || !TRANSIENT_WINDOWS_PUBLICATION_ERRORS.has(code)) throw error;
-    // Bun/Windows can keep refusing rename-over-existing after every bounded
-    // retry. These files are replaceable projections written under a state
-    // lock, so fall back to remove+rename: readers may briefly see ENOENT but
-    // can never observe partial bytes. Immutable authorities use the exclusive
-    // hard-link path below and never enter this fallback.
-    await retryWindowsFileOperation(() => rm(filePath, { force: true }));
-    await retryWindowsFileOperation(() => rename(temporary, filePath));
-  }
+  // Never remove the previous complete projection to force a replacement.
+  // If bounded rename retries exhaust, the caller fails with the old value
+  // still published and the outer cleanup removes only the unpublished temp.
+  await retryWindowsFileOperation(() => rename(temporary, filePath));
 }
 
 export async function writeTextAtomic(filePath: string, content: string, mode = 0o600): Promise<void> {
   await serializeAtomicPublication(filePath, async () => {
     await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
     const temporary = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-    const handle = await open(temporary, "wx", mode);
     try {
-      await handle.writeFile(content, "utf8");
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    try {
+      const handle = await open(temporary, "wx", mode);
+      try {
+        await handle.writeFile(content, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
       await publishAtomicReplacement(temporary, filePath);
+      if (process.platform !== "win32") await chmod(filePath, mode);
     } finally {
-      await rm(temporary, { force: true });
+      await retryWindowsFileOperation(() => rm(temporary, { force: true }));
     }
-    if (process.platform !== "win32") await chmod(filePath, mode);
   });
 }
 
@@ -130,14 +121,14 @@ export async function writeTextExclusive(filePath: string, content: string, mode
   const directory = path.dirname(filePath);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const temporary = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
-  const handle = await open(temporary, "wx", mode);
   try {
-    await handle.writeFile(content, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try {
+    const handle = await open(temporary, "wx", mode);
+    try {
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     try {
       await retryWindowsFileOperation(() => link(temporary, filePath));
     } catch (error) {
@@ -155,7 +146,7 @@ export async function writeTextExclusive(filePath: string, content: string, mode
     }
     return true;
   } finally {
-    await rm(temporary, { force: true });
+    await retryWindowsFileOperation(() => rm(temporary, { force: true }));
   }
 }
 
