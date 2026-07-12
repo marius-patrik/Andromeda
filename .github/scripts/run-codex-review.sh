@@ -10,6 +10,7 @@ REVIEW_CONTEXT_DIR="${REVIEW_CONTEXT_DIR:-/review-context}"
 PR_TITLE="${PR_TITLE:-}"
 PR_BODY="${PR_BODY:-}"
 MAX_PROMPT_BYTES="${MAX_PROMPT_BYTES:-700000}"
+PROMPT_EXPORT="${PROMPT_EXPORT:-}"
 
 write_blocked_review() {
   local summary="$1"
@@ -47,7 +48,12 @@ if [ ! -s "${CODEX_HOME}/auth.json" ]; then
 fi
 
 git config --global --add safe.directory /workspace
-git fetch origin "${BASE_BRANCH}"
+if ! git rev-parse --verify "${BASE_REF}^{commit}" >/dev/null 2>&1; then
+  write_blocked_review \
+    "Codex autoreview could not resolve the configured base ref." \
+    "Ensure the PR checkout includes ${BASE_REF} before running the read-only review container."
+  exit 0
+fi
 
 AGENTS_CONTEXT="${REVIEW_CONTEXT_DIR}/AGENTS.md"
 ISSUE_CONTEXT="${REVIEW_CONTEXT_DIR}/linked-issues.md"
@@ -137,6 +143,10 @@ if [ "${PROMPT_BYTES}" -gt "${MAX_PROMPT_BYTES}" ]; then
   head -c "${HEAD_BYTES}" "${PROMPT_FILE}" > "${TRUNCATED_PROMPT_FILE}"
   printf '%s' "${TRUNCATION_MARKER}" >> "${TRUNCATED_PROMPT_FILE}"
   mv "${TRUNCATED_PROMPT_FILE}" "${PROMPT_FILE}"
+fi
+
+if [ -n "${PROMPT_EXPORT}" ]; then
+  cp "${PROMPT_FILE}" "${PROMPT_EXPORT}"
 fi
 
 if ! codex exec \
