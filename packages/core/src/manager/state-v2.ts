@@ -75,22 +75,6 @@ export async function writeTextAtomic(filePath: string, content: string, mode = 
 export async function writeTextExclusive(filePath: string, content: string, mode = 0o600): Promise<boolean> {
   const directory = path.dirname(filePath);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  if (process.platform === "win32") {
-    let destination;
-    try {
-      destination = await open(filePath, "wx", mode);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw error;
-    }
-    try {
-      await destination.writeFile(content, "utf8");
-      await destination.sync();
-    } finally {
-      await destination.close();
-    }
-    return true;
-  }
   const temporary = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`);
   const handle = await open(temporary, "wx", mode);
   try {
@@ -106,12 +90,14 @@ export async function writeTextExclusive(filePath: string, content: string, mode
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
     }
-    await chmod(filePath, mode);
-    const directoryHandle = await open(directory, "r");
-    try {
-      await directoryHandle.sync();
-    } finally {
-      await directoryHandle.close();
+    if (process.platform !== "win32") {
+      await chmod(filePath, mode);
+      const directoryHandle = await open(directory, "r");
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
     }
     return true;
   } finally {
