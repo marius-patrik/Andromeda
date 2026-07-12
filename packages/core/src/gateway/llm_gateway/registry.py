@@ -135,6 +135,8 @@ class ModelRegistry:
                 }
                 continue
             malformed = _optional_string(status.get("_malformed"))
+            if malformed is None:
+                malformed = _inferctl_entry_error(status)
             api_base = _http_api_base(status.get("api_base"))
             runtime_status = _inferctl_state(status)
             if malformed:
@@ -219,10 +221,24 @@ def _http_api_base(value: Any) -> str | None:
     text = _optional_string(value)
     if text is None:
         return None
-    parsed = urlparse(text)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    try:
+        parsed = urlparse(text)
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or hostname is None:
         return None
     return text
+
+
+def _inferctl_entry_error(status: dict[str, Any]) -> str | None:
+    if "healthy" in status and not isinstance(status["healthy"], bool):
+        return "healthy must be a boolean"
+    for field in ("status", "state"):
+        if field in status and status[field] is not None and not isinstance(status[field], str):
+            return f"{field} must be a string"
+    return None
 
 
 def _inferctl_state(status: dict[str, Any]) -> str:

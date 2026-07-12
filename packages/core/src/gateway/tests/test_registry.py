@@ -107,7 +107,10 @@ class TestModelRegistry:
 
         reg_path.write_text(yaml.safe_dump({
             "schema_version": "gateway-registry-v1",
-            "models": {model_id: managed(model_id) for model_id in ("healthy", "broken", "bad-url")},
+            "models": {
+                model_id: managed(model_id)
+                for model_id in ("healthy", "broken", "bad-url", "bad-brackets", "bad-port", "bad-health")
+            },
         }))
         status_path = Path(td) / "inferctl.yaml"
         status_path.write_text(yaml.safe_dump({
@@ -116,12 +119,22 @@ class TestModelRegistry:
                 "healthy": {"status": "healthy", "api_base": "http://127.0.0.1:9101/v1"},
                 "broken": "not-an-object",
                 "bad-url": {"status": "healthy", "api_base": "file:///tmp/socket"},
+                "bad-brackets": {"status": "healthy", "api_base": "http://[::1"},
+                "bad-port": {"status": "healthy", "api_base": "http://localhost:not-a-port/v1"},
+                "bad-health": {
+                    "status": "healthy",
+                    "healthy": "false",
+                    "api_base": "http://127.0.0.1:9202/v1",
+                },
             },
         }))
         reg = ModelRegistry(reg_path, schema_path, status_path)
         assert [entry.id for entry in reg.list_enabled()] == ["healthy"]
         assert reg.get("broken").extra["inferctl"]["status"] == "malformed"
         assert reg.get("bad-url").extra["inferctl"]["status"] == "malformed"
+        assert reg.get("bad-brackets").extra["inferctl"]["status"] == "malformed"
+        assert reg.get("bad-port").extra["inferctl"]["status"] == "malformed"
+        assert reg.get("bad-health").extra["inferctl"]["status"] == "malformed"
 
     def test_stopped_lifecycle_cannot_be_overridden_by_stale_healthy_flag(self, tmp_registry):
         reg_path, schema_path, td = tmp_registry
