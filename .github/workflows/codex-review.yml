@@ -96,6 +96,7 @@ jobs:
         id: review
         env:
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          KIMI_AUTH_JSON: ${{ secrets.KIMI_AUTH_JSON }}
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -116,7 +117,9 @@ jobs:
           fi
 
           CODEX_HOME_DIR="${RUNNER_TEMP}/codex-home"
+          REVIEW_OUTPUT_DIR="${RUNNER_TEMP}/review-output"
           mkdir -p "${CODEX_HOME_DIR}"
+          mkdir -p "${REVIEW_OUTPUT_DIR}"
           printf '%s' "${CODEX_AUTH_JSON}" > "${CODEX_HOME_DIR}/auth.json"
           chmod 600 "${CODEX_HOME_DIR}/auth.json"
 
@@ -125,17 +128,26 @@ jobs:
             -e HOME=/codex-home \
             -e BASE_BRANCH \
             -e BASE_REF=origin/${BASE_BRANCH} \
-            -e REVIEW_OUTPUT=codex-review.json \
+            -e REVIEW_OUTPUT=/review-output/codex-review.json \
+            -e PROMPT_EXPORT=/review-output/review-prompt.txt \
             -e REVIEW_CONTEXT_DIR=/review-context \
             -e PR_TITLE \
             -e PR_BODY \
-            -e KIMI_AUTH_JSON \
-            -v "${PWD}/pr-workspace:/workspace" \
+            -v "${PWD}/pr-workspace:/workspace:ro" \
             -v "${PWD}/review-context:/review-context:ro" \
             -v "${CODEX_HOME_DIR}:/codex-home" \
+            -v "${REVIEW_OUTPUT_DIR}:/review-output" \
             darkfactory-codex-review
 
-          cp pr-workspace/codex-review.json codex-review.json
+          cp "${REVIEW_OUTPUT_DIR}/codex-review.json" codex-review.json
+
+          if node -e "const r=require('./codex-review.json'); process.exit(r.summary.includes('command failed before producing') ? 0 : 1)"; then
+            if [ -n "${KIMI_AUTH_JSON:-}" ]; then
+              KIMI_REVIEW_PROMPT="${REVIEW_OUTPUT_DIR}/review-prompt.txt" \
+              KIMI_REVIEW_OUTPUT="${PWD}/codex-review.json" \
+              node .github/scripts/run-kimi-review.mjs
+            fi
+          fi
 
       - name: Comment review
         if: always()
