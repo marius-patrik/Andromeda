@@ -150,6 +150,38 @@ describe("encrypted cross-machine event exchange", () => {
     }
   });
 
+  test("export convergence hash is derived only from the captured event snapshot", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-export-snapshot-"));
+    try {
+      const source = await exchangeState(path.join(root, "source"));
+      const target = await exchangeState(path.join(root, "target"));
+      await rememberMemory(source, {
+        scope: "project",
+        subject: "Andromeda",
+        predicate: "snapshot-first",
+        value: "first",
+        evidence,
+      });
+      const bundle = path.join(root, "events.bundle.json");
+      const exported = await exportEventBundle(source, bundle, {
+        afterCollection: async () => {
+          await rememberMemory(source, {
+            scope: "project",
+            subject: "Andromeda",
+            predicate: "snapshot-later",
+            value: "second",
+            evidence,
+          });
+        },
+      });
+      const imported = await importEventBundle(target, bundle);
+      expect(imported.imported).toBe(1);
+      expect(imported.projectionHash).toBe(exported.projectionHash);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("tampering, immutable collisions, and secret memory fail before publication", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-denied-"));
     try {

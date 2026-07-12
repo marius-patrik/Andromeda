@@ -396,6 +396,32 @@ async function validateMergedEvents(state: SharedState, incoming: Map<string, st
   return combined;
 }
 
+async function projectionHashForCapturedEntries(state: SharedState, entries: EventEntry[]): Promise<string> {
+  const validationRoot = await mkdtemp(path.join(stateV2Paths(state).syncDir, "export-validate-"));
+  try {
+    await mkdir(path.join(validationRoot, "memory", "events"), { recursive: true });
+    const captured = new Map<string, string>();
+    for (const entry of entries) {
+      const content = Buffer.from(entry.content, "base64").toString("utf8");
+      const target = path.join(validationRoot, ...entry.path.split("/"));
+      if (!(await writeTextExclusive(target, content))) throw new Error(`duplicate captured event: ${entry.path}`);
+      captured.set(entry.path, content);
+    }
+    const shadow = sharedStateAt(state.root, validationRoot, state.userHome);
+    const [memory, sessions, orchestrator] = await Promise.all([
+      inspectMemoryIntegrity(shadow),
+      inspectSessionIntegrity(shadow),
+      inspectOrchestratorIntegrity(shadow),
+    ]);
+    if (!memory.eventIntegrity) throw new Error(`captured memory events are invalid: ${memory.issues.join("; ")}`);
+    if (!sessions.eventIntegrity) throw new Error(`captured session events are invalid: ${sessions.issues.join("; ")}`);
+    if (!orchestrator.eventIntegrity) throw new Error(`captured orchestrator events are invalid: ${orchestrator.issues.join("; ")}`);
+    return await rebuildImportedProjectionsWhileLocked(shadow, captured);
+  } finally {
+    await rm(validationRoot, { recursive: true, force: true });
+  }
+}
+
 async function projectionHash(state: SharedState, incoming: Map<string, string>): Promise<string> {
   const hashes: string[] = [];
   const includeMemory = [...incoming.keys()].some((item) => item.startsWith("memory/"));
@@ -508,7 +534,11 @@ export async function eventSyncStatus(state: SharedState): Promise<EventSyncStat
   return { enabled: config.enabled, transport: config.transport, keyAvailable, committedImports, preparedImports };
 }
 
-export async function exportEventBundle(state: SharedState, outputPath: string): Promise<EventSyncResult> {
+export async function exportEventBundle(
+  state: SharedState,
+  outputPath: string,
+  options: { afterCollection?: () => Promise<void> } = {},
+): Promise<EventSyncResult> {
   const config = await readConfig(state);
   if (!config.enabled || config.transport !== "encrypted-bundle") throw new Error("event exchange is disabled");
   const key = await keyMaterial(state);
@@ -522,6 +552,8 @@ export async function exportEventBundle(state: SharedState, outputPath: string):
   if (!sessions.eventIntegrity) throw new Error(`cannot export invalid session events: ${sessions.issues.join("; ")}`);
   if (!orchestrator.eventIntegrity) throw new Error(`cannot export invalid orchestrator events: ${orchestrator.issues.join("; ")}`);
   const entries = await collectEventEntries(state);
+  await options.afterCollection?.();
+  const capturedProjectionHash = await projectionHashForCapturedEntries(state, entries);
   const payload: BundlePayload = { schemaVersion: 1, source: manifest, entries };
   const plaintext = JSON.stringify(payload);
   if (Buffer.byteLength(plaintext) > MAX_BUNDLE_BYTES) throw new Error("event exchange bundle is too large");
@@ -539,8 +571,7 @@ export async function exportEventBundle(state: SharedState, outputPath: string):
     ciphertext: ciphertext.toString("base64"),
   };
   await writeTextAtomic(path.resolve(outputPath), `${JSON.stringify(envelope, null, 2)}\n`);
-  const entryMap = new Map(entries.map((entry) => [entry.path, ""]));
-  return { payloadHash, entries: entries.length, imported: 0, skipped: 0, projectionHash: await projectionHash(state, entryMap), idempotent: false };
+  return { payloadHash, entries: entries.length, imported: 0, skipped: 0, projectionHash: capturedProjectionHash, idempotent: false };
 }
 
 export async function importEventBundle(
