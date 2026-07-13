@@ -8,8 +8,6 @@ param(
     [string]$AgentsCommand = "agents",
     [string]$UserHome = $HOME,
     [string]$CompatibilityRoot = "",
-    [switch]$SkipCompatibilityProjection,
-    [switch]$SkipRepositorySync,
     [switch]$ClearCache
 )
 
@@ -172,25 +170,71 @@ function Assert-StateSyncSucceeded {
     if (-not ($propertyNames -contains "backup") -or $null -eq $Result.backup) {
         throw "agents state sync did not return backup evidence."
     }
+
+    $restoreProperties = @($Result.restored.PSObject.Properties.Name)
+    foreach ($required in @("bundles", "imported", "skipped", "projectionHash")) {
+        if (-not ($restoreProperties -contains $required)) {
+            throw "agents state sync restore evidence is missing $required."
+        }
+    }
+    foreach ($count in @($Result.restored.bundles, $Result.restored.imported, $Result.restored.skipped)) {
+        if ($count -isnot [ValueType] -or [int64]$count -lt 0) {
+            throw "agents state sync restore evidence contains an invalid count."
+        }
+    }
+
+    $backupProperties = @($Result.backup.PSObject.Properties.Name)
+    foreach ($required in @("bundle", "payloadHash", "entries", "committed")) {
+        if (-not ($backupProperties -contains $required)) {
+            throw "agents state sync backup evidence is missing $required."
+        }
+    }
+    if (
+        [string]::IsNullOrWhiteSpace([string]$Result.backup.bundle) -or
+        [string]$Result.backup.payloadHash -notmatch '^[a-fA-F0-9]{64}$' -or
+        $Result.backup.entries -isnot [ValueType] -or
+        [int64]$Result.backup.entries -lt 0 -or
+        $Result.backup.committed -isnot [bool]
+    ) {
+        throw "agents state sync backup evidence is invalid."
+    }
+}
+
+function Save-ProjectionState {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    return [ordered]@{
+        Path = $Path
+        Existed = Test-Path -LiteralPath $Path
+        Content = if (Test-Path -LiteralPath $Path) { Get-Content -LiteralPath $Path -Raw } else { "" }
+    }
+}
+
+function Restore-ProjectionState {
+    param([Parameter(Mandatory=$true)]$Saved)
+    if ($Saved.Existed) {
+        Write-Utf8NoBom -Path $Saved.Path -Content $Saved.Content
+    } elseif (Test-Path -LiteralPath $Saved.Path) {
+        Remove-Item -LiteralPath $Saved.Path -Force
+    }
 }
 
 $authority = Resolve-AgentEnvironment
 $resolvedCompatibilityRoot = $null
-if (-not $SkipCompatibilityProjection) {
-    if ([string]::IsNullOrWhiteSpace($CompatibilityRoot)) {
-        if ([string]::IsNullOrWhiteSpace($UserHome)) {
-            throw "Unable to resolve a user home for compatibility projections."
-        }
-        $CompatibilityRoot = Join-Path (Join-Path $UserHome ".codex") "memories"
+if ([string]::IsNullOrWhiteSpace($CompatibilityRoot)) {
+    if ([string]::IsNullOrWhiteSpace($UserHome)) {
+        throw "Unable to resolve a user home for compatibility projections."
     }
-    $resolvedCompatibilityRoot = [System.IO.Path]::GetFullPath($CompatibilityRoot)
-    $canonicalRootPath = [System.IO.Path]::GetFullPath($authority.MemoryRoot)
-    if ($resolvedCompatibilityRoot -eq $canonicalRootPath) {
-        throw "Compatibility projection root must not equal canonical memory root."
-    }
-    Assert-ProjectionBlockShape -Path (Join-Path $resolvedCompatibilityRoot "handoff.md") -Start "<!-- rommie:compact:start -->" -End "<!-- rommie:compact:end -->"
-    Assert-ProjectionBlockShape -Path (Join-Path $resolvedCompatibilityRoot "SHORT.md") -Start "<!-- rommie:compact-short:start -->" -End "<!-- rommie:compact-short:end -->"
+    $CompatibilityRoot = Join-Path (Join-Path $UserHome ".codex") "memories"
 }
+$resolvedCompatibilityRoot = [System.IO.Path]::GetFullPath($CompatibilityRoot)
+$canonicalRootPath = [System.IO.Path]::GetFullPath($authority.MemoryRoot)
+if ($resolvedCompatibilityRoot -eq $canonicalRootPath) {
+    throw "Compatibility projection root must not equal canonical memory root."
+}
+$handoffPath = Join-Path $resolvedCompatibilityRoot "handoff.md"
+$shortPath = Join-Path $resolvedCompatibilityRoot "SHORT.md"
+Assert-ProjectionBlockShape -Path $handoffPath -Start "<!-- rommie:compact:start -->" -End "<!-- rommie:compact:end -->"
+Assert-ProjectionBlockShape -Path $shortPath -Start "<!-- rommie:compact-short:start -->" -End "<!-- rommie:compact-short:end -->"
 
 $activeResult = Invoke-AgentsJson -Arguments @(
     "memory", "list",
@@ -204,6 +248,10 @@ $active = @($activeResult)
 if ($active.Count -gt 1) {
     throw "Canonical memory contains multiple active compaction records; refusing to guess."
 }
+
+# Prove repository health and remote reachability before changing canonical memory.
+$preflightSync = Invoke-AgentsJson -Arguments @("state", "sync", "--json")
+Assert-StateSyncSucceeded -Result $preflightSync
 
 $now = Get-Date -Format o
 $capsuleId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N"))
@@ -243,26 +291,38 @@ $evidenceArgs = @(
     "--observed-at", $now,
     "--json"
 )
-$record = if ($active.Count -eq 1) {
-    Invoke-AgentsJson -Arguments (@("memory", "supersede", [string]$active[0].id) + $evidenceArgs)
-} else {
-    Invoke-AgentsJson -Arguments (@(
-        "memory", "remember",
-        "--scope", "session",
-        "--subject", "compaction",
-        "--predicate", "current"
-    ) + $evidenceArgs)
-}
+$record = $null
+$render = $null
+$memoryStatus = $null
+$sync = $null
+$statePath = Join-Path $authority.MemoryRoot ".compact-state.json"
+$compatibilityStatePath = Join-Path $resolvedCompatibilityRoot ".compact-state.json"
+$cachePath = Join-Path $resolvedCompatibilityRoot "cache.md"
+$handoffSaved = Save-ProjectionState -Path $handoffPath
+$shortSaved = Save-ProjectionState -Path $shortPath
+$stateSaved = Save-ProjectionState -Path $statePath
+$compatibilityStateSaved = Save-ProjectionState -Path $compatibilityStatePath
+$cacheSaved = Save-ProjectionState -Path $cachePath
 
-$render = Invoke-AgentsJson -Arguments @("memory", "render", "--json")
-$memoryStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
-if (-not $memoryStatus.ok) {
-    throw "Canonical memory integrity failed after writing the compaction capsule."
-}
+try {
+    $record = if ($active.Count -eq 1) {
+        Invoke-AgentsJson -Arguments (@("memory", "supersede", [string]$active[0].id) + $evidenceArgs)
+    } else {
+        Invoke-AgentsJson -Arguments (@(
+            "memory", "remember",
+            "--scope", "session",
+            "--subject", "compaction",
+            "--predicate", "current"
+        ) + $evidenceArgs)
+    }
 
-if (-not $SkipCompatibilityProjection) {
-    $compatibilityRootPath = $resolvedCompatibilityRoot
-    New-Item -ItemType Directory -Path $compatibilityRootPath -Force | Out-Null
+    $render = Invoke-AgentsJson -Arguments @("memory", "render", "--json")
+    $memoryStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
+    if (-not $memoryStatus.ok) {
+        throw "Canonical memory integrity failed after writing the compaction capsule."
+    }
+
+    New-Item -ItemType Directory -Path $resolvedCompatibilityRoot -Force | Out-Null
 
     $handoffSection = @"
 <!-- rommie:compact:start -->
@@ -291,7 +351,7 @@ Repos:
 - $Repos
 <!-- rommie:compact:end -->
 "@
-    Update-ProjectionBlock -Path (Join-Path $compatibilityRootPath "handoff.md") -Start "<!-- rommie:compact:start -->" -End "<!-- rommie:compact:end -->" -Section $handoffSection
+    Update-ProjectionBlock -Path $handoffPath -Start "<!-- rommie:compact:start -->" -End "<!-- rommie:compact:end -->" -Section $handoffSection
 
     $shortSection = @"
 <!-- rommie:compact-short:start -->
@@ -305,32 +365,24 @@ Blockers: $Blockers
 Last validation: $Validation
 <!-- rommie:compact-short:end -->
 "@
-    Update-ProjectionBlock -Path (Join-Path $compatibilityRootPath "SHORT.md") -Start "<!-- rommie:compact-short:start -->" -End "<!-- rommie:compact-short:end -->" -Section $shortSection
-}
+    Update-ProjectionBlock -Path $shortPath -Start "<!-- rommie:compact-short:start -->" -End "<!-- rommie:compact-short:end -->" -Section $shortSection
 
-$sync = $null
-$repositorySynced = $false
-if (-not $SkipRepositorySync) {
     $sync = Invoke-AgentsJson -Arguments @("state", "sync", "--json")
     Assert-StateSyncSucceeded -Result $sync
-    $repositorySynced = $true
-}
 
-$statePath = Join-Path $authority.MemoryRoot ".compact-state.json"
-$statePayload = [ordered]@{
-    schemaVersion = 2
-    lastCompact = $now
-    authority = "agents-memory-events"
-    recordId = $record.id
-    snapshot = $snapshotPath
-    snapshotSha256 = $snapshotHash
-    projection = $render.filePath
-    projectionHash = $memoryStatus.projectionHash
-    repositorySync = $sync
-}
-Write-Utf8NoBom -Path $statePath -Content (($statePayload | ConvertTo-Json -Depth 8) + [Environment]::NewLine)
+    $statePayload = [ordered]@{
+        schemaVersion = 2
+        lastCompact = $now
+        authority = "agents-memory-events"
+        recordId = $record.id
+        snapshot = $snapshotPath
+        snapshotSha256 = $snapshotHash
+        projection = $render.filePath
+        projectionHash = $memoryStatus.projectionHash
+        repositorySync = $sync
+    }
+    Write-Utf8NoBom -Path $statePath -Content (($statePayload | ConvertTo-Json -Depth 8) + [Environment]::NewLine)
 
-if (-not $SkipCompatibilityProjection) {
     $compatibilityState = [ordered]@{
         schemaVersion = 2
         generatedProjection = $true
@@ -338,11 +390,71 @@ if (-not $SkipCompatibilityProjection) {
         recordId = $record.id
         snapshot = $snapshotPath
     }
-    Write-Utf8NoBom -Path (Join-Path $compatibilityRootPath ".compact-state.json") -Content (($compatibilityState | ConvertTo-Json -Depth 4) + [Environment]::NewLine)
+    Write-Utf8NoBom -Path $compatibilityStatePath -Content (($compatibilityState | ConvertTo-Json -Depth 4) + [Environment]::NewLine)
 
     if ($ClearCache) {
-        Write-Utf8NoBom -Path (Join-Path $compatibilityRootPath "cache.md") -Content ("# Immediate Task Cache`n`nGenerated compatibility cache. Canonical authority is under `$($authority.MemoryRoot)`.`n`nCurrent cache:`n- None.`n")
+        Write-Utf8NoBom -Path $cachePath -Content ("# Immediate Task Cache`n`nGenerated compatibility cache. Canonical authority is under `$($authority.MemoryRoot)`.`n`nCurrent cache:`n- None.`n")
     }
+} catch {
+    $failureMessage = $_.Exception.Message
+    $recoveryIssues = @()
+
+    foreach ($savedProjection in @($handoffSaved, $shortSaved, $stateSaved, $compatibilityStateSaved, $cacheSaved)) {
+        try {
+            Restore-ProjectionState -Saved $savedProjection
+        } catch {
+            $recoveryIssues += "projection restore failed: $($_.Exception.Message)"
+        }
+    }
+
+    if ($null -ne $record) {
+        try {
+            $recoveryPath = Join-Path $snapshotDirectory "$capsuleId-rollback.json"
+            $recoveryPayload = [ordered]@{
+                schemaVersion = 1
+                failedRecordId = $record.id
+                failedAt = Get-Date -Format o
+                reason = $failureMessage
+                priorRecordId = if ($active.Count -eq 1) { $active[0].id } else { $null }
+                priorValue = if ($active.Count -eq 1) { $active[0].value } else { $null }
+            }
+            Write-Utf8NoBom -Path $recoveryPath -Content (($recoveryPayload | ConvertTo-Json -Depth 5) + [Environment]::NewLine)
+            $recoveryHash = (Get-FileHash -LiteralPath $recoveryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $recoveryUri = ([System.Uri]::new($recoveryPath)).AbsoluteUri
+            $recoveryEvidence = @(
+                "--source", $recoveryUri,
+                "--hash", $recoveryHash,
+                "--source-class", "verified",
+                "--confidence", "1",
+                "--json"
+            )
+            if ($active.Count -eq 1) {
+                Invoke-AgentsJson -Arguments (@(
+                    "memory", "supersede", [string]$record.id,
+                    "--value", [string]$active[0].value,
+                    "--sensitivity", [string]$active[0].sensitivity,
+                    "--observed-at", (Get-Date -Format o)
+                ) + $recoveryEvidence) | Out-Null
+            } else {
+                Invoke-AgentsJson -Arguments (@(
+                    "memory", "retract", [string]$record.id,
+                    "--reason", "compaction publication failed"
+                ) + $recoveryEvidence) | Out-Null
+            }
+            Invoke-AgentsJson -Arguments @("memory", "render", "--json") | Out-Null
+            $recoveredStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
+            if (-not $recoveredStatus.ok) {
+                throw "canonical memory integrity remained unhealthy after rollback"
+            }
+            $recoverySync = Invoke-AgentsJson -Arguments @("state", "sync", "--json")
+            Assert-StateSyncSucceeded -Result $recoverySync
+        } catch {
+            $recoveryIssues += "canonical rollback failed: $($_.Exception.Message)"
+        }
+    }
+
+    $recoverySummary = if ($recoveryIssues.Count -eq 0) { "rollback completed" } else { $recoveryIssues -join "; " }
+    throw "Compaction publication failed: $failureMessage. Recovery: $recoverySummary."
 }
 
 [ordered]@{
@@ -352,5 +464,5 @@ if (-not $SkipCompatibilityProjection) {
     snapshot = $snapshotPath
     projection = $render.filePath
     projectionHash = $memoryStatus.projectionHash
-    repositorySynced = $repositorySynced
+    repositorySynced = $true
 } | ConvertTo-Json -Depth 4

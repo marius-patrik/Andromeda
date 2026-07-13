@@ -22,7 +22,10 @@ construction must remain portable across Windows, macOS, and Linux.
 1. Capture the current objective, completed work, repo/path state, validation, blockers, and exact next actions.
 2. Prefer facts that a fresh agent needs to resume, not a transcript summary.
 3. Run the capsule script with explicit values. It discovers `AGENTS_HOME` and
-   `AGENTS_MEMORY` from `agents state env`; no memory-root override is allowed:
+   `AGENTS_MEMORY` from `agents state env`; no memory-root or mandatory-step
+   bypass is allowed. The script preflights repository synchronization before
+   mutation, then rolls canonical memory and compatibility files back if final
+   publication fails:
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\skills\compact\scripts\write_compaction_capsule.ps1 -Objective "current goal" -State "what is done now" -Next "next command or decision" -Validation "checks run and results" -Blockers "known blockers or None"
@@ -50,4 +53,3 @@ A useful compaction capsule names:
 - The exact next action if work resumes.
 - The canonical memory record, projection hash, and encrypted repository-sync
   result.
-

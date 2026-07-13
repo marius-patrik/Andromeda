@@ -24,9 +24,9 @@ if ($CommandArgs[0] -eq "state" -and $CommandArgs[1] -eq "env") {
 }
 if ($CommandArgs[0] -eq "memory" -and $CommandArgs[1] -eq "list") {
     if ($env:FAKE_ACTIVE_IDS) {
-        @($env:FAKE_ACTIVE_IDS.Split(",") | ForEach-Object { @{ id = $_; status = "active" } }) | ConvertTo-Json -Compress
+        @($env:FAKE_ACTIVE_IDS.Split(",") | ForEach-Object { @{ id = $_; status = "active"; value = "prior-value"; sensitivity = "internal" } }) | ConvertTo-Json -Compress
     } elseif ($env:FAKE_ACTIVE_ID) {
-        @(@{ id = $env:FAKE_ACTIVE_ID; status = "active" }) | ConvertTo-Json -Compress
+        @(@{ id = $env:FAKE_ACTIVE_ID; status = "active"; value = "prior-value"; sensitivity = "internal" }) | ConvertTo-Json -Compress
     } else {
         "[]"
     }
@@ -40,6 +40,10 @@ if ($CommandArgs[0] -eq "memory" -and $CommandArgs[1] -eq "supersede") {
     @{ id = "record-superseded"; status = "active" } | ConvertTo-Json -Compress
     exit 0
 }
+if ($CommandArgs[0] -eq "memory" -and $CommandArgs[1] -eq "retract") {
+    @{ id = $CommandArgs[2]; status = "retracted" } | ConvertTo-Json -Compress
+    exit 0
+}
 if ($CommandArgs[0] -eq "memory" -and $CommandArgs[1] -eq "render") {
     @{ filePath = (Join-Path $env:FAKE_AGENTS_MEMORY "views/startup.md"); changed = $true } | ConvertTo-Json -Compress
     exit 0
@@ -49,8 +53,15 @@ if ($CommandArgs[0] -eq "memory" -and $CommandArgs[1] -eq "status") {
     exit 0
 }
 if ($CommandArgs[0] -eq "state" -and $CommandArgs[1] -eq "sync") {
-    $pushed = $env:FAKE_SYNC_PUSHED -ne "false"
-    @{ pushed = $pushed; restored = @{ imported = 0 }; backup = @{ bundle = "backups/events/fake/bundle.json" } } | ConvertTo-Json -Compress
+    $syncCalls = @((Get-Content -LiteralPath $env:FAKE_AGENTS_LOG) | Where-Object { $_ -eq "state sync --json" }).Count
+    $pushed = -not ($env:FAKE_SYNC_FAIL_ON_CALL -and $syncCalls -eq [int]$env:FAKE_SYNC_FAIL_ON_CALL)
+    $backup = @{ bundle = "backups/events/fake/bundle.json"; payloadHash = ("a" * 64); entries = 1; committed = $true }
+    if ($env:FAKE_SYNC_INVALID_BACKUP -eq "true") { $backup.Remove("payloadHash") }
+    @{
+        pushed = $pushed
+        restored = @{ bundles = 1; imported = 0; skipped = 1; projectionHash = "projection-hash" }
+        backup = $backup
+    } | ConvertTo-Json -Compress
     exit 0
 }
 throw "Unexpected fake agents command: $($CommandArgs -join ' ')"
@@ -89,7 +100,8 @@ try {
     $env:FAKE_AGENTS_LOG = $primary.Log
     $env:FAKE_ACTIVE_ID = ""
     $env:FAKE_ACTIVE_IDS = ""
-    $env:FAKE_SYNC_PUSHED = "true"
+    $env:FAKE_SYNC_FAIL_ON_CALL = ""
+    $env:FAKE_SYNC_INVALID_BACKUP = ""
     $result = & $scriptUnderTest -Objective "resume board" -State "ready" -Next "start planned 1" -Validation "green" -Blockers "None" -Repos "repo@abc" -AgentsCommand $primary.Fake -UserHome $primary.Root | ConvertFrom-Json
     Assert-True ($result.ok -eq $true) "primary: expected ok result"
     Assert-True ($result.recordId -eq "record-new") "primary: expected remembered record"
@@ -100,6 +112,7 @@ try {
     $primaryLog = Get-Content -Raw $primary.Log
     Assert-True ($primaryLog -match "memory remember") "primary: remember was not called"
     Assert-True ($primaryLog -match "state sync --json") "primary: state sync was not called"
+    Assert-True (@($primaryLog -split "`r?`n" | Where-Object { $_ -eq "state sync --json" }).Count -eq 2) "primary: expected preflight and publication syncs"
 
     # Edge path: an existing active capsule is explicitly superseded.
     $edge = Initialize-Case -Name "edge"
@@ -108,7 +121,7 @@ try {
     $env:FAKE_AGENTS_LOG = $edge.Log
     $env:FAKE_ACTIVE_ID = "prior-record"
     $env:FAKE_ACTIVE_IDS = ""
-    $edgeResult = & $scriptUnderTest -Objective "new objective" -State "active" -Next "continue" -AgentsCommand $edge.Fake -CompatibilityRoot $edge.CompatibilityRoot -SkipRepositorySync | ConvertFrom-Json
+    $edgeResult = & $scriptUnderTest -Objective "new objective" -State "active" -Next "continue" -AgentsCommand $edge.Fake -CompatibilityRoot $edge.CompatibilityRoot | ConvertFrom-Json
     Assert-True ($edgeResult.recordId -eq "record-superseded") "edge: expected superseding record"
     Assert-True ((Get-Content -Raw $edge.Log) -match "memory supersede prior-record") "edge: prior record was not superseded"
 
@@ -123,7 +136,7 @@ try {
     $env:FAKE_ACTIVE_IDS = ""
     $deniedMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $denied.Fake -CompatibilityRoot $denied.CompatibilityRoot -SkipRepositorySync | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $denied.Fake -CompatibilityRoot $denied.CompatibilityRoot | Out-Null
     } catch {
         $deniedMessage = $_.Exception.Message
     }
@@ -145,7 +158,7 @@ try {
     $env:FAKE_AGENTS_LOG = $linked.Log
     $linkedMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linked.Fake -CompatibilityRoot $linked.CompatibilityRoot -SkipRepositorySync | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linked.Fake -CompatibilityRoot $linked.CompatibilityRoot | Out-Null
     } catch {
         $linkedMessage = $_.Exception.Message
     }
@@ -161,7 +174,7 @@ try {
     $env:FAKE_ACTIVE_IDS = "record-one,record-two"
     $duplicateActiveMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "ambiguous" -Next "none" -AgentsCommand $duplicateActive.Fake -CompatibilityRoot $duplicateActive.CompatibilityRoot -SkipRepositorySync | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "ambiguous" -Next "none" -AgentsCommand $duplicateActive.Fake -CompatibilityRoot $duplicateActive.CompatibilityRoot | Out-Null
     } catch {
         $duplicateActiveMessage = $_.Exception.Message
     }
@@ -187,13 +200,31 @@ try {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $duplicateProjection.MemoryRoot "snapshots/compaction"))) "duplicate-projection: orphan snapshot was created"
     Assert-True (-not ((Get-Content -Raw $duplicateProjection.Log) -match "state sync")) "duplicate-projection: state sync ran after validation failure"
 
+    # Incomplete repository evidence is rejected during preflight before mutation.
+    $invalidEvidence = Initialize-Case -Name "invalid-evidence"
+    $env:FAKE_AGENTS_HOME = $invalidEvidence.AgentsHome
+    $env:FAKE_AGENTS_MEMORY = $invalidEvidence.MemoryRoot
+    $env:FAKE_AGENTS_LOG = $invalidEvidence.Log
+    $env:FAKE_ACTIVE_IDS = ""
+    $env:FAKE_SYNC_INVALID_BACKUP = "true"
+    $invalidEvidenceMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidEvidence.Fake -CompatibilityRoot $invalidEvidence.CompatibilityRoot | Out-Null
+    } catch {
+        $invalidEvidenceMessage = $_.Exception.Message
+    }
+    Assert-True ($invalidEvidenceMessage -match "backup evidence is missing payloadHash") "invalid-evidence: incomplete sync evidence was accepted"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidEvidence.MemoryRoot "snapshots/compaction"))) "invalid-evidence: snapshot was created before healthy preflight"
+    $env:FAKE_SYNC_INVALID_BACKUP = ""
+
     # A successful process exit is insufficient when sync JSON reports no push.
     $syncFailure = Initialize-Case -Name "sync-failure"
     $env:FAKE_AGENTS_HOME = $syncFailure.AgentsHome
     $env:FAKE_AGENTS_MEMORY = $syncFailure.MemoryRoot
     $env:FAKE_AGENTS_LOG = $syncFailure.Log
     $env:FAKE_ACTIVE_IDS = ""
-    $env:FAKE_SYNC_PUSHED = "false"
+    $env:FAKE_SYNC_FAIL_ON_CALL = "2"
+    Set-Content -LiteralPath (Join-Path $syncFailure.CompatibilityRoot "handoff.md") -Value "original handoff" -NoNewline
     $syncFailureMessage = ""
     try {
         & $scriptUnderTest -Objective "must fail" -State "unsynced" -Next "none" -AgentsCommand $syncFailure.Fake -CompatibilityRoot $syncFailure.CompatibilityRoot | Out-Null
@@ -202,6 +233,29 @@ try {
     }
     Assert-True ($syncFailureMessage -match "did not confirm a successful push") "sync-failure: unsuccessful payload was accepted"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $syncFailure.MemoryRoot ".compact-state.json"))) "sync-failure: success state was written"
+    Assert-True ((Get-Content -Raw (Join-Path $syncFailure.CompatibilityRoot "handoff.md")) -eq "original handoff") "sync-failure: compatibility projection was not rolled back"
+    $syncFailureLog = Get-Content -Raw $syncFailure.Log
+    Assert-True ($syncFailureLog -match "memory retract record-new") "sync-failure: failed active record was not retracted"
+    Assert-True (@($syncFailureLog -split "`r?`n" | Where-Object { $_ -eq "state sync --json" }).Count -eq 3) "sync-failure: rollback was not synchronized"
+
+    # A late failure after supersession restores the prior scalar as a new active record.
+    $supersedeFailure = Initialize-Case -Name "supersede-failure"
+    $env:FAKE_AGENTS_HOME = $supersedeFailure.AgentsHome
+    $env:FAKE_AGENTS_MEMORY = $supersedeFailure.MemoryRoot
+    $env:FAKE_AGENTS_LOG = $supersedeFailure.Log
+    $env:FAKE_ACTIVE_ID = "prior-record"
+    $env:FAKE_ACTIVE_IDS = ""
+    $env:FAKE_SYNC_FAIL_ON_CALL = "2"
+    $supersedeFailureMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must fail" -State "unsynced" -Next "none" -AgentsCommand $supersedeFailure.Fake -CompatibilityRoot $supersedeFailure.CompatibilityRoot | Out-Null
+    } catch {
+        $supersedeFailureMessage = $_.Exception.Message
+    }
+    Assert-True ($supersedeFailureMessage -match "rollback completed") "supersede-failure: rollback did not complete"
+    $supersedeFailureLog = Get-Content -Raw $supersedeFailure.Log
+    Assert-True ($supersedeFailureLog -match "memory supersede record-superseded --value prior-value") "supersede-failure: prior scalar was not restored"
+    Assert-True (-not ($supersedeFailureLog -match "memory retract record-superseded")) "supersede-failure: prior scalar was replaced with an empty state"
 
     Write-Output "compact capsule authority regression suite passed"
 } finally {
@@ -210,7 +264,7 @@ try {
     Remove-Item Env:FAKE_AGENTS_LOG -ErrorAction SilentlyContinue
     Remove-Item Env:FAKE_ACTIVE_ID -ErrorAction SilentlyContinue
     Remove-Item Env:FAKE_ACTIVE_IDS -ErrorAction SilentlyContinue
-    Remove-Item Env:FAKE_SYNC_PUSHED -ErrorAction SilentlyContinue
+    Remove-Item Env:FAKE_SYNC_FAIL_ON_CALL -ErrorAction SilentlyContinue
+    Remove-Item Env:FAKE_SYNC_INVALID_BACKUP -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
-
