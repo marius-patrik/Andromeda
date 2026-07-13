@@ -12,6 +12,6 @@ describe("Buf codegen transient failure classification", () => {
   });
 
   test("schema and authentication failures remain fail-closed", () => {
-    expect(isRetryableBufFailure("invalid proto syntax: authentication required")).toBe(false);
+    expect(isRetryableBufFailure("invalid proto syntax: authentication required after rate limit exceeded")).toBe(false);
   });
 });

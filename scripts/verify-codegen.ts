@@ -24,6 +24,9 @@ const outputs = [
 const TRANSIENT_RETRY_DELAYS_MS = [5_000, 15_000] as const;
 
 export function isRetryableBufFailure(output: string): boolean {
+  if (/unauthenticated|authentication required|permission denied|forbidden|invalid[_ -]?argument|invalid (?:proto|schema|syntax)|(?:schema|syntax|parse) error/i.test(output)) {
+    return false;
+  }
   return /resource_exhausted|too many requests|rate[- ]?limit|temporarily unavailable|deadline exceeded|connection reset|timed out/i.test(output);
 }
 
