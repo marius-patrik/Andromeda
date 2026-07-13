@@ -9,7 +9,6 @@ import {
   getRepository,
   isParkedRepo,
   listActiveManagedRepos,
-  listIssues,
   managedRepoLifecycleState,
   parseRepo,
   parsePrdItems,
@@ -53,6 +52,8 @@ const RED_CONCLUSIONS = new Set(["action_required", "cancelled", "failure", "sta
 const DOCTOR_MODES = new Set(["diagnose", "report"]);
 const CONTROL_REPO = { owner: "marius-patrik", repo: "DarkFactory" };
 const DOCTOR_ISSUE_AUTHORS = new Set(["darkfactory-agent[bot]", "mp-agents[bot]"]);
+const MAIN_ONLY_DATA_REPOSITORIES = new Set([AGENT_OS_DATA_REPO, DARK_FACTORY_DATA_REPO].map((name) => name.toLowerCase()));
+const REPOSITORY_TREE_ENTRY_TYPES = new Set(["blob", "tree", "commit"]);
 export const DOCTOR_REPORT_LABEL_NAMES = ["P0", "P1", "P2", "df:doctor", "df:class:mechanical"];
 const GENERATED_SEGMENTS = new Set([
   ".cache",
@@ -187,10 +188,14 @@ export async function assertDoctorReportLabels(github, repository) {
 
 export async function publishDoctorReport(github, ledgerGithub, repository, report) {
   await assertDoctorReportLabels(github, repository);
+  // Complete, validated enumeration is the source of truth for every issue
+  // mutation in this publication. A malformed or capped response aborts before
+  // either the admission ledger or the target repository is written.
+  const issues = await listDoctorIssues(github, repository, "all");
   const plannedActions = planDoctorReportActions(report.findings);
   report.actions.push(await writeDoctorLedger(ledgerGithub, repository, report, { phase: "admission", plannedActions }));
-  report.actions.push(...await reconcileDoctorIssues(github, repository, report.findings));
-  report.actions.push(...await retireLegacyAuditIssues(github, repository));
+  report.actions.push(...await reconcileDoctorIssues(github, repository, report.findings, issues));
+  report.actions.push(...await retireLegacyAuditIssues(github, repository, issues));
   report.actions.push(await writeDoctorLedger(ledgerGithub, repository, report, { phase: "completion", plannedActions }));
   return report;
 }
@@ -226,7 +231,7 @@ async function auditTargetRepository(github, repository, metadata, options) {
   const branches = await listBranches(github, repository);
   const branchNames = new Set(branches.map((branch) => branch.name));
   const pulls = await listOpenPullRequests(github, repository);
-  const issues = await listIssues(github, repository, "all");
+  const issues = await listDoctorIssues(github, repository, "all");
   const openIssues = issues.filter((issue) => issue.state === "open");
   const tree = defaultBranch ? await getRecursiveTree(github, repository, defaultBranch) : null;
   const findings = [];
@@ -589,6 +594,12 @@ async function auditReleaseLane(github, repository, comparison, pulls) {
       }));
       continue;
     }
+    if (!isValidBranchComparison(relation)) {
+      findings.push(doctorFinding(`release-pr-${pull.number}-dev-lineage-malformed`, "release lane", `Current-dev ancestry for release PR #${pull.number} returned malformed comparison evidence; it cannot satisfy release policy.`, {
+        severity: "critical", evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }]
+      }));
+      continue;
+    }
     if (!["identical", "ahead"].includes(relation?.status)) {
       findings.push(doctorFinding(`release-pr-${pull.number}-not-current-dev-derived`, "release lane", `Release PR #${pull.number} does not contain current \`dev\` (dev...release is \`${relation?.status || "malformed"}\`).`, {
         severity: "critical",
@@ -709,8 +720,12 @@ export async function auditRepositoryTree(repository, tree, options = {}) {
   }
 
   const findings = [];
+  let malformedEntries = 0;
   for (const entry of tree.tree) {
-    if (typeof entry?.path !== "string") continue;
+    if (typeof entry?.path !== "string" || !entry.path.trim() || !REPOSITORY_TREE_ENTRY_TYPES.has(entry?.type)) {
+      malformedEntries += 1;
+      continue;
+    }
     const filePath = entry.path.replace(/\\/g, "/");
     const segments = filePath.split("/");
     const lower = segments.map((segment) => segment.toLowerCase());
@@ -737,6 +752,11 @@ export async function auditRepositoryTree(repository, tree, options = {}) {
     if (nestedGitMetadata) {
       findings.push(doctorFinding(`nested-git-metadata-${slug(filePath)}`, "nested repository state", `Nested Git metadata \`${filePath}\` is committed outside the root submodule contract.`, { severity: "error" }));
     }
+  }
+  if (malformedEntries > 0) {
+    findings.push(doctorFinding("repository-tree-entry-malformed", "repository layout", `GitHub returned ${malformedEntries} malformed recursive tree ${malformedEntries === 1 ? "entry" : "entries"}; repository layout evidence is incomplete.`, {
+      severity: "critical"
+    }));
   }
   return findings;
 }
@@ -1397,9 +1417,9 @@ function isTrustedDoctorActor(issue) {
   return DOCTOR_ISSUE_AUTHORS.has(issue?.user?.login || issue?.author?.login || "");
 }
 
-export async function reconcileDoctorIssues(github, repository, findings) {
+export async function reconcileDoctorIssues(github, repository, findings, enumeratedIssues) {
   const actions = [];
-  const issues = await listIssues(github, repository, "all");
+  const issues = enumeratedIssues || await listDoctorIssues(github, repository, "all");
   const prefix = `df-doctor:${slug(repoName(repository))}:`;
   const expected = new Set(findings.map((finding) => `${prefix}${finding.id}`));
   const byMarker = new Map();
@@ -1445,9 +1465,9 @@ export async function reconcileDoctorIssues(github, repository, findings) {
   return actions;
 }
 
-export async function retireLegacyAuditIssues(github, repository) {
+export async function retireLegacyAuditIssues(github, repository, enumeratedIssues) {
   const actions = [];
-  const issues = await listIssues(github, repository, "all");
+  const issues = enumeratedIssues || await listDoctorIssues(github, repository, "all");
   const legacy = issues.filter((issue) => issue.state === "open" && isTrustedDoctorActor(issue) && findAuditMarker(issue.body || "") === `df-audit:${slug(repoName(repository))}`);
   for (const issue of legacy) {
     await github.request("POST", `/repos/${repoName(repository)}/issues/${issue.number}/comments`, { body: "Superseded by the per-finding repository doctor ([marius-patrik/DarkFactory#12](https://github.com/marius-patrik/DarkFactory/issues/12)); all replacement findings use stable `df-doctor:` markers." });
@@ -1504,26 +1524,33 @@ function skippedReport(repository, mode, reason) {
   };
 }
 
-async function listBranches(github, repository) {
-  const branches = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const batch = await github.request("GET", `/repos/${repoName(repository)}/branches?per_page=100&page=${page}`);
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    branches.push(...batch);
-    if (batch.length < 100) break;
-  }
-  return branches;
+export async function listBranches(github, repository) {
+  return await listCompletePages(github, repository, "branches", 10, (page) => `/repos/${repoName(repository)}/branches?per_page=100&page=${page}`);
 }
 
-async function listOpenPullRequests(github, repository) {
-  const pulls = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const batch = await github.request("GET", `/repos/${repoName(repository)}/pulls?state=open&per_page=100&page=${page}`);
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    pulls.push(...batch);
-    if (batch.length < 100) break;
+export async function listOpenPullRequests(github, repository) {
+  return await listCompletePages(github, repository, "open pull requests", 10, (page) => `/repos/${repoName(repository)}/pulls?state=open&per_page=100&page=${page}`);
+}
+
+export async function listDoctorIssues(github, repository, state = "all") {
+  if (!["all", "open", "closed"].includes(state)) {
+    throw new Error(`Repository-doctor issue state is invalid: ${state}.`);
   }
-  return pulls;
+  const items = await listCompletePages(github, repository, `${state} issues`, 20, (page) => `/repos/${repoName(repository)}/issues?state=${state}&per_page=100&page=${page}`);
+  return items.filter((issue) => !issue?.pull_request);
+}
+
+async function listCompletePages(github, repository, evidenceKind, maxPages, requestPath) {
+  const items = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const batch = await github.request("GET", requestPath(page));
+    if (!Array.isArray(batch)) {
+      throw new Error(`Repository doctor received a malformed ${evidenceKind} page for ${repoName(repository)}.`);
+    }
+    items.push(...batch);
+    if (batch.length < 100) return items;
+  }
+  throw new Error(`Repository doctor cannot prove complete ${evidenceKind} enumeration for ${repoName(repository)} within ${maxPages} pages.`);
 }
 
 async function listRepositoryLabelNames(github, repository) {
@@ -1715,8 +1742,8 @@ async function listRepositoryRunners(github, repository) {
   }
 }
 
-function isMainOnlyDataRepository(repository) {
-  return /(?:^|[-_])data$/i.test(repository.repo);
+export function isMainOnlyDataRepository(repository) {
+  return MAIN_ONLY_DATA_REPOSITORIES.has(normalizedName(repository));
 }
 
 function sameRepositoryPullHead(pull, repository) {

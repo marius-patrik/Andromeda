@@ -212,6 +212,36 @@ test("release PRs satisfy the lane only when their same-repository head contains
   }
 });
 
+test("release PR lineage fails closed when GitHub omits comparison counts", async () => {
+  const branches = [
+    { name: "main", commit: { sha: "main-sha" } },
+    { name: "dev", commit: { sha: "dev-sha" } },
+    { name: "release/test", commit: { sha: "release-sha" } }
+  ];
+  const pull = {
+    number: 21,
+    head: { ref: "release/test", sha: "release-sha", repo: { full_name: "marius-patrik/DarkFactory" } },
+    base: { ref: "main" }
+  };
+  const { gh } = mockGh((_method, requestPath) => {
+    if (requestPath.endsWith("/compare/main...dev")) return { status: "ahead", ahead_by: 1, behind_by: 0 };
+    if (requestPath.endsWith("/compare/dev...release-sha")) return { status: "ahead" };
+    if (requestPath.includes("/protection")) return protectedBranch();
+    if (requestPath.endsWith("/pulls/21")) return { ...pull, updated_at: "2026-07-13T00:00:00Z", mergeable: true, mergeable_state: "clean", html_url: "https://example.test/21" };
+    if (requestPath.includes("/commits/release-sha/check-runs")) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success" }] };
+    if (requestPath.includes("/commits/release-sha/status")) return { statuses: [] };
+    throw new Error(`unexpected ${requestPath}`);
+  });
+
+  const result = await doctor.auditBranchAndReleaseState(gh, repo, { default_branch: "main", allow_auto_merge: true }, {
+    branches, branchNames: new Set(branches.map((branch) => branch.name)), pulls: [pull], isData: false, now: "2026-07-13T01:00:00Z"
+  });
+  const ids = new Set(result.findings.map((finding) => finding.id));
+  assert.ok(ids.has("release-pr-21-dev-lineage-malformed"));
+  assert.ok(ids.has("release-pr-missing"));
+  assert.equal(ids.has("release-pr-21-not-current-dev-derived"), false);
+});
+
 test("post-branch health is bound to current head runs and checks and fails closed on pending or inaccessible evidence", async () => {
   const now = "2026-07-13T04:00:00Z";
   const { gh: redGh } = mockGh((_method, requestPath) => {
@@ -428,6 +458,13 @@ test("main-only data repositories report an unowned dev branch as extra", async 
   assert.ok(result.findings.some((finding) => finding.id === "extra-branch-dev"));
 });
 
+test("main-only policy is restricted to the two canonical data repositories", () => {
+  assert.equal(doctor.isMainOnlyDataRepository({ owner: "marius-patrik", repo: "Andromeda-data" }), true);
+  assert.equal(doctor.isMainOnlyDataRepository({ owner: "MARIUS-PATRIK", repo: "DARKFACTORY-DATA" }), true);
+  assert.equal(doctor.isMainOnlyDataRepository({ owner: "marius-patrik", repo: "product-data" }), false);
+  assert.equal(doctor.isMainOnlyDataRepository({ owner: "another-owner", repo: "Andromeda-data" }), false);
+});
+
 test("the #241 shape remains diagnosed while its active head branch is exempt", async () => {
   const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }, { name: "dark-factory/managed-repository-setup", commit: { sha: "b" } }];
   const pull = { number: 241, head: { ref: "dark-factory/managed-repository-setup", sha: "b", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "main" } };
@@ -550,6 +587,46 @@ test("repository tree permits root policy authority but rejects nested copies", 
     ]
   });
   assert.deepEqual(findings.map((finding) => finding.id), ["state-boundary-packages-example-agents-private-json"]);
+});
+
+test("repository tree reports malformed entries without leaking their payload", async () => {
+  const findings = await doctor.auditRepositoryTree(repo, {
+    truncated: false,
+    tree: [
+      {},
+      { path: "", type: "blob" },
+      { path: "private/provider-input", type: "tag", secret: "must-not-leak" },
+      { path: ".env", type: "blob" }
+    ]
+  });
+  const malformed = findings.find((finding) => finding.id === "repository-tree-entry-malformed");
+  assert.ok(malformed);
+  assert.match(malformed.message, /3 malformed recursive tree entries/);
+  assert.doesNotMatch(JSON.stringify(malformed), /private\/provider-input|must-not-leak|\"tag\"/);
+  assert.ok(findings.some((finding) => finding.id === "sensitive-artifact-env"));
+});
+
+test("repository enumeration accepts complete pages and rejects malformed or capped evidence", async () => {
+  const { gh: validGh } = mockGh((_method, requestPath) => {
+    if (requestPath.includes("/issues?")) return [{ number: 1 }, { number: 2, pull_request: { url: "https://example.test/pr/2" } }];
+    return [];
+  });
+  assert.deepEqual(await doctor.listBranches(validGh, repo), []);
+  assert.deepEqual(await doctor.listOpenPullRequests(validGh, repo), []);
+  assert.deepEqual(await doctor.listDoctorIssues(validGh, repo), [{ number: 1 }]);
+
+  for (const [name, list] of [
+    ["branches", doctor.listBranches],
+    ["open pull requests", doctor.listOpenPullRequests]
+  ] as const) {
+    const { gh } = mockGh(() => ({ unexpected: "object" }));
+    await assert.rejects(() => list(gh, repo), new RegExp(`malformed ${name}`));
+  }
+
+  const fullPage = Array.from({ length: 100 }, (_, index) => ({ name: `branch-${index}` }));
+  const { gh: cappedGh, calls } = mockGh(() => fullPage);
+  await assert.rejects(() => doctor.listBranches(cappedGh, repo), /cannot prove complete branches enumeration/);
+  assert.equal(calls.length, 10);
 });
 
 test("managed baseline audit detects drift and files that must be removed", async () => {
@@ -857,7 +934,33 @@ test("ledger failure leaves legacy aggregate audit issues untouched", async () =
 
   await assert.rejects(() => doctor.publishDoctorReport(targetGh, failingLedger, repo, report), /ledger write failed/);
   assert.equal(targetCalls.every((call) => call.method === "GET"), true);
-  assert.equal(targetCalls.filter((call) => call.path.includes("issues?state=all")).length, 0);
+  assert.equal(targetCalls.filter((call) => call.path.includes("issues?state=all")).length, 1);
+});
+
+test("malformed reconciliation enumeration aborts report publication before any write", async () => {
+  const { gh: targetGh, calls: targetCalls } = mockGh((method, requestPath) => {
+    assert.equal(method, "GET");
+    if (requestPath.includes("/labels?")) return doctor.DOCTOR_REPORT_LABEL_NAMES.map((name) => ({ name }));
+    if (requestPath.includes("/issues?state=all")) return { items: [] };
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  const { gh: ledgerGh, calls: ledgerCalls } = mockGh(() => {
+    throw new Error("ledger must remain untouched");
+  });
+  const report = {
+    mode: "report",
+    trigger: "test",
+    source_refs: {},
+    findings: [doctor.doctorFinding("current-drift", "branch policy", "current")],
+    observations: [],
+    actions: [],
+    token_usage: { model_calls: 0 }
+  };
+
+  await assert.rejects(() => doctor.publishDoctorReport(targetGh, ledgerGh, repo, report), /malformed all issues page/);
+  assert.equal(targetCalls.every((call) => call.method === "GET"), true);
+  assert.equal(ledgerCalls.length, 0);
+  assert.deepEqual(report.actions, []);
 });
 
 test("completion ledger records legacy retirement after admitted issue mutations", async () => {
