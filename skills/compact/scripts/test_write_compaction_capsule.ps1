@@ -23,7 +23,13 @@ if ($CommandArgs[0] -eq "state" -and $CommandArgs[1] -eq "env") {
     exit 0
 }
 if ($CommandArgs[0] -eq "memory" -and $CommandArgs[1] -eq "list") {
-    if ($env:FAKE_ACTIVE_IDS) {
+    $listCalls = @((Get-Content -LiteralPath $env:FAKE_AGENTS_LOG) | Where-Object { $_ -match '^memory list ' }).Count
+    if ($env:FAKE_POST_ACTIVE_IDS -and $listCalls -ge 2) {
+        @($env:FAKE_POST_ACTIVE_IDS.Split(",") | ForEach-Object { @{ id = $_; status = "active"; value = "remote-value"; sensitivity = "internal" } }) | ConvertTo-Json -Compress
+    } elseif ($listCalls -ge 2) {
+        $publishedId = if ((Get-Content -LiteralPath $env:FAKE_AGENTS_LOG) -match '^memory supersede prior-record ') { "record-superseded" } else { "record-new" }
+        @(@{ id = $publishedId; status = "active"; value = "published-value"; sensitivity = "internal" }) | ConvertTo-Json -Compress
+    } elseif ($env:FAKE_ACTIVE_IDS) {
         @($env:FAKE_ACTIVE_IDS.Split(",") | ForEach-Object { @{ id = $_; status = "active"; value = "prior-value"; sensitivity = "internal" } }) | ConvertTo-Json -Compress
     } elseif ($env:FAKE_ACTIVE_ID) {
         @(@{ id = $env:FAKE_ACTIVE_ID; status = "active"; value = "prior-value"; sensitivity = "internal" }) | ConvertTo-Json -Compress
@@ -55,7 +61,8 @@ if ($CommandArgs[0] -eq "memory" -and $CommandArgs[1] -eq "status") {
 if ($CommandArgs[0] -eq "state" -and $CommandArgs[1] -eq "sync") {
     $syncCalls = @((Get-Content -LiteralPath $env:FAKE_AGENTS_LOG) | Where-Object { $_ -eq "state sync --json" }).Count
     $pushed = -not ($env:FAKE_SYNC_FAIL_ON_CALL -and $syncCalls -eq [int]$env:FAKE_SYNC_FAIL_ON_CALL)
-    $backup = @{ bundle = "backups/events/fake/bundle.json"; payloadHash = ("a" * 64); entries = 1; committed = $true }
+    $committed = $env:FAKE_BACKUP_COMMITTED -ne "false"
+    $backup = @{ bundle = "backups/events/fake/bundle.json"; payloadHash = ("a" * 64); entries = 1; committed = $committed }
     if ($env:FAKE_SYNC_INVALID_BACKUP -eq "true") { $backup.Remove("payloadHash") }
     @{
         pushed = $pushed
@@ -102,6 +109,8 @@ try {
     $env:FAKE_ACTIVE_IDS = ""
     $env:FAKE_SYNC_FAIL_ON_CALL = ""
     $env:FAKE_SYNC_INVALID_BACKUP = ""
+    $env:FAKE_POST_ACTIVE_IDS = ""
+    $env:FAKE_BACKUP_COMMITTED = ""
     $result = & $scriptUnderTest -Objective "resume board" -State "ready" -Next "start planned 1" -Validation "green" -Blockers "None" -Repos "repo@abc" -AgentsCommand $primary.Fake -UserHome $primary.Root | ConvertFrom-Json
     Assert-True ($result.ok -eq $true) "primary: expected ok result"
     Assert-True ($result.recordId -eq "record-new") "primary: expected remembered record"
@@ -114,6 +123,24 @@ try {
     Assert-True ($primaryLog -match "state sync --json") "primary: state sync was not called"
     Assert-True (@($primaryLog -split "`r?`n" | Where-Object { $_ -eq "state sync --json" }).Count -eq 2) "primary: expected preflight and publication syncs"
 
+    # Concurrent local publications are serialized across the complete workflow.
+    $locked = Initialize-Case -Name "locked"
+    $env:FAKE_AGENTS_HOME = $locked.AgentsHome
+    $env:FAKE_AGENTS_MEMORY = $locked.MemoryRoot
+    $env:FAKE_AGENTS_LOG = $locked.Log
+    $heldLockPath = Join-Path $locked.MemoryRoot ".compact.lock"
+    $heldLock = [System.IO.File]::Open($heldLockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+    $lockedMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must wait" -State "locked" -Next "none" -AgentsCommand $locked.Fake -CompatibilityRoot $locked.CompatibilityRoot | Out-Null
+    } catch {
+        $lockedMessage = $_.Exception.Message
+    } finally {
+        $heldLock.Dispose()
+    }
+    Assert-True ($lockedMessage -match "Another compaction operation owns") "locked: concurrent publication was not rejected"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $locked.MemoryRoot "snapshots/compaction"))) "locked: concurrent publication mutated memory"
+
     # Edge path: an existing active capsule is explicitly superseded.
     $edge = Initialize-Case -Name "edge"
     $env:FAKE_AGENTS_HOME = $edge.AgentsHome
@@ -121,9 +148,11 @@ try {
     $env:FAKE_AGENTS_LOG = $edge.Log
     $env:FAKE_ACTIVE_ID = "prior-record"
     $env:FAKE_ACTIVE_IDS = ""
+    $env:FAKE_BACKUP_COMMITTED = "false"
     $edgeResult = & $scriptUnderTest -Objective "new objective" -State "active" -Next "continue" -AgentsCommand $edge.Fake -CompatibilityRoot $edge.CompatibilityRoot | ConvertFrom-Json
     Assert-True ($edgeResult.recordId -eq "record-superseded") "edge: expected superseding record"
     Assert-True ((Get-Content -Raw $edge.Log) -match "memory supersede prior-record") "edge: prior record was not superseded"
+    $env:FAKE_BACKUP_COMMITTED = ""
 
     # Denied path: memory outside AGENTS_HOME is rejected before a snapshot write.
     $denied = Initialize-Case -Name "denied"
@@ -217,6 +246,25 @@ try {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidEvidence.MemoryRoot "snapshots/compaction"))) "invalid-evidence: snapshot was created before healthy preflight"
     $env:FAKE_SYNC_INVALID_BACKUP = ""
 
+    # Concurrent remote convergence cannot turn a stale capsule into success.
+    $convergenceRace = Initialize-Case -Name "convergence-race"
+    $env:FAKE_AGENTS_HOME = $convergenceRace.AgentsHome
+    $env:FAKE_AGENTS_MEMORY = $convergenceRace.MemoryRoot
+    $env:FAKE_AGENTS_LOG = $convergenceRace.Log
+    $env:FAKE_ACTIVE_ID = ""
+    $env:FAKE_ACTIVE_IDS = ""
+    $env:FAKE_POST_ACTIVE_IDS = "record-new,remote-record"
+    $convergenceRaceMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must fail" -State "raced" -Next "none" -AgentsCommand $convergenceRace.Fake -CompatibilityRoot $convergenceRace.CompatibilityRoot | Out-Null
+    } catch {
+        $convergenceRaceMessage = $_.Exception.Message
+    }
+    Assert-True ($convergenceRaceMessage -match "changed the active compaction record") "convergence-race: stale success was accepted"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $convergenceRace.MemoryRoot ".compact-state.json"))) "convergence-race: success state was written"
+    Assert-True ((Get-Content -Raw $convergenceRace.Log) -match "memory retract record-new") "convergence-race: local raced record was not rolled back"
+    $env:FAKE_POST_ACTIVE_IDS = ""
+
     # A successful process exit is insufficient when sync JSON reports no push.
     $syncFailure = Initialize-Case -Name "sync-failure"
     $env:FAKE_AGENTS_HOME = $syncFailure.AgentsHome
@@ -266,5 +314,7 @@ try {
     Remove-Item Env:FAKE_ACTIVE_IDS -ErrorAction SilentlyContinue
     Remove-Item Env:FAKE_SYNC_FAIL_ON_CALL -ErrorAction SilentlyContinue
     Remove-Item Env:FAKE_SYNC_INVALID_BACKUP -ErrorAction SilentlyContinue
+    Remove-Item Env:FAKE_POST_ACTIVE_IDS -ErrorAction SilentlyContinue
+    Remove-Item Env:FAKE_BACKUP_COMMITTED -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

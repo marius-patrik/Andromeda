@@ -219,6 +219,19 @@ function Restore-ProjectionState {
 }
 
 $authority = Resolve-AgentEnvironment
+$compactLockPath = Join-Path $authority.MemoryRoot ".compact.lock"
+try {
+    $compactLock = [System.IO.File]::Open(
+        $compactLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+    )
+} catch {
+    throw "Another compaction operation owns the canonical memory lock: $compactLockPath"
+}
+
+try {
 $resolvedCompatibilityRoot = $null
 if ([string]::IsNullOrWhiteSpace($CompatibilityRoot)) {
     if ([string]::IsNullOrWhiteSpace($UserHome)) {
@@ -305,6 +318,8 @@ $compatibilityStateSaved = Save-ProjectionState -Path $compatibilityStatePath
 $cacheSaved = Save-ProjectionState -Path $cachePath
 
 try {
+    # remember/supersede also revalidates the scalar under the manager's memory
+    # lock; this outer lock serializes the complete compaction publication flow.
     $record = if ($active.Count -eq 1) {
         Invoke-AgentsJson -Arguments (@("memory", "supersede", [string]$active[0].id) + $evidenceArgs)
     } else {
@@ -369,6 +384,26 @@ Last validation: $Validation
 
     $sync = Invoke-AgentsJson -Arguments @("state", "sync", "--json")
     Assert-StateSyncSucceeded -Result $sync
+
+    # Final sync may import concurrent remote events. Rebuild from those events
+    # and prove this capsule is still the one active scalar before reporting success.
+    $render = Invoke-AgentsJson -Arguments @("memory", "render", "--json")
+    $memoryStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
+    if (-not $memoryStatus.ok) {
+        throw "Canonical memory integrity failed after final repository synchronization."
+    }
+    $publishedActiveResult = Invoke-AgentsJson -Arguments @(
+        "memory", "list",
+        "--scope", "session",
+        "--subject", "compaction",
+        "--predicate", "current",
+        "--status", "active",
+        "--json"
+    )
+    $publishedActive = @($publishedActiveResult)
+    if ($publishedActive.Count -ne 1 -or [string]$publishedActive[0].id -ne [string]$record.id) {
+        throw "Final synchronization changed the active compaction record; refusing stale success."
+    }
 
     $statePayload = [ordered]@{
         schemaVersion = 2
@@ -466,3 +501,7 @@ Last validation: $Validation
     projectionHash = $memoryStatus.projectionHash
     repositorySynced = $true
 } | ConvertTo-Json -Depth 4
+} finally {
+    $compactLock.Dispose()
+    Remove-Item -LiteralPath $compactLockPath -Force -ErrorAction SilentlyContinue
+}
