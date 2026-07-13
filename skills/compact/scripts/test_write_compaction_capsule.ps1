@@ -111,13 +111,21 @@ try {
     $env:FAKE_SYNC_INVALID_BACKUP = ""
     $env:FAKE_POST_ACTIVE_IDS = ""
     $env:FAKE_BACKUP_COMMITTED = ""
-    $result = & $scriptUnderTest -Objective "resume board" -State "ready" -Next "start planned 1" -Validation "green" -Blockers "None" -Repos "repo@abc" -AgentsCommand $primary.Fake -UserHome $primary.Root | ConvertFrom-Json
+    $result = & $scriptUnderTest -Objective "resume board" -State "ready" -Next "start planned 1" -Validation "green" -Blockers "None" -Repos "repo@abc" -AgentsCommand $primary.Fake -UserHome $primary.Root -ClearCache | ConvertFrom-Json
     Assert-True ($result.ok -eq $true) "primary: expected ok result"
     Assert-True ($result.recordId -eq "record-new") "primary: expected remembered record"
     Assert-True ($result.repositorySynced -eq $true) "primary: expected repository sync"
     Assert-True (Test-Path -LiteralPath $result.snapshot) "primary: expected immutable snapshot"
     Assert-True ([System.IO.Path]::GetFullPath($result.snapshot).StartsWith([System.IO.Path]::GetFullPath($primary.MemoryRoot))) "primary: snapshot escaped canonical memory"
-    Assert-True ((Get-Content -Raw (Join-Path $primary.CompatibilityRoot "handoff.md")) -match "Authority:.*memory") "primary: expected authority-marked projection"
+    $tick = [char]96
+    $primaryHandoff = Get-Content -Raw (Join-Path $primary.CompatibilityRoot "handoff.md")
+    $primaryShort = Get-Content -Raw (Join-Path $primary.CompatibilityRoot "SHORT.md")
+    $primaryCache = Get-Content -Raw (Join-Path $primary.CompatibilityRoot "cache.md")
+    Assert-True ($primaryHandoff.Contains("Authority: $tick$($primary.MemoryRoot)$tick immutable memory events")) "primary: handoff did not resolve exact authority"
+    Assert-True ($primaryHandoff.Contains("Record: ${tick}record-new$tick")) "primary: handoff did not resolve exact record"
+    Assert-True ($primaryHandoff.Contains("Snapshot: $tick$($result.snapshot)$tick")) "primary: handoff did not resolve exact snapshot"
+    Assert-True ($primaryShort.Contains("Authority record: ${tick}record-new$tick")) "primary: short projection did not resolve exact record"
+    Assert-True ($primaryCache.Contains("Canonical authority is under $tick$($primary.MemoryRoot)$tick.")) "primary: cache did not resolve exact authority"
     $primaryLog = Get-Content -Raw $primary.Log
     Assert-True ($primaryLog -match "memory remember") "primary: remember was not called"
     Assert-True ($primaryLog -match "state sync --json") "primary: state sync was not called"

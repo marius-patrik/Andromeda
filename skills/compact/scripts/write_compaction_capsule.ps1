@@ -405,9 +405,9 @@ try {
 <!-- rommie:compact:start -->
 ## Agent OS Compaction Projection
 Generated: $now
-Authority: `$($authority.MemoryRoot)` immutable memory events
-Record: `$($record.id)`
-Snapshot: `$snapshotPath`
+Authority: ``$($authority.MemoryRoot)`` immutable memory events
+Record: ``$($record.id)``
+Snapshot: ``$snapshotPath``
 
 Objective:
 - $Objective
@@ -434,7 +434,7 @@ Repos:
 <!-- rommie:compact-short:start -->
 ## Agent OS Compaction Active-Work Projection
 Generated: $now
-Authority record: `$($record.id)`
+Authority record: ``$($record.id)``
 Current objective: $Objective
 Status: $State
 Next actions: $Next
@@ -490,7 +490,7 @@ Last validation: $Validation
     Write-Utf8NoBom -Path $compatibilityStatePath -Content (($compatibilityState | ConvertTo-Json -Depth 4) + [Environment]::NewLine)
 
     if ($ClearCache) {
-        Write-Utf8NoBom -Path $cachePath -Content ("# Immediate Task Cache`n`nGenerated compatibility cache. Canonical authority is under `$($authority.MemoryRoot)`.`n`nCurrent cache:`n- None.`n")
+        Write-Utf8NoBom -Path $cachePath -Content ("# Immediate Task Cache`n`nGenerated compatibility cache. Canonical authority is under ``$($authority.MemoryRoot)``.`n`nCurrent cache:`n- None.`n")
     }
 } catch {
     $failureMessage = $_.Exception.Message
