@@ -24,9 +24,9 @@ construction must remain portable across Windows, macOS, and Linux.
 3. Run the capsule script with explicit values. It discovers `AGENTS_HOME` and
    `AGENTS_MEMORY` from `agents state env`; no memory-root or mandatory-step
    bypass is allowed. The script preflights repository synchronization before
-   mutation, holds an exclusive canonical compaction lock through publication,
-   then rolls canonical memory and compatibility files back if final
-   publication fails:
+   mutation, holds a persistent-file exclusive canonical lock through
+   publication, then rolls canonical memory and compatibility files back if
+   final publication fails. The lock file is never unlinked during handoff:
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\skills\compact\scripts\write_compaction_capsule.ps1 -Objective "current goal" -State "what is done now" -Next "next command or decision" -Validation "checks run and results" -Blockers "known blockers or None"

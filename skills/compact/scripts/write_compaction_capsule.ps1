@@ -33,6 +33,54 @@ function Invoke-AgentsJson {
     }
 }
 
+function Assert-PhysicalDirectoryChain {
+    param(
+        [Parameter(Mandatory=$true)][string]$Root,
+        [Parameter(Mandatory=$true)][string]$Target
+    )
+
+    $rootPath = [System.IO.Path]::GetFullPath($Root)
+    $targetPath = [System.IO.Path]::GetFullPath($Target)
+    $relative = [System.IO.Path]::GetRelativePath($rootPath, $targetPath)
+    if (
+        [System.IO.Path]::IsPathRooted($relative) -or
+        $relative -eq ".." -or
+        $relative.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)") -or
+        $relative.StartsWith("..$([System.IO.Path]::AltDirectorySeparatorChar)")
+    ) {
+        throw "Canonical write directory must remain under AGENTS_HOME: $targetPath"
+    }
+
+    $pathsToInspect = @($rootPath)
+    $current = $rootPath
+    foreach ($segment in ($relative -split '[\\/]')) {
+        if (-not $segment -or $segment -eq ".") { continue }
+        $current = Join-Path $current $segment
+        $pathsToInspect += $current
+    }
+    foreach ($pathToInspect in $pathsToInspect) {
+        if (-not (Test-Path -LiteralPath $pathToInspect)) { continue }
+        $item = Get-Item -LiteralPath $pathToInspect -Force
+        if (-not $item.PSIsContainer) {
+            throw "Canonical write directory chain contains a non-directory: $pathToInspect"
+        }
+        $isReparsePoint = (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+        $hasLinkType = (
+            $item.PSObject.Properties.Name -contains "LinkType" -and
+            -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)
+        )
+        $hasTarget = (
+            $item.PSObject.Properties.Name -contains "Target" -and
+            $null -ne $item.Target -and
+            @($item.Target).Count -gt 0 -and
+            -not [string]::IsNullOrWhiteSpace([string](@($item.Target) -join ""))
+        )
+        if ($isReparsePoint -or $hasLinkType -or $hasTarget) {
+            throw "Canonical authority paths must be physical directories, not links or reparse points: $pathToInspect"
+        }
+    }
+}
+
 function Resolve-AgentEnvironment {
     $global:LASTEXITCODE = 0
     $lines = & $AgentsCommand state env
@@ -74,30 +122,7 @@ function Resolve-AgentEnvironment {
         throw "Canonical memory root does not exist: $memoryRoot"
     }
 
-    $pathsToInspect = @($agentsHome)
-    $current = $agentsHome
-    foreach ($segment in ($relative -split '[\\/]')) {
-        if (-not $segment -or $segment -eq ".") { continue }
-        $current = Join-Path $current $segment
-        $pathsToInspect += $current
-    }
-    foreach ($pathToInspect in $pathsToInspect) {
-        $item = Get-Item -LiteralPath $pathToInspect -Force
-        $isReparsePoint = (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
-        $hasLinkType = (
-            $item.PSObject.Properties.Name -contains "LinkType" -and
-            -not [string]::IsNullOrWhiteSpace([string]$item.LinkType)
-        )
-        $hasTarget = (
-            $item.PSObject.Properties.Name -contains "Target" -and
-            $null -ne $item.Target -and
-            @($item.Target).Count -gt 0 -and
-            -not [string]::IsNullOrWhiteSpace([string](@($item.Target) -join ""))
-        )
-        if ($isReparsePoint -or $hasLinkType -or $hasTarget) {
-            throw "Canonical authority paths must be physical directories, not links or reparse points: $pathToInspect"
-        }
-    }
+    Assert-PhysicalDirectoryChain -Root $agentsHome -Target $memoryRoot
 
     return [ordered]@{ AgentsHome = $agentsHome; MemoryRoot = $memoryRoot }
 }
@@ -262,14 +287,17 @@ if ($active.Count -gt 1) {
     throw "Canonical memory contains multiple active compaction records; refusing to guess."
 }
 
+$snapshotDirectory = Join-Path (Join-Path $authority.MemoryRoot "snapshots") "compaction"
+Assert-PhysicalDirectoryChain -Root $authority.AgentsHome -Target $snapshotDirectory
+
 # Prove repository health and remote reachability before changing canonical memory.
 $preflightSync = Invoke-AgentsJson -Arguments @("state", "sync", "--json")
 Assert-StateSyncSucceeded -Result $preflightSync
 
 $now = Get-Date -Format o
 $capsuleId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N"))
-$snapshotDirectory = Join-Path (Join-Path $authority.MemoryRoot "snapshots") "compaction"
 New-Item -ItemType Directory -Path $snapshotDirectory -Force | Out-Null
+Assert-PhysicalDirectoryChain -Root $authority.AgentsHome -Target $snapshotDirectory
 $snapshotPath = Join-Path $snapshotDirectory "$capsuleId.json"
 
 $payload = [ordered]@{
@@ -503,5 +531,4 @@ Last validation: $Validation
 } | ConvertTo-Json -Depth 4
 } finally {
     $compactLock.Dispose()
-    Remove-Item -LiteralPath $compactLockPath -Force -ErrorAction SilentlyContinue
 }

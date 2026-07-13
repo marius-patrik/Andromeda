@@ -122,6 +122,7 @@ try {
     Assert-True ($primaryLog -match "memory remember") "primary: remember was not called"
     Assert-True ($primaryLog -match "state sync --json") "primary: state sync was not called"
     Assert-True (@($primaryLog -split "`r?`n" | Where-Object { $_ -eq "state sync --json" }).Count -eq 2) "primary: expected preflight and publication syncs"
+    Assert-True (Test-Path -LiteralPath (Join-Path $primary.MemoryRoot ".compact.lock")) "primary: persistent lock identity was unlinked"
 
     # Concurrent local publications are serialized across the complete workflow.
     $locked = Initialize-Case -Name "locked"
@@ -140,6 +141,9 @@ try {
     }
     Assert-True ($lockedMessage -match "Another compaction operation owns") "locked: concurrent publication was not rejected"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $locked.MemoryRoot "snapshots/compaction"))) "locked: concurrent publication mutated memory"
+    $handoffResult = & $scriptUnderTest -Objective "after handoff" -State "ready" -Next "continue" -AgentsCommand $locked.Fake -CompatibilityRoot $locked.CompatibilityRoot | ConvertFrom-Json
+    Assert-True ($handoffResult.ok -eq $true) "locked: persistent lock could not be acquired after owner release"
+    Assert-True (Test-Path -LiteralPath $heldLockPath) "locked: lock identity was removed during handoff"
 
     # Edge path: an existing active capsule is explicitly superseded.
     $edge = Initialize-Case -Name "edge"
@@ -193,6 +197,29 @@ try {
     }
     Assert-True ($linkedMessage -match "physical directories|links|reparse points") "linked: physical authority escape was not rejected"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $linkedOutside "snapshots/compaction"))) "linked: wrote through authority link"
+
+    # Canonical descendants are checked before capsule and rollback writes.
+    $linkedSnapshots = Initialize-Case -Name "linked-snapshots"
+    $linkedSnapshotsOutside = Join-Path $linkedSnapshots.Root "snapshots-outside"
+    $linkedSnapshotsPath = Join-Path $linkedSnapshots.MemoryRoot "snapshots"
+    New-Item -ItemType Directory -Path $linkedSnapshotsOutside -Force | Out-Null
+    if ($env:OS -eq "Windows_NT") {
+        New-Item -ItemType Junction -Path $linkedSnapshotsPath -Target $linkedSnapshotsOutside | Out-Null
+    } else {
+        New-Item -ItemType SymbolicLink -Path $linkedSnapshotsPath -Target $linkedSnapshotsOutside | Out-Null
+    }
+    $env:FAKE_AGENTS_HOME = $linkedSnapshots.AgentsHome
+    $env:FAKE_AGENTS_MEMORY = $linkedSnapshots.MemoryRoot
+    $env:FAKE_AGENTS_LOG = $linkedSnapshots.Log
+    $linkedSnapshotsMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linkedSnapshots.Fake -CompatibilityRoot $linkedSnapshots.CompatibilityRoot | Out-Null
+    } catch {
+        $linkedSnapshotsMessage = $_.Exception.Message
+    }
+    Assert-True ($linkedSnapshotsMessage -match "physical directories|links|reparse points") "linked-snapshots: descendant escape was not rejected"
+    Assert-True (@(Get-ChildItem -LiteralPath $linkedSnapshotsOutside -Force).Count -eq 0) "linked-snapshots: wrote capsule evidence outside authority"
+    Assert-True (-not ((Get-Content -Raw $linkedSnapshots.Log) -match "state sync")) "linked-snapshots: repository mutated before descendant validation"
 
     # Ambiguous authority: duplicate active records fail before creating a snapshot.
     $duplicateActive = Initialize-Case -Name "duplicate-active"
