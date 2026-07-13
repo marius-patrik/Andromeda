@@ -9,10 +9,10 @@ identity, memory, session, or configuration authorities. The
 single management and runtime surface.
 
 Andromeda is one program, not a collection of adjacent tools. Every component
-in this repository — the manager core (state, sessions, orchestration), the
-session-event and tool-execution harness, the model/execution substrate, and
-the GitHub control plane — is a layer of the same system and is specified,
-validated, and released as such.
+in this repository — the management core (state, installs, credentials), the
+operation harness (orchestration, session events, tool execution), the
+model/execution substrate, and the GitHub control plane — is a layer of the
+same system and is specified, validated, and released as such.
 
 [Canonical State and Memory v2](docs/state-memory-v2.md) is the authoritative
 state specification. This PRD defines the product boundary, the system
@@ -57,17 +57,19 @@ retire. They are not supported aliases or compatibility contracts.
 | Component | Role |
 | --- | --- |
 | `packages/core` | Protobuf sources and generated Go, TypeScript, and Python contracts |
-| `packages/manager` | `agents` CLI, state, providers, sessions, memory, orchestration, package/capability registries, and lifecycle operations — the single local management surface |
-| `packages/harness` | Canonical session event handling and tool execution; growth disposition pending — roadmap or documented dormancy, no silent limbo |
+| `packages/manager` | `agents` CLI, state, installs, credentials/secrets, providers, sessions, memory, package/capability registries, and lifecycle management — the single local management surface |
+| `packages/harness` | The operation engine: orchestration, canonical session event handling, and tool execution. The orchestrator runtime currently implemented in the manager migrates here per the harness roadmap (#218) |
 | `packages/gateway` | Local model registry, routing, health, quota, and transient control-plane relay; switcher control plane and cloud OAuth dispatch |
 | `packages/inference` | Gateway-backed Python agent loop, status, persistence, redaction, and package validation; engine discovery and serve profiles |
 | `plugins/darkfactory` | Thin GitHub control-plane adapter: issues/PRs/labels ↔ work units, enforcement sync, review gates. No second brain. |
 
-Binding architecture rule: local system management operations are implemented
-in the manager and consumed by DarkFactory — no parallel implementations in the
-control plane — while gateway and inference own their assigned local runtime
-responsibilities. GitHub is the remote control plane; the `agents` CLI is the
-local one.
+Binding architecture rule: the manager manages and the harness operates. Local
+system management (state, installs, credentials, registries, lifecycle) is
+implemented in the manager and consumed by DarkFactory — no parallel
+implementations in the control plane. Operation (orchestration, session
+execution, tool execution) is harness-owned, while gateway and inference own
+their assigned local runtime responsibilities. GitHub is the remote control
+plane; the `agents` CLI is the local one.
 
 ## Goals
 
@@ -214,8 +216,10 @@ local one.
 ### Model/execution substrate (gateway and inference)
 
 - One canonical gateway identity: public name, distribution name, import
-  namespace, CLI script name, and agent package id are decided and consistent;
-  any retained compatibility naming is explicit and tested.
+  namespace, CLI script name, and agent package id converge fully on the
+  decided name. Historical names are recovery evidence only — no aliases,
+  bridges, or forwarding shims; any exception must be an explicitly recorded
+  canonical exception (as with the npm package name).
 - One canonical registry backend with a deterministic local fallback; operator
   migration off ad-hoc YAML state; persistence semantics covered by non-live
   tests plus gated live tests.
@@ -433,7 +437,8 @@ the lane breakdown lives in the program plan (`context/PLAN.md`):
    presets, command-specific help, release-backed installers and self-update.
 5. **DarkFactory work resumption** — owner-gated: DarkFactory spec/issue lane,
    then provider routing, baton ownership, and dispatch.
-6. **Harness disposition** — explicit roadmap or documented dormancy.
+6. **Harness operation-engine roadmap** — the runtime contract, orchestrator
+   migration from the manager, first bounded milestone, and test floor (#218).
 
 Parked (owner-gated): custom distro/distribution including the container
 capstone demo, observability stack, and the other board-parked scopes.
