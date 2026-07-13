@@ -1,0 +1,391 @@
+{
+  "schemaVersion": 1,
+  "library": "darkfactory-prompts",
+  "contractVersion": "0.1.0",
+  "artifacts": [
+    {
+      "id": "role/planner",
+      "kind": "role",
+      "path": "roles/planner.md",
+      "version": "0.1.0",
+      "checksum": "sha256:50b71475c8e3bf7baca9a4aba416e8da9e4cb65b2dd9b61e63ff65e9b5a61362",
+      "variables": [
+        "repository.fullName",
+        "run.kind",
+        "workItem.number"
+      ],
+      "requiredVariables": [
+        "workItem.number"
+      ]
+    },
+    {
+      "id": "role/implementer",
+      "kind": "role",
+      "path": "roles/implementer.md",
+      "version": "0.1.0",
+      "checksum": "sha256:00b8fa174af718d0f8f75f0a1fbf01404d7fe193b73883bc88d3ab43737f457c",
+      "variables": [
+        "output.schema",
+        "repository.fullName",
+        "validation.commands",
+        "workItem.number"
+      ],
+      "requiredVariables": [
+        "validation.commands",
+        "workItem.number"
+      ]
+    },
+    {
+      "id": "role/issue-drafter",
+      "kind": "role",
+      "path": "roles/issue-drafter.md",
+      "version": "0.1.0",
+      "checksum": "sha256:e638d3d0d771d9d608bdfc5da91422af915cff049a37b8077f67d84fc29caa01",
+      "variables": [
+        "output.schema",
+        "repository.fullName",
+        "run.kind"
+      ],
+      "requiredVariables": [
+        "repository.fullName"
+      ]
+    },
+    {
+      "id": "role/issue-reviewer",
+      "kind": "role",
+      "path": "roles/issue-reviewer.md",
+      "version": "0.1.0",
+      "checksum": "sha256:568d9a6bf34cfcba7e346845db5b14c3d881813e230cdad636446a2b35463196",
+      "variables": [
+        "output.schema",
+        "repository.fullName",
+        "workItem.number"
+      ],
+      "requiredVariables": [
+        "workItem.number"
+      ]
+    },
+    {
+      "id": "role/pr-reviewer",
+      "kind": "role",
+      "path": "roles/pr-reviewer.md",
+      "version": "0.1.0",
+      "checksum": "sha256:8b437eb334dac7bffc6673ec29554e8fe5951650ba164020e5fa7acf18bbe51d",
+      "variables": [
+        "output.schema",
+        "repository.fullName",
+        "workItem.number"
+      ],
+      "requiredVariables": [
+        "workItem.number"
+      ]
+    },
+    {
+      "id": "role/pr-fixer",
+      "kind": "role",
+      "path": "roles/pr-fixer.md",
+      "version": "0.1.0",
+      "checksum": "sha256:b17cb1ce35cfd756c794e5e7ce7e2fb7da2120460bda4688c4809514fdd86da9",
+      "variables": [
+        "repository.fullName",
+        "validation.commands",
+        "workItem.number"
+      ],
+      "requiredVariables": [
+        "workItem.number"
+      ]
+    },
+    {
+      "id": "role/releaser",
+      "kind": "role",
+      "path": "roles/releaser.md",
+      "version": "0.1.0",
+      "checksum": "sha256:f6b7e5fa7749dc0bade16dd4bfa6b2711ed623964cb98f446488c5fd89dbaa5e",
+      "variables": [
+        "output.schema",
+        "repository.defaultBranch",
+        "repository.fullName",
+        "validation.commands"
+      ],
+      "requiredVariables": [
+        "repository.fullName"
+      ]
+    },
+    {
+      "id": "role/verifier",
+      "kind": "role",
+      "path": "roles/verifier.md",
+      "version": "0.1.0",
+      "checksum": "sha256:e62de1cecb60f5efa0b95f48400875b5f7be799760a2842753d20174e42d567d",
+      "variables": [
+        "repository.fullName",
+        "validation.commands",
+        "verified.facts",
+        "workItem.number"
+      ],
+      "requiredVariables": [
+        "validation.commands",
+        "workItem.number"
+      ]
+    },
+    {
+      "id": "role/auditor",
+      "kind": "role",
+      "path": "roles/auditor.md",
+      "version": "0.1.0",
+      "checksum": "sha256:ec9421e81519ef5efad3c80b264705d65ae02af17c8f45887a1b0d107d7fa850",
+      "variables": [
+        "output.schema",
+        "repository.fullName",
+        "run.kind"
+      ],
+      "requiredVariables": [
+        "repository.fullName"
+      ]
+    },
+    {
+      "id": "role/l0-orchestrator",
+      "kind": "role",
+      "path": "roles/l0-orchestrator.md",
+      "version": "0.1.0",
+      "checksum": "sha256:e02c8ee7408c57255cd70cf20040c55d0096ec1a20655adb02f442c293f1279f",
+      "variables": [
+        "output.schema",
+        "repository.fullName",
+        "run.kind"
+      ],
+      "requiredVariables": [
+        "run.kind"
+      ]
+    },
+    {
+      "id": "skill/acceptance-driven-delivery",
+      "kind": "skill",
+      "path": "skills/acceptance-driven-delivery.md",
+      "version": "0.1.0",
+      "checksum": "sha256:f1624e22575fd0115308196c8941e337f52272b83f47e301cadd2ee3e09653e6",
+      "variables": [
+        "output.schema"
+      ],
+      "requiredVariables": []
+    },
+    {
+      "id": "skill/minimal-diff",
+      "kind": "skill",
+      "path": "skills/minimal-diff.md",
+      "version": "0.1.0",
+      "checksum": "sha256:0a929e168b78dd2612b7377e6660bdf64895fde0f7bdfe216d500f7ded565f1b",
+      "variables": [],
+      "requiredVariables": []
+    },
+    {
+      "id": "skill/verification-first",
+      "kind": "skill",
+      "path": "skills/verification-first.md",
+      "version": "0.1.0",
+      "checksum": "sha256:6ba994ee5f693611699465c48080f41dd52053d9e799e26c1941e98e1871296f",
+      "variables": [
+        "validation.commands"
+      ],
+      "requiredVariables": []
+    },
+    {
+      "id": "skill/untrusted-input-handling",
+      "kind": "skill",
+      "path": "skills/untrusted-input-handling.md",
+      "version": "0.1.0",
+      "checksum": "sha256:460a3d3f34b41585538d18a21da0b3b0a8a4901071611ea0f8935f48ca10d24f",
+      "variables": [],
+      "requiredVariables": []
+    },
+    {
+      "id": "tier/reasoning",
+      "kind": "tier",
+      "path": "tiers/reasoning.md",
+      "version": "0.1.0",
+      "checksum": "sha256:32c3cdde11a3c394483e1a136a65b688a2d2a63e589da286bc76818abdd29aa0",
+      "variables": [
+        "effort.level",
+        "tier.name"
+      ],
+      "requiredVariables": []
+    },
+    {
+      "id": "tier/standard",
+      "kind": "tier",
+      "path": "tiers/standard.md",
+      "version": "0.1.0",
+      "checksum": "sha256:50824e5e849f444338073a10c8e0cdb8cddd0e157ec60be842c87933d8751738",
+      "variables": [
+        "effort.level",
+        "tier.name"
+      ],
+      "requiredVariables": []
+    },
+    {
+      "id": "tier/fast",
+      "kind": "tier",
+      "path": "tiers/fast.md",
+      "version": "0.1.0",
+      "checksum": "sha256:3deeb65686959c123ef2112d8eca85471fad8145df631803389ddb0e16386ea7",
+      "variables": [
+        "effort.level",
+        "tier.name"
+      ],
+      "requiredVariables": []
+    },
+    {
+      "id": "overlay/github-control-plane",
+      "kind": "overlay",
+      "path": "overlays/github-control-plane.md",
+      "version": "0.1.0",
+      "checksum": "sha256:d5d3710684b4f29b65a0472a730fc8792ee6efdac259f9b207517e7bbf4f777b",
+      "variables": [],
+      "requiredVariables": []
+    },
+    {
+      "id": "overlay/agent-os-boundary",
+      "kind": "overlay",
+      "path": "overlays/agent-os-boundary.md",
+      "version": "0.1.0",
+      "checksum": "sha256:06a9f1bb8d1aea61607b8404399db97de1fd2c7280c815204b5dcab3abffa973",
+      "variables": [],
+      "requiredVariables": []
+    },
+    {
+      "id": "overlay/token-economy",
+      "kind": "overlay",
+      "path": "overlays/token-economy.md",
+      "version": "0.1.0",
+      "checksum": "sha256:912ce242e204dad0a423ad7c60e07da655fb3bcd747aa34987ca5374be3c14ac",
+      "variables": [],
+      "requiredVariables": []
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "planner",
+      "path": "fixtures/compose/planner.fixture.json",
+      "snapshot": "fixtures/snapshots/planner.snapshot.md",
+      "covers": [
+        "overlay/agent-os-boundary",
+        "overlay/github-control-plane",
+        "role/planner",
+        "skill/acceptance-driven-delivery",
+        "tier/reasoning"
+      ]
+    },
+    {
+      "id": "implementer",
+      "path": "fixtures/compose/implementer.fixture.json",
+      "snapshot": "fixtures/snapshots/implementer.snapshot.md",
+      "covers": [
+        "overlay/agent-os-boundary",
+        "overlay/github-control-plane",
+        "overlay/token-economy",
+        "role/implementer",
+        "skill/acceptance-driven-delivery",
+        "skill/minimal-diff",
+        "skill/verification-first",
+        "tier/standard"
+      ]
+    },
+    {
+      "id": "issue-drafter",
+      "path": "fixtures/compose/issue-drafter.fixture.json",
+      "snapshot": "fixtures/snapshots/issue-drafter.snapshot.md",
+      "covers": [
+        "overlay/github-control-plane",
+        "overlay/token-economy",
+        "role/issue-drafter",
+        "skill/acceptance-driven-delivery",
+        "tier/standard"
+      ]
+    },
+    {
+      "id": "issue-reviewer",
+      "path": "fixtures/compose/issue-reviewer.fixture.json",
+      "snapshot": "fixtures/snapshots/issue-reviewer.snapshot.md",
+      "covers": [
+        "overlay/github-control-plane",
+        "role/issue-reviewer",
+        "skill/untrusted-input-handling",
+        "tier/standard"
+      ]
+    },
+    {
+      "id": "pr-reviewer",
+      "path": "fixtures/compose/pr-reviewer.fixture.json",
+      "snapshot": "fixtures/snapshots/pr-reviewer.snapshot.md",
+      "covers": [
+        "overlay/agent-os-boundary",
+        "overlay/github-control-plane",
+        "role/pr-reviewer",
+        "skill/untrusted-input-handling",
+        "skill/verification-first",
+        "tier/reasoning"
+      ]
+    },
+    {
+      "id": "pr-fixer",
+      "path": "fixtures/compose/pr-fixer.fixture.json",
+      "snapshot": "fixtures/snapshots/pr-fixer.snapshot.md",
+      "covers": [
+        "overlay/agent-os-boundary",
+        "overlay/github-control-plane",
+        "role/pr-fixer",
+        "skill/minimal-diff",
+        "skill/verification-first",
+        "tier/standard"
+      ]
+    },
+    {
+      "id": "releaser",
+      "path": "fixtures/compose/releaser.fixture.json",
+      "snapshot": "fixtures/snapshots/releaser.snapshot.md",
+      "covers": [
+        "overlay/agent-os-boundary",
+        "role/releaser",
+        "skill/verification-first",
+        "tier/standard"
+      ]
+    },
+    {
+      "id": "verifier",
+      "path": "fixtures/compose/verifier.fixture.json",
+      "snapshot": "fixtures/snapshots/verifier.snapshot.md",
+      "covers": [
+        "overlay/github-control-plane",
+        "role/verifier",
+        "skill/untrusted-input-handling",
+        "skill/verification-first",
+        "tier/fast"
+      ]
+    },
+    {
+      "id": "auditor",
+      "path": "fixtures/compose/auditor.fixture.json",
+      "snapshot": "fixtures/snapshots/auditor.snapshot.md",
+      "covers": [
+        "overlay/agent-os-boundary",
+        "overlay/token-economy",
+        "role/auditor",
+        "skill/acceptance-driven-delivery",
+        "tier/reasoning"
+      ]
+    },
+    {
+      "id": "l0-orchestrator",
+      "path": "fixtures/compose/l0-orchestrator.fixture.json",
+      "snapshot": "fixtures/snapshots/l0-orchestrator.snapshot.md",
+      "covers": [
+        "overlay/agent-os-boundary",
+        "overlay/github-control-plane",
+        "overlay/token-economy",
+        "role/l0-orchestrator",
+        "skill/acceptance-driven-delivery",
+        "tier/reasoning"
+      ]
+    }
+  ]
+}

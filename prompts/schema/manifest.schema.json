@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/marius-patrik/DarkFactory/prompts/schema/manifest.schema.json",
+  "title": "DarkFactory prompt library manifest",
+  "description": "Contract for prompts/manifest.json. Enforced at runtime by src/prompts.ts (validateManifest); this document is the human-readable reference.",
+  "type": "object",
+  "required": ["schemaVersion", "library", "contractVersion", "artifacts", "fixtures"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "Manifest schema version. Must be 1."
+    },
+    "library": {
+      "const": "darkfactory-prompts",
+      "description": "Library identifier."
+    },
+    "contractVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$",
+      "description": "Semver version of the composition contract."
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "fixtures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fixture" }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["id", "kind", "path", "version", "checksum", "variables", "requiredVariables"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(role|skill|tier|overlay)/[a-z0-9-]+$",
+          "description": "Stable identifier; prefix must match kind."
+        },
+        "kind": {
+          "enum": ["role", "skill", "tier", "overlay"]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "\\.md$",
+          "description": "Path to the artifact body, relative to prompts/."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$"
+        },
+        "checksum": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 of the artifact's newline-normalized content."
+        },
+        "variables": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Trusted template variables used by the artifact body."
+        },
+        "requiredVariables": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Variables that must be present to compose the artifact."
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "required": ["id", "path", "snapshot", "covers"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "path": {
+          "type": "string",
+          "pattern": "\\.json$",
+          "description": "Typed composition inputs, relative to prompts/."
+        },
+        "snapshot": {
+          "type": "string",
+          "pattern": "\\.md$",
+          "description": "Deterministic composed output for the fixture."
+        },
+        "covers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Artifact ids the fixture composes (role, skills, tier, overlays)."
+        }
+      }
+    }
+  }
+}

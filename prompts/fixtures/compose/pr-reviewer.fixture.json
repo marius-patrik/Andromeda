@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "run": {
+    "id": "run-20260713-review-pr-077",
+    "kind": "review-pr",
+    "triggeredBy": "comment"
+  },
+  "repository": {
+    "owner": "marius-patrik",
+    "repo": "DarkFactory",
+    "defaultBranch": "dev"
+  },
+  "workItem": {
+    "kind": "pr",
+    "number": 77,
+    "author": "darkfactory-bot",
+    "url": "https://github.com/marius-patrik/DarkFactory/pull/77",
+    "title": "Add prompt content for the planner role",
+    "body": "Implements #56. Adds planner guidance.",
+    "comments": ["Please verify the diff is minimal."]
+  },
+  "policy": {
+    "branching": "One worker = one issue = one branch = one PR; branch df/<issue>-<slug> from dev.",
+    "labels": ["P0", "P1", "P2", "df:ready", "df:running", "df:blocked"],
+    "enforcement": "All merges require green CI and the configured review gate; never force-push or bypass gates."
+  },
+  "validation": {
+    "commands": ["npm run check"]
+  },
+  "effort": "high",
+  "verified": {
+    "facts": ["CI is green on the PR branch."]
+  },
+  "output": {
+    "format": "markdown",
+    "schema": "Return approve, changes, or block with concrete reasons tied to the acceptance criteria."
+  },
+  "selection": {
+    "role": "role/pr-reviewer",
+    "skills": ["skill/untrusted-input-handling", "skill/verification-first"],
+    "tier": "reasoning",
+    "overlays": ["overlay/github-control-plane", "overlay/agent-os-boundary"]
+  }
+}
