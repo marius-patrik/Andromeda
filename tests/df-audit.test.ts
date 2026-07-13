@@ -71,6 +71,47 @@ test("report label preflight is read-only and fails visibly when taxonomy is mis
   await assert.rejects(() => doctor.assertDoctorReportLabels(missingGh, repo), /required labels are missing/);
 });
 
+test("report mode writes ledger-only skipped evidence for canonical parked and archived repositories", async () => {
+  for (const variant of ["parked", "archived"] as const) {
+    const target = variant === "parked"
+      ? { owner: "marius-patrik", repo: "SkyAgent" }
+      : { owner: "marius-patrik", repo: "ArchivedProduct" };
+    const { gh: targetGh, calls: targetCalls } = mockGh((_method, requestPath) => {
+      if (variant === "archived" && requestPath === "/repos/marius-patrik/ArchivedProduct") {
+        return { default_branch: "main", archived: true, disabled: false };
+      }
+      throw new Error(`skipped target should not be inspected or mutated: ${requestPath}`);
+    });
+    const { gh: ledgerGh, calls: ledgerCalls } = mockGh((method) => {
+      if (method === "GET") throw notFound();
+      if (method === "PUT") return {};
+      throw new Error(`unexpected ledger method ${method}`);
+    });
+
+    const reports = await doctor.runRepositoryDoctor(targetGh, {
+      mode: "report",
+      trigger: "test",
+      controlRepo: repo,
+      target,
+      ledgerGithub: ledgerGh,
+      registry: { schemaVersion: 1, repositories: { "marius-patrik/ArchivedProduct": { state: "active" } } }
+    });
+
+    assert.equal(reports[0].skipped, true);
+    assert.equal(reports[0].read_only, true);
+    assert.equal(reports[0].actions.at(-1).action, "write-doctor-ledger");
+    assert.equal(targetCalls.some((call) => call.method !== "GET" || call.path.includes("/labels") || call.path.includes("/issues")), false);
+    assert.equal(targetCalls.length, variant === "parked" ? 0 : 1);
+    const ledgerWrite = ledgerCalls.find((call) => call.method === "PUT");
+    assert.ok(ledgerWrite);
+    const ledger = JSON.parse(Buffer.from((ledgerWrite.body as { content: string }).content, "base64").toString("utf8"));
+    assert.equal(ledger.phase, "completion");
+    assert.equal(ledger.mode, "report");
+    assert.match(ledger.observations[0], variant === "parked" ? /parked/ : /read-only/);
+    assert.deepEqual(ledger.actions, []);
+  }
+});
+
 test("stable findings deduplicate evidence and sort by id", () => {
   const findings = doctor.dedupeFindings([
     doctor.doctorFinding("z-last", "test", "last"),

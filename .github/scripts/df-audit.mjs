@@ -133,17 +133,21 @@ export async function runRepositoryDoctor(github, options = {}) {
       ? "active"
       : managedRepoLifecycleState(repository, registry);
     if (isParkedRepo(repository) || lifecycle === "parked") {
-      reports.push(skippedReport(repository, mode, "Repository is parked; doctor performed no writes or repair work."));
+      const report = skippedReport(repository, mode, "Repository is parked; doctor performed no target-repository writes or repair work.");
+      if (mode === "report") await publishSkippedDoctorReport(options.ledgerGithub, repository, report);
+      reports.push(report);
       continue;
     }
 
     const metadata = await getRepository(github, repository);
     if (metadata.archived === true || metadata.disabled === true || lifecycle === "archived") {
-      reports.push(skippedReport(
+      const report = skippedReport(
         repository,
         mode,
         `Repository is read-only (archived=${metadata.archived === true}, disabled=${metadata.disabled === true}, lifecycle=${lifecycle}).`
-      ));
+      );
+      if (mode === "report") await publishSkippedDoctorReport(options.ledgerGithub, repository, report);
+      reports.push(report);
       continue;
     }
 
@@ -197,6 +201,11 @@ export function planDoctorReportActions(findings) {
     { action: "close-resolved-repair-issues", scope: "trusted df-doctor markers absent from the current finding set" },
     { action: "retire-legacy-audit-issues", scope: "trusted aggregate df-audit marker" }
   ];
+}
+
+export async function publishSkippedDoctorReport(ledgerGithub, repository, report) {
+  report.actions.push(await writeDoctorLedger(ledgerGithub, repository, report, { phase: "completion", plannedActions: [] }));
+  return report;
 }
 
 async function resolveDoctorTargets(github, controlRepo, registry, options) {

@@ -360,9 +360,12 @@ test("extractClosingIssueNumbers deduplicates close references", () => {
 
 test("parked repositories include the current owner exclusions", () => {
   assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "skyblock-agent" }), true);
+  assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "SkyAgent" }), true);
   assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "fabrica" }), true);
+  assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "LifeQuest" }), true);
   assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "singularity" }), /parked/);
   assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "life-support" }), /parked/);
+  assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "LifeQuest" }), /parked/);
 });
 
 test("listActiveManagedRepos excludes archived, disabled, and non-active lifecycle repos", async () => {

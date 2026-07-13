@@ -6,8 +6,10 @@ export const AGENT_OS_DATA_REPO = "marius-patrik/Andromeda-data";
 export const DARK_FACTORY_DATA_REPO = "marius-patrik/darkfactory-data";
 export const PARKED_REPOS = new Set([
   "marius-patrik/fabrica",
+  "marius-patrik/skyagent",
   "marius-patrik/skyblock-agent",
   "marius-patrik/singularity",
+  "marius-patrik/lifequest",
   "marius-patrik/life-support"
 ]);
 export const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
