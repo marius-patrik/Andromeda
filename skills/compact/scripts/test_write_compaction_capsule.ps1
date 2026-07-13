@@ -149,7 +149,7 @@ try {
     $heldLock = [System.IO.File]::Open($heldLockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
     $lockedMessage = ""
     try {
-        & $scriptUnderTest -Objective "must wait" -State "locked" -Next "none" -AgentsCommand $locked.Fake -CompatibilityRoot $locked.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must wait" -State "locked" -Next "none" -AgentsCommand $locked.Fake -UserHome $locked.Root -CompatibilityRoot $locked.CompatibilityRoot | Out-Null
     } catch {
         $lockedMessage = $_.Exception.Message
     } finally {
@@ -157,7 +157,7 @@ try {
     }
     Assert-True ($lockedMessage -match "Another compaction operation owns") "locked: concurrent publication was not rejected"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $locked.MemoryRoot "snapshots/compaction"))) "locked: concurrent publication mutated memory"
-    $handoffResult = & $scriptUnderTest -Objective "after handoff" -State "ready" -Next "continue" -AgentsCommand $locked.Fake -CompatibilityRoot $locked.CompatibilityRoot | ConvertFrom-Json
+    $handoffResult = & $scriptUnderTest -Objective "after handoff" -State "ready" -Next "continue" -AgentsCommand $locked.Fake -UserHome $locked.Root -CompatibilityRoot $locked.CompatibilityRoot | ConvertFrom-Json
     Assert-True ($handoffResult.ok -eq $true) "locked: persistent lock could not be acquired after owner release"
     Assert-True (Test-Path -LiteralPath $heldLockPath) "locked: lock identity was removed during handoff"
 
@@ -169,7 +169,7 @@ try {
     $env:FAKE_ACTIVE_ID = "prior-record"
     $env:FAKE_ACTIVE_IDS = ""
     $env:FAKE_BACKUP_COMMITTED = "false"
-    $edgeResult = & $scriptUnderTest -Objective "new objective" -State "active" -Next "continue" -AgentsCommand $edge.Fake -CompatibilityRoot $edge.CompatibilityRoot | ConvertFrom-Json
+    $edgeResult = & $scriptUnderTest -Objective "new objective" -State "active" -Next "continue" -AgentsCommand $edge.Fake -UserHome $edge.Root -CompatibilityRoot $edge.CompatibilityRoot | ConvertFrom-Json
     Assert-True ($edgeResult.recordId -eq "record-superseded") "edge: expected superseding record"
     Assert-True ((Get-Content -Raw $edge.Log) -match "memory supersede prior-record") "edge: prior record was not superseded"
     $env:FAKE_BACKUP_COMMITTED = ""
@@ -182,7 +182,7 @@ try {
     $env:FAKE_ACTIVE_ID = ""
     $env:FAKE_ACTIVE_IDS = ""
     $env:FAKE_PREFLIGHT_ACTIVE_ID = "preflight-record"
-    $preflightImportResult = & $scriptUnderTest -Objective "after import" -State "active" -Next "continue" -AgentsCommand $preflightImport.Fake -CompatibilityRoot $preflightImport.CompatibilityRoot | ConvertFrom-Json
+    $preflightImportResult = & $scriptUnderTest -Objective "after import" -State "active" -Next "continue" -AgentsCommand $preflightImport.Fake -UserHome $preflightImport.Root -CompatibilityRoot $preflightImport.CompatibilityRoot | ConvertFrom-Json
     Assert-True ($preflightImportResult.recordId -eq "record-superseded") "preflight-import: synchronized record was not superseded"
     $preflightImportLog = @(Get-Content -LiteralPath $preflightImport.Log)
     Assert-True (($preflightImportLog -join "`n") -match "memory supersede preflight-record") "preflight-import: stale remember path was selected"
@@ -200,7 +200,7 @@ try {
     $env:FAKE_ACTIVE_IDS = ""
     $deniedMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $denied.Fake -CompatibilityRoot $denied.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $denied.Fake -UserHome $denied.Root -CompatibilityRoot $denied.CompatibilityRoot | Out-Null
     } catch {
         $deniedMessage = $_.Exception.Message
     }
@@ -214,7 +214,7 @@ try {
     $env:FAKE_AGENTS_LOG = $authorityAncestor.Log
     $authorityAncestorMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "overlap" -Next "none" -AgentsCommand $authorityAncestor.Fake -CompatibilityRoot $authorityAncestor.Root | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "overlap" -Next "none" -AgentsCommand $authorityAncestor.Fake -UserHome $authorityAncestor.Root -CompatibilityRoot $authorityAncestor.Root | Out-Null
     } catch {
         $authorityAncestorMessage = $_.Exception.Message
     }
@@ -229,7 +229,7 @@ try {
     $env:FAKE_AGENTS_LOG = $authorityDescendant.Log
     $authorityDescendantMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "overlap" -Next "none" -AgentsCommand $authorityDescendant.Fake -CompatibilityRoot $authorityDescendantProjection | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "overlap" -Next "none" -AgentsCommand $authorityDescendant.Fake -UserHome $authorityDescendant.Root -CompatibilityRoot $authorityDescendantProjection | Out-Null
     } catch {
         $authorityDescendantMessage = $_.Exception.Message
     }
@@ -252,7 +252,7 @@ try {
     $env:FAKE_AGENTS_LOG = $linked.Log
     $linkedMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linked.Fake -CompatibilityRoot $linked.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linked.Fake -UserHome $linked.Root -CompatibilityRoot $linked.CompatibilityRoot | Out-Null
     } catch {
         $linkedMessage = $_.Exception.Message
     }
@@ -274,7 +274,7 @@ try {
     $env:FAKE_AGENTS_LOG = $linkedSnapshots.Log
     $linkedSnapshotsMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linkedSnapshots.Fake -CompatibilityRoot $linkedSnapshots.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linkedSnapshots.Fake -UserHome $linkedSnapshots.Root -CompatibilityRoot $linkedSnapshots.CompatibilityRoot | Out-Null
     } catch {
         $linkedSnapshotsMessage = $_.Exception.Message
     }
@@ -297,7 +297,7 @@ try {
     $env:FAKE_AGENTS_LOG = $linkedCompatibility.Log
     $linkedCompatibilityMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linkedCompatibility.Fake -CompatibilityRoot $linkedCompatibility.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linkedCompatibility.Fake -UserHome $linkedCompatibility.Root -CompatibilityRoot $linkedCompatibility.CompatibilityRoot | Out-Null
     } catch {
         $linkedCompatibilityMessage = $_.Exception.Message
     }
@@ -321,7 +321,7 @@ try {
     $env:FAKE_AGENTS_LOG = $linkedDestination.Log
     $linkedDestinationMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linkedDestination.Fake -CompatibilityRoot $linkedDestination.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid" -Next "none" -AgentsCommand $linkedDestination.Fake -UserHome $linkedDestination.Root -CompatibilityRoot $linkedDestination.CompatibilityRoot | Out-Null
     } catch {
         $linkedDestinationMessage = $_.Exception.Message
     }
@@ -340,7 +340,7 @@ try {
     $env:FAKE_ACTIVE_IDS = "record-one,record-two"
     $duplicateActiveMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "ambiguous" -Next "none" -AgentsCommand $duplicateActive.Fake -CompatibilityRoot $duplicateActive.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "ambiguous" -Next "none" -AgentsCommand $duplicateActive.Fake -UserHome $duplicateActive.Root -CompatibilityRoot $duplicateActive.CompatibilityRoot | Out-Null
     } catch {
         $duplicateActiveMessage = $_.Exception.Message
     }
@@ -358,7 +358,7 @@ try {
     $env:FAKE_ACTIVE_IDS = ""
     $duplicateProjectionMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "malformed" -Next "none" -AgentsCommand $duplicateProjection.Fake -CompatibilityRoot $duplicateProjection.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "malformed" -Next "none" -AgentsCommand $duplicateProjection.Fake -UserHome $duplicateProjection.Root -CompatibilityRoot $duplicateProjection.CompatibilityRoot | Out-Null
     } catch {
         $duplicateProjectionMessage = $_.Exception.Message
     }
@@ -375,7 +375,7 @@ try {
     $env:FAKE_SYNC_INVALID_BACKUP = "true"
     $invalidEvidenceMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidEvidence.Fake -CompatibilityRoot $invalidEvidence.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidEvidence.Fake -UserHome $invalidEvidence.Root -CompatibilityRoot $invalidEvidence.CompatibilityRoot | Out-Null
     } catch {
         $invalidEvidenceMessage = $_.Exception.Message
     }
@@ -391,7 +391,7 @@ try {
         $env:FAKE_SYNC_PROJECTION_HASH = $invalidProjectionHash
         $invalidProjectionMessage = ""
         try {
-            & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidProjection.Fake -CompatibilityRoot $invalidProjection.CompatibilityRoot | Out-Null
+            & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidProjection.Fake -UserHome $invalidProjection.Root -CompatibilityRoot $invalidProjection.CompatibilityRoot | Out-Null
         } catch {
             $invalidProjectionMessage = $_.Exception.Message
         }
@@ -407,7 +407,7 @@ try {
     $env:FAKE_SYNC_INVALID_BUNDLE = "true"
     $invalidBundleMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidBundle.Fake -CompatibilityRoot $invalidBundle.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "invalid evidence" -Next "none" -AgentsCommand $invalidBundle.Fake -UserHome $invalidBundle.Root -CompatibilityRoot $invalidBundle.CompatibilityRoot | Out-Null
     } catch {
         $invalidBundleMessage = $_.Exception.Message
     }
@@ -425,13 +425,35 @@ try {
     $env:FAKE_POST_ACTIVE_IDS = "record-new,remote-record"
     $convergenceRaceMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "raced" -Next "none" -AgentsCommand $convergenceRace.Fake -CompatibilityRoot $convergenceRace.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "raced" -Next "none" -AgentsCommand $convergenceRace.Fake -UserHome $convergenceRace.Root -CompatibilityRoot $convergenceRace.CompatibilityRoot | Out-Null
     } catch {
         $convergenceRaceMessage = $_.Exception.Message
     }
     Assert-True ($convergenceRaceMessage -match "changed the active compaction record") "convergence-race: stale success was accepted"
+    Assert-True ($convergenceRaceMessage -match "rollback skipped because synchronized authority") "convergence-race: concurrent authority was not preserved"
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $convergenceRace.MemoryRoot ".compact-state.json"))) "convergence-race: success state was written"
-    Assert-True ((Get-Content -Raw $convergenceRace.Log) -match "memory retract record-new") "convergence-race: local raced record was not rolled back"
+    Assert-True (-not ((Get-Content -Raw $convergenceRace.Log) -match "memory retract record-new")) "convergence-race: synchronized authority was mutated during recovery"
+    $env:FAKE_POST_ACTIVE_IDS = ""
+
+    # A newer remote scalar must never be overwritten with the stale preflight value.
+    $priorConvergenceRace = Initialize-Case -Name "prior-convergence-race"
+    $env:FAKE_AGENTS_HOME = $priorConvergenceRace.AgentsHome
+    $env:FAKE_AGENTS_MEMORY = $priorConvergenceRace.MemoryRoot
+    $env:FAKE_AGENTS_LOG = $priorConvergenceRace.Log
+    $env:FAKE_ACTIVE_ID = "prior-record"
+    $env:FAKE_ACTIVE_IDS = ""
+    $env:FAKE_POST_ACTIVE_IDS = "remote-record"
+    $priorConvergenceRaceMessage = ""
+    try {
+        & $scriptUnderTest -Objective "must fail" -State "raced" -Next "none" -AgentsCommand $priorConvergenceRace.Fake -UserHome $priorConvergenceRace.Root -CompatibilityRoot $priorConvergenceRace.CompatibilityRoot | Out-Null
+    } catch {
+        $priorConvergenceRaceMessage = $_.Exception.Message
+    }
+    Assert-True ($priorConvergenceRaceMessage -match "rollback skipped because synchronized authority") "prior-convergence-race: newer authority was not preserved"
+    $priorConvergenceRaceLog = Get-Content -Raw $priorConvergenceRace.Log
+    Assert-True (-not ($priorConvergenceRaceLog -match "memory supersede record-superseded --value prior-value")) "prior-convergence-race: stale preflight value overwrote remote authority"
+    Assert-True (-not ($priorConvergenceRaceLog -match "memory retract record-superseded")) "prior-convergence-race: synchronized authority was retracted"
+    $env:FAKE_ACTIVE_ID = ""
     $env:FAKE_POST_ACTIVE_IDS = ""
 
     # A successful process exit is insufficient when sync JSON reports no push.
@@ -444,7 +466,7 @@ try {
     Set-Content -LiteralPath (Join-Path $syncFailure.CompatibilityRoot "handoff.md") -Value "original handoff" -NoNewline
     $syncFailureMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "unsynced" -Next "none" -AgentsCommand $syncFailure.Fake -CompatibilityRoot $syncFailure.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "unsynced" -Next "none" -AgentsCommand $syncFailure.Fake -UserHome $syncFailure.Root -CompatibilityRoot $syncFailure.CompatibilityRoot | Out-Null
     } catch {
         $syncFailureMessage = $_.Exception.Message
     }
@@ -465,7 +487,7 @@ try {
     $env:FAKE_SYNC_FAIL_ON_CALL = "2"
     $supersedeFailureMessage = ""
     try {
-        & $scriptUnderTest -Objective "must fail" -State "unsynced" -Next "none" -AgentsCommand $supersedeFailure.Fake -CompatibilityRoot $supersedeFailure.CompatibilityRoot | Out-Null
+        & $scriptUnderTest -Objective "must fail" -State "unsynced" -Next "none" -AgentsCommand $supersedeFailure.Fake -UserHome $supersedeFailure.Root -CompatibilityRoot $supersedeFailure.CompatibilityRoot | Out-Null
     } catch {
         $supersedeFailureMessage = $_.Exception.Message
     }

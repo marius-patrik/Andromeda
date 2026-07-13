@@ -86,7 +86,11 @@ function Assert-PhysicalFileDestination {
 
     $fullPath = [System.IO.Path]::GetFullPath($Path)
     $parent = Split-Path -Parent $fullPath
-    $anchor = [System.IO.Path]::GetPathRoot($parent)
+    $matchingRoots = @($script:PhysicalWriteRoots | Where-Object { Test-PathWithin -Parent $_ -Candidate $fullPath })
+    if ($matchingRoots.Count -eq 0) {
+        throw "Write destination is outside the approved canonical and compatibility roots: $fullPath"
+    }
+    $anchor = $matchingRoots | Sort-Object { $_.Length } -Descending | Select-Object -First 1
     Assert-PhysicalDirectoryChain -Root $anchor -Target $parent
 
     $item = Get-Item -LiteralPath $fullPath -Force -ErrorAction SilentlyContinue
@@ -320,14 +324,23 @@ if ([string]::IsNullOrWhiteSpace($CompatibilityRoot)) {
     $CompatibilityRoot = Join-Path (Join-Path $UserHome ".codex") "memories"
 }
 $resolvedCompatibilityRoot = [System.IO.Path]::GetFullPath($CompatibilityRoot)
+$resolvedUserHome = [System.IO.Path]::GetFullPath($UserHome)
+if (-not (Test-Path -LiteralPath $resolvedUserHome -PathType Container)) {
+    throw "User home does not exist: $resolvedUserHome"
+}
+Assert-PhysicalDirectoryChain -Root $resolvedUserHome -Target $resolvedUserHome
+if (-not (Test-PathWithin -Parent $resolvedUserHome -Candidate $resolvedCompatibilityRoot)) {
+    throw "Compatibility projection root must remain under the resolved user home."
+}
 if (
     (Test-PathWithin -Parent $authority.AgentsHome -Candidate $resolvedCompatibilityRoot) -or
     (Test-PathWithin -Parent $resolvedCompatibilityRoot -Candidate $authority.AgentsHome)
 ) {
     throw "Compatibility projection root must be physically disjoint from the canonical AGENTS_HOME tree."
 }
-$compatibilityAnchor = [System.IO.Path]::GetPathRoot($resolvedCompatibilityRoot)
+$compatibilityAnchor = $resolvedUserHome
 Assert-PhysicalDirectoryChain -Root $compatibilityAnchor -Target $resolvedCompatibilityRoot
+$script:PhysicalWriteRoots = @($authority.AgentsHome, $resolvedUserHome)
 $handoffPath = Join-Path $resolvedCompatibilityRoot "handoff.md"
 $shortPath = Join-Path $resolvedCompatibilityRoot "SHORT.md"
 Assert-ProjectionBlockShape -Path $handoffPath -Start "<!-- rommie:compact:start -->" -End "<!-- rommie:compact:end -->"
@@ -523,6 +536,7 @@ Last validation: $Validation
 } catch {
     $failureMessage = $_.Exception.Message
     $recoveryIssues = @()
+    $recoveryNotes = @()
 
     foreach ($savedProjection in @($handoffSaved, $shortSaved, $stateSaved, $compatibilityStateSaved, $cacheSaved)) {
         try {
@@ -534,6 +548,16 @@ Last validation: $Validation
 
     if ($null -ne $record) {
         try {
+            $rollbackActiveResult = Invoke-AgentsJson -Arguments @(
+                "memory", "list",
+                "--scope", "session",
+                "--subject", "compaction",
+                "--predicate", "current",
+                "--status", "active",
+                "--json"
+            )
+            $rollbackActive = @($rollbackActiveResult)
+            if ($rollbackActive.Count -eq 1 -and [string]$rollbackActive[0].id -eq [string]$record.id) {
             $recoveryPath = Join-Path $snapshotDirectory "$capsuleId-rollback.json"
             $recoveryPayload = [ordered]@{
                 schemaVersion = 1
@@ -573,12 +597,21 @@ Last validation: $Validation
             }
             $recoverySync = Invoke-AgentsJson -Arguments @("state", "sync", "--json")
             Assert-StateSyncSucceeded -Result $recoverySync
+            } else {
+                $recoveryNotes += "rollback skipped because synchronized authority no longer uniquely matches the failed local record"
+                Invoke-AgentsJson -Arguments @("memory", "render", "--json") | Out-Null
+                $preservedStatus = Invoke-AgentsJson -Arguments @("memory", "status", "--json")
+                if (-not $preservedStatus.ok) {
+                    throw "synchronized authority is not healthy after preserving concurrent state"
+                }
+            }
         } catch {
             $recoveryIssues += "canonical rollback failed: $($_.Exception.Message)"
         }
     }
 
-    $recoverySummary = if ($recoveryIssues.Count -eq 0) { "rollback completed" } else { $recoveryIssues -join "; " }
+    $recoveryDetails = @($recoveryNotes) + @($recoveryIssues)
+    $recoverySummary = if ($recoveryDetails.Count -eq 0) { "rollback completed" } else { $recoveryDetails -join "; " }
     throw "Compaction publication failed: $failureMessage. Recovery: $recoverySummary."
 }
 

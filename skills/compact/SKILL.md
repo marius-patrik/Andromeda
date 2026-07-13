@@ -19,7 +19,9 @@ construction must remain portable across Windows, macOS, and Linux. Apply the
 same physical-path checks to compatibility roots and every projection file;
 provider-local projections are untrusted destinations, not an authority carveout.
 The compatibility root and the complete `AGENTS_HOME` tree must be disjoint in
-both directions; neither may be an ancestor or descendant of the other.
+both directions; neither may be an ancestor or descendant of the other. The
+compatibility root stays under the resolved user home so macOS system aliases
+above that boundary do not get mistaken for provider-local link escapes.
 
 ## Workflow
 
@@ -49,6 +51,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\skills\compact\scripts\write_com
 5. If the script detects authority drift, multiple active compaction records,
    projection-integrity failure, or state-sync failure, stop. Repair this skill
    and add a regression case before compacting; do not work around the defect.
+   Recovery may restore a prior value only while the failed local record is
+   still the sole active scalar; otherwise preserve synchronized authority.
 6. If active work remains, describe the exact next action. If work is complete,
    say so without inventing follow-up work.
 7. Tell the user compaction is ready and remind them to compact the task.
