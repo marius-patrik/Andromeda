@@ -25,7 +25,7 @@ export function parseIndexedGitlinks(output) {
     .split("\0")
     .map((entry) => {
       const separator = entry.indexOf("\t");
-      if (separator < 0 || !/^160000 [0-9a-f]+ 0$/.test(entry.slice(0, separator))) return undefined;
+      if (separator < 0 || !/^160000 [0-9a-f]+ [0-3]$/.test(entry.slice(0, separator))) return undefined;
       return entry.slice(separator + 1);
     })
     .filter((entry) => typeof entry === "string")
@@ -134,9 +134,11 @@ export function inventoryIssues(root = repositoryRoot) {
   }
   for (const allowedPath of allowedDataGitlinks) {
     const declarationCount = declaredDataGitlinks.filter((entry) => entry === allowedPath).length;
+    const gitlinkCount = actualDataGitlinks.filter((entry) => entry === allowedPath).length;
     if (declarationCount === 0) issues.push(`allowlisted data repository is not declared in .gitmodules: ${allowedPath}`);
     if (declarationCount > 1) issues.push(`allowlisted data repository is declared multiple times: ${allowedPath}`);
-    if (!actualDataGitlinks.includes(allowedPath)) issues.push(`allowlisted data repository is not a repository gitlink: ${allowedPath}`);
+    if (gitlinkCount === 0) issues.push(`allowlisted data repository is not a repository gitlink: ${allowedPath}`);
+    if (gitlinkCount > 1) issues.push(`allowlisted data repository has multiple index entries: ${allowedPath}`);
   }
 
   for (const entry of groups) {

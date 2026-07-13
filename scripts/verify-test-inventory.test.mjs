@@ -15,6 +15,10 @@ function git(target, ...args) {
   return execFileSync("git", ["-C", target, ...args], { encoding: "utf8" });
 }
 
+function addIndexEntries(target, input) {
+  execFileSync("git", ["-C", target, "update-index", "--info-only", "--index-info"], { input });
+}
+
 function fixture() {
   const target = mkdtempSync(path.join(tmpdir(), "andromeda-ci-inventory-"));
   for (const relative of ["ci", "scripts", ".github/workflows", "apps", "packages", "plugins"]) {
@@ -163,6 +167,36 @@ test("denied failure: duplicate allowlisted data declarations cannot pass", () =
     assert.match(
       inventoryIssues(target).join("\n"),
       /allowlisted data repository is declared multiple times: data\/andromeda/,
+    );
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("denied failure: a rogue nonzero-stage data gitlink cannot evade the allowlist", () => {
+  const target = fixture();
+  try {
+    addIndexEntries(target, `160000 ${fixtureGitlinkOid} 2\tdata/rogue-stage\n`);
+    assert.match(
+      inventoryIssues(target).join("\n"),
+      /data repository gitlink is not allowlisted: data\/rogue-stage/,
+    );
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("denied failure: duplicate staged entries for an allowlisted data path cannot pass", () => {
+  const target = fixture();
+  try {
+    git(target, "update-index", "--force-remove", "data/andromeda");
+    addIndexEntries(
+      target,
+      `160000 ${fixtureGitlinkOid} 1\tdata/andromeda\n160000 ${fixtureGitlinkOid} 2\tdata/andromeda\n`,
+    );
+    assert.match(
+      inventoryIssues(target).join("\n"),
+      /allowlisted data repository has multiple index entries: data\/andromeda/,
     );
   } finally {
     rmSync(target, { recursive: true, force: true });
