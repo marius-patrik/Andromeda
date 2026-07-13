@@ -20,13 +20,20 @@ function unique(values) {
   return [...new Set(values)];
 }
 
-function indexedGitlinks(root) {
-  return execFileSync("git", ["-C", root, "ls-files", "--stage", "-z"])
-    .toString("utf8")
+export function parseIndexedGitlinks(output) {
+  return output
     .split("\0")
-    .map((entry) => entry.match(/^160000 [0-9a-f]+ 0\t(.+)$/)?.[1])
+    .map((entry) => {
+      const separator = entry.indexOf("\t");
+      if (separator < 0 || !/^160000 [0-9a-f]+ 0$/.test(entry.slice(0, separator))) return undefined;
+      return entry.slice(separator + 1);
+    })
     .filter((entry) => typeof entry === "string")
     .sort();
+}
+
+function indexedGitlinks(root) {
+  return parseIndexedGitlinks(execFileSync("git", ["-C", root, "ls-files", "--stage", "-z"]).toString("utf8"));
 }
 
 function workflowHasLeg(workflow, suite, runner) {

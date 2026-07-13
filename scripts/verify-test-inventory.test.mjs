@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { discoverBunTests } from "./run-ci-suite.mjs";
-import { inventoryIssues } from "./verify-test-inventory.mjs";
+import { inventoryIssues, parseIndexedGitlinks } from "./verify-test-inventory.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const fixtureGitlinkOid = "1111111111111111111111111111111111111111";
@@ -127,4 +127,10 @@ test("denied failure: an unapproved data repository cannot pass layout validatio
   } finally {
     rmSync(target, { recursive: true, force: true });
   }
+});
+
+test("denied failure: a newline-bearing data gitlink cannot disappear during index parsing", () => {
+  const roguePath = "data/rogue\nname";
+  const rawIndex = `160000 ${fixtureGitlinkOid} 0\t${roguePath}\0`;
+  assert.deepEqual(parseIndexedGitlinks(rawIndex), [roguePath]);
 });
