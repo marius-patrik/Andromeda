@@ -135,6 +135,11 @@ local one.
   and routes model calls for every other component.
 - **Control plane:** the GitHub-facing enforcement and work-dispatch layer
   (DarkFactory) plus the local `agents` management surface.
+- **Action receipt:** a small durable record of one control-plane action — the
+  authorizing intent (issue/wave/owner directive), acting agent, exact
+  repo+ref boundary, permitted action scope, result (PR, release, blocked ask,
+  or no-op), observed CI/review/policy gates, and downstream handoff
+  references.
 
 ## Functional requirements
 
@@ -236,9 +241,15 @@ local one.
   secondary provider receives the exact immutable prompt, no filesystem/tool
   authority, and no access to primary-provider credentials; both-provider
   failure blocks the merge.
+- Every dispatched package-lane action produces a durable action receipt. The
+  orchestrator plans waves by reasoning over receipts, not agent self-report,
+  and receipts give the owner a compact audit trail without reopening
+  terminals.
+- `df:ask-owner` escalations are generated from failed or ambiguous receipts,
+  not from raw agent uncertainty — keeping escalation rare and specific.
 - Work dispatch through DarkFactory lanes (routing, baton ownership, progress
-  reporting, duplicate-ownership prevention) resumes only on explicit owner
-  authorization per the program plan.
+  reporting, duplicate-ownership prevention, and the receipt contract) resumes
+  only on explicit owner authorization per the program plan.
 
 ### Continuous integration
 
