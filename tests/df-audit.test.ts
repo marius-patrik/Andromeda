@@ -357,6 +357,19 @@ test("main-only data repositories still fail closed on admin bypass and inaccess
   assert.deepEqual(inaccessible.map((finding) => finding.id), ["protection-main-unobservable"]);
 });
 
+test("main-only data repositories report an unowned dev branch as extra", async () => {
+  const dataRepo = { owner: "marius-patrik", repo: "Andromeda-data" };
+  const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "b" } }];
+  const { gh } = mockGh((_method, requestPath) => {
+    if (requestPath.includes("/protection")) throw notFound();
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  const result = await doctor.auditBranchAndReleaseState(gh, dataRepo, { default_branch: "main", allow_auto_merge: false }, {
+    branches, branchNames: new Set(["main", "dev"]), pulls: [], isData: true
+  });
+  assert.ok(result.findings.some((finding) => finding.id === "extra-branch-dev"));
+});
+
 test("the #241 shape remains diagnosed while its active head branch is exempt", async () => {
   const branches = [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }, { name: "dark-factory/managed-repository-setup", commit: { sha: "b" } }];
   const pull = { number: 241, head: { ref: "dark-factory/managed-repository-setup", sha: "b", repo: { full_name: "marius-patrik/DarkFactory" } }, base: { ref: "main" } };
@@ -689,7 +702,9 @@ test("diagnose mode performs no GitHub writes", async () => {
 
 test("report mode routes issue writes to target authority and contents writes only to scoped ledger authority", async () => {
   let nextIssue = 100;
+  const events: string[] = [];
   const { gh: targetGh, calls: targetCalls } = mockGh((method, requestPath) => {
+    events.push(`target:${method}:${requestPath}`);
     if (method === "POST" && requestPath === "/repos/marius-patrik/DarkFactory/issues") {
       nextIssue += 1;
       return { number: nextIssue, html_url: `https://example.test/${nextIssue}` };
@@ -719,6 +734,7 @@ test("report mode routes issue writes to target authority and contents writes on
     throw new Error(`unexpected target ${method} ${requestPath}`);
   });
   const { gh: ledgerGh, calls: ledgerCalls } = mockGh((method, requestPath) => {
+    events.push(`ledger:${method}:${requestPath}`);
     assert.match(requestPath, /^\/repos\/marius-patrik\/darkfactory-data\/contents\/runs\//);
     if (method === "GET") throw notFound();
     if (method === "PUT") return {};
@@ -738,8 +754,19 @@ test("report mode routes issue writes to target authority and contents writes on
   assert.ok(targetCalls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/DarkFactory/issues"));
   assert.equal(targetCalls.some((call) => call.method !== "GET" && /\/contents\//.test(call.path)), false);
   assert.equal(targetCalls.some((call) => call.method !== "GET" && /\/labels(?:[/?]|$)/.test(call.path)), false);
-  assert.ok(ledgerCalls.some((call) => call.method === "PUT"));
+  const ledgerWrites = ledgerCalls.filter((call) => call.method === "PUT");
+  assert.equal(ledgerWrites.length, 2);
   assert.equal(ledgerCalls.every((call) => /\/repos\/marius-patrik\/darkfactory-data\/contents\//.test(call.path)), true);
+  const admissionIndex = events.findIndex((event) => event.includes("ledger:PUT:") && event.includes("repo-doctor-admission"));
+  const firstTargetWriteIndex = events.findIndex((event) => /^target:(POST|PATCH):/.test(event));
+  assert.ok(admissionIndex >= 0 && admissionIndex < firstTargetWriteIndex);
+
+  const ledgers = ledgerWrites.map((call) => JSON.parse(Buffer.from((call.body as { content: string }).content, "base64").toString("utf8")));
+  const admission = ledgers.find((ledger) => ledger.phase === "admission");
+  const completion = ledgers.find((ledger) => ledger.phase === "completion");
+  assert.ok(admission.planned_actions.some((action: { action: string }) => action.action === "retire-legacy-audit-issues"));
+  assert.ok(admission.actions.some((action: { action: string; state: string }) => action.action === "retire-legacy-audit-issues" && action.state === "admitted"));
+  assert.ok(completion.actions.some((action: { action: string }) => action.action === "create-repair-issue"));
 });
 
 test("ledger failure leaves legacy aggregate audit issues untouched", async () => {
@@ -772,7 +799,44 @@ test("ledger failure leaves legacy aggregate audit issues untouched", async () =
 
   await assert.rejects(() => doctor.publishDoctorReport(targetGh, failingLedger, repo, report), /ledger write failed/);
   assert.equal(targetCalls.every((call) => call.method === "GET"), true);
-  assert.equal(targetCalls.filter((call) => call.path.includes("issues?state=all")).length, 1);
+  assert.equal(targetCalls.filter((call) => call.path.includes("issues?state=all")).length, 0);
+});
+
+test("completion ledger records legacy retirement after admitted issue mutations", async () => {
+  const legacy = {
+    number: 42,
+    state: "open",
+    body: "<!-- df-audit:marius-patrik-darkfactory -->",
+    user: { login: "darkfactory-agent[bot]" },
+    html_url: "https://example.test/42"
+  };
+  const { gh: targetGh } = mockGh((method, requestPath) => {
+    if (method === "GET" && requestPath.includes("/labels?")) return doctor.DOCTOR_REPORT_LABEL_NAMES.map((name) => ({ name }));
+    if (method === "GET" && requestPath.includes("issues?state=all")) return requestPath.endsWith("page=1") ? [legacy] : [];
+    if (method === "POST" || method === "PATCH") return {};
+    throw new Error(`unexpected ${method} ${requestPath}`);
+  });
+  const { gh: ledgerGh, calls: ledgerCalls } = mockGh((method) => {
+    if (method === "GET") throw notFound();
+    if (method === "PUT") return {};
+    throw new Error(`unexpected ledger method ${method}`);
+  });
+  const report = {
+    mode: "report",
+    trigger: "test",
+    source_refs: {},
+    findings: [],
+    observations: [],
+    actions: [],
+    token_usage: { model_calls: 0 }
+  };
+
+  await doctor.publishDoctorReport(targetGh, ledgerGh, repo, report);
+  const completionCall = ledgerCalls.find((call) => call.method === "PUT" && call.path.includes("-repo-doctor.json"));
+  assert.ok(completionCall);
+  const completion = JSON.parse(Buffer.from((completionCall.body as { content: string }).content, "base64").toString("utf8"));
+  assert.ok(completion.actions.some((action: { action: string; issue?: { number: number } }) => action.action === "close-legacy-audit-issue" && action.issue?.number === 42));
+  assert.equal(report.actions.at(-1).action, "write-doctor-ledger");
 });
 
 test("report issue reconciliation is marker-idempotent and closes resolved findings", async () => {

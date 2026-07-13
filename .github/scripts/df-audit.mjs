@@ -183,10 +183,20 @@ export async function assertDoctorReportLabels(github, repository) {
 
 export async function publishDoctorReport(github, ledgerGithub, repository, report) {
   await assertDoctorReportLabels(github, repository);
+  const plannedActions = planDoctorReportActions(report.findings);
+  report.actions.push(await writeDoctorLedger(ledgerGithub, repository, report, { phase: "admission", plannedActions }));
   report.actions.push(...await reconcileDoctorIssues(github, repository, report.findings));
-  report.actions.push(await writeDoctorLedger(ledgerGithub, repository, report));
   report.actions.push(...await retireLegacyAuditIssues(github, repository));
+  report.actions.push(await writeDoctorLedger(ledgerGithub, repository, report, { phase: "completion", plannedActions }));
   return report;
+}
+
+export function planDoctorReportActions(findings) {
+  return [
+    ...findings.map((finding) => ({ action: "upsert-repair-issue", finding: finding.id })),
+    { action: "close-resolved-repair-issues", scope: "trusted df-doctor markers absent from the current finding set" },
+    { action: "retire-legacy-audit-issues", scope: "trusted aggregate df-audit marker" }
+  ];
 }
 
 async function resolveDoctorTargets(github, controlRepo, registry, options) {
@@ -351,7 +361,7 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
   );
   for (const branch of branches) {
     const verifiedPullHead = activeHeads.has(`${branch.name}\0${branch.commit?.sha || ""}`);
-    if (branch.name === "main" || branch.name === "dev" || verifiedPullHead) continue;
+    if (branch.name === "main" || (!isData && branch.name === "dev") || verifiedPullHead) continue;
     findings.push(doctorFinding(`extra-branch-${slug(branch.name)}`, "branch hygiene", `Extra branch \`${branch.name}\` is not the head of an open same-repository PR.`, {
       severity: "warning",
       evidence: [{ label: branch.name, url: `https://github.com/${repoName(repository)}/tree/${encodeURIComponent(branch.name)}` }],
@@ -1432,17 +1442,24 @@ export async function retireLegacyAuditIssues(github, repository) {
   return actions;
 }
 
-async function writeDoctorLedger(ledgerGithub, repository, report) {
-  const written = await writeRunLedger(ledgerGithub, DARK_FACTORY_DATA_REPO, "repo-doctor", repoName(repository), {
+async function writeDoctorLedger(ledgerGithub, repository, report, options) {
+  const phase = options?.phase;
+  if (!["admission", "completion"].includes(phase)) throw new Error("Repository-doctor ledger phase must be admission or completion.");
+  const kind = phase === "admission" ? "repo-doctor-admission" : "repo-doctor";
+  const written = await writeRunLedger(ledgerGithub, DARK_FACTORY_DATA_REPO, kind, repoName(repository), {
+    phase,
     mode: report.mode,
     trigger: report.trigger,
     source_refs: report.source_refs,
     findings: report.findings,
     observations: report.observations,
-    actions: report.actions,
+    actions: phase === "admission"
+      ? options.plannedActions.map((action) => ({ ...action, state: "admitted" }))
+      : report.actions,
+    planned_actions: options.plannedActions,
     token_usage: report.token_usage
   });
-  return { action: "write-doctor-ledger", repository: written.repository, path: written.path };
+  return { action: phase === "admission" ? "write-doctor-admission-ledger" : "write-doctor-ledger", repository: written.repository, path: written.path };
 }
 
 export function formatDoctorReports(reports) {

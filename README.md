@@ -122,6 +122,11 @@ creates or patches repository labels. Missing required labels fail preflight so
 the managed taxonomy must be provisioned separately. If Administration: Read is
 not granted to the GitHub App, token minting or protection inspection fails
 visibly; protection is never inferred from an ambient user token.
+Report publication is two-phase: a ledger admission containing the complete
+planned issue-action scope must succeed before the first issue mutation, then a
+completion ledger records every applied action, including legacy aggregate
+retirement. A failed admission makes no issue writes; a failed completion is
+surfaced after the durable admission record and is never reported as success.
 Only exact DarkFactory App actors (`darkfactory-agent[bot]` and the retained
 `mp-agents[bot]` identity) can own reconciled `df-doctor:` issues; generic
 `github-actions[bot]` issue text is always treated as untrusted data.
