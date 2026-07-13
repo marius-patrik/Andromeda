@@ -88,3 +88,34 @@ test("denied failure: a new app without an inventory classification cannot pass 
     rmSync(target, { recursive: true, force: true });
   }
 });
+
+test("edge input: a missing allowlisted data repository cannot pass layout validation", () => {
+  const target = fixture();
+  try {
+    const gitmodulesPath = path.join(target, ".gitmodules");
+    writeFileSync(
+      gitmodulesPath,
+      requireText(gitmodulesPath).replace(/\[submodule "darkfactory-data"\][\s\S]*?branch = main\r?\n/, ""),
+    );
+    assert.match(
+      inventoryIssues(target).join("\n"),
+      /allowlisted data repository is not a repository gitlink: data\/darkfactory/,
+    );
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test("denied failure: an unapproved data repository cannot pass layout validation", () => {
+  const target = fixture();
+  try {
+    const gitmodulesPath = path.join(target, ".gitmodules");
+    writeFileSync(
+      gitmodulesPath,
+      `${requireText(gitmodulesPath)}[submodule "Unclassified"]\n\tpath = data/Unclassified\n\turl = https://example.test/Unclassified.git\n`,
+    );
+    assert.match(inventoryIssues(target).join("\n"), /data repository is not allowlisted: data\/Unclassified/);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});

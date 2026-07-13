@@ -89,6 +89,17 @@ export function inventoryIssues(root = repositoryRoot) {
     }
   }
 
+  const allowedDataGitlinks = ["data/andromeda", "data/darkfactory"];
+  const dataGitlinks = [...gitmodules.matchAll(/^\s*path\s*=\s*(data\/[^\s]+)\s*$/gm)]
+    .map((match) => match[1])
+    .sort();
+  for (const gitlinkPath of dataGitlinks) {
+    if (!allowedDataGitlinks.includes(gitlinkPath)) issues.push(`data repository is not allowlisted: ${gitlinkPath}`);
+  }
+  for (const allowedPath of allowedDataGitlinks) {
+    if (!dataGitlinks.includes(allowedPath)) issues.push(`allowlisted data repository is not a repository gitlink: ${allowedPath}`);
+  }
+
   for (const entry of groups) {
     if (typeof entry.id !== "string" || !entry.id) issues.push("CI inventory entry is missing an id");
     if (typeof entry.suite !== "string" || !entry.suite) issues.push(`CI inventory entry ${entry.id ?? "(unknown)"} is missing a suite`);
