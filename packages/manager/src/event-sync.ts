@@ -306,6 +306,17 @@ function secretLikeText(value: string): boolean {
 function secretFieldPath(value: unknown, field = "", path = ""): string | null {
   if (typeof value === "string") {
     if (STRUCTURAL_STRING_FIELDS.has(field) && (UUID.test(value) || CANONICAL_HASH_OR_ID.test(value))) return null;
+    const trimmed = value.trim();
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        const structured = JSON.parse(trimmed) as unknown;
+        if (structured !== null && typeof structured === "object") {
+          return secretFieldPath(structured, field, path);
+        }
+      } catch {
+        // Non-JSON strings continue through the opaque-text scanner below.
+      }
+    }
     return secretLikeText(value) ? path || field || "<root>" : null;
   }
   if (Array.isArray(value)) {

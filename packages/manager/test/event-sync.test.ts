@@ -386,6 +386,35 @@ describe("encrypted cross-machine event exchange", () => {
         exportEventBundle(credentialUriSource, path.join(root, "credential-uri.bundle.json")),
       ).rejects.toThrow("secret-like");
 
+      const structuredScalarSource = await exchangeState(path.join(root, "structured-scalar"));
+      await rememberMemory(structuredScalarSource, {
+        scope: "session",
+        subject: "compaction",
+        predicate: "current",
+        value: JSON.stringify({
+          schemaVersion: 2,
+          blocker: "DarkFactory CODEX_AUTH_JSON GitHub secret is expired and must be refreshed",
+          repository: "marius-patrik/Andromeda",
+          commit: "6175e4d0b5736d2ebbfc6f21a9d8111e1ba83525",
+        }),
+        evidence,
+      });
+      await expect(
+        exportEventBundle(structuredScalarSource, path.join(root, "structured-scalar.bundle.json")),
+      ).resolves.toMatchObject({ entries: 1 });
+
+      const structuredSecretSource = await exchangeState(path.join(root, "structured-secret"));
+      await rememberMemory(structuredSecretSource, {
+        scope: "session",
+        subject: "compaction",
+        predicate: "current",
+        value: JSON.stringify({ apiKey: "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789" }),
+        evidence,
+      });
+      await expect(
+        exportEventBundle(structuredSecretSource, path.join(root, "structured-secret.bundle.json")),
+      ).rejects.toThrow("secret-like");
+
       const secretSession = await exchangeState(path.join(root, "secret-session"));
       await createSession(secretSession, {
         sessionId: "secret-session",
