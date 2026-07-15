@@ -251,46 +251,117 @@ const STRUCTURAL_STRING_FIELDS = new Set([
   "nextCheckAt",
 ]);
 
-const PUBLIC_IDENTIFIER_ANCHORS = new Set([
-  "actions",
-  "admin",
-  "cli",
-  "commands",
-  "core",
-  "deletion",
-  "disable",
-  "doctor",
-  "enable",
-  "environments",
-  "github",
-  "install",
-  "labels",
-  "lifecycle",
-  "manager",
-  "main",
-  "modules",
-  "node",
-  "observability",
-  "packages",
-  "persistence",
-  "reconcile",
-  "registration",
-  "release",
-  "repair",
-  "repos",
-  "review",
-  "runner",
-  "scripts",
-  "secrets",
-  "service",
-  "source",
-  "state",
-  "status",
-  "supervision",
-  "typescript",
-  "update",
-  "version",
+const PUBLIC_OPERATIONAL_IDENTIFIERS = new Set([
+  "online/offline/busy/version/labels/last",
+  "lifecycle/persistence/registration/supervision/observability",
+  "updatePackagesAndEnvironmentsState",
+  "./node_modules/typescript/bin/tsc",
+  "platform/now/doctor/scheduler/host/readCredential/username",
+  "marius-patrik/fix/windows-state-lock-post-release",
+  "create/delete/query/enable/disable",
+  "create/query/enable/disable/delete",
+  "install/enable/disable/repair/run",
+  "install/enable/disable/status/repair/run",
+  "packages/manager/src/runner-lifecycle.ts",
+  "packages/manager/src/session-adapters.ts",
+  "packages/manager/src/adapters.ts",
+  "packages/manager/src/route-probe.ts",
+  "packages/manager/src/process-command.ts",
+  "packages/manager/test/runner-lifecycle.test.ts",
+  "packages/manager/test/session-adapters.test.ts",
+  "packages/manager/test/adapters.test.ts",
+  "packages/manager/test/route-probe.test.ts",
+  "manager/test/state-doctor.test.ts",
+  "platform/now/doctor/scheduler/github/host",
+  "native-kimi-supported-canonical-append",
+  "native-codex-supported-canonical-append",
+  "native-claude-fable-supported-canonical-append",
+  "CLI/help/runner/state-schema/manifest/lockfile/unrelated",
+  "credential/config/executable/provider-home",
+  "auth/unavailable/internal/malformed",
+  "task/binding/doctor/launcher/process/control-plane/online",
+  "System.Security.Principal.WindowsIdentity",
+  "Microsoft.Management.Infrastructure.CimException",
+  "action/trigger/principal/settings/New-ScheduledTask",
+  "reconcileRegistrations/reconcileProcesses",
+  "provision/configure/register/create",
+  "installed/registered/doctor/launcher",
+  "printActionResult/printStatusReport",
+  "enableRunner/disableRunner/runRunner",
+  "AGENTS_HOME/AGENTS_USER_ROOT/AGENTS_ROOT...",
+  "AGENTS_HOME/AGENTS_USER_HOME/AGENTS_ROOT...",
+  "name/enabled/state/actionExecutable/actionArguments",
+  "installed/registered/persistence/process/online/labels/launcher/doctor/record",
+  "durationMs/outputBytes/truncated",
+  "readSessionConfig/writeSessionConfig",
+  "executor-finished-before-timeout",
+  "process.env.USERDOMAIN/COMPUTERNAME",
+  "Unknown/Disabled/Queued/Ready/Running",
+  "TaskName/Enabled/known-State/Execute/Arguments",
+  "effort_unreachable/workspace_write_unreachable",
+  "preflight/launch/postflight/receipt",
+  "modes/ownership/immutable/read-only",
+  "missing/null/wrong-type/unknown/empty/partial",
+  "top-level/list/id/name/os/status/busy/label",
+  "credential/auth/network/nonzero/malformed-output",
+  "authorized-max-tier-after-kimi-zero-edit-timeout",
+  "authorized-edit-only-after-zero-edit-tool-surface-failure",
+  "argv/model/home/auth/attestation/drift/receipt",
+  "test_quota_window_is_clock_driven",
+  "test_cloud_route_requires_opt_in_and_fails_closed_on_bad_budget",
+  // Public manager documentation names this storage location; the path is not
+  // credential material. Descendants and any actual credential value remain in
+  // the fail-closed scanner.
+  "clis/agy/.gemini/oauth_creds.json",
 ]);
+
+const PUBLIC_RELEASE_BRANCH_WORDS = new Set(["after", "main", "reconcile", "release"]);
+
+function isPublicOperationalIdentifier(candidate: string): boolean {
+  if (PUBLIC_OPERATIONAL_IDENTIFIERS.has(candidate)) return true;
+  const normalizedCandidate = candidate.endsWith(".") ? candidate.slice(0, -1) : candidate;
+  if (PUBLIC_OPERATIONAL_IDENTIFIERS.has(normalizedCandidate)) return true;
+  if (/^(?:query\/)?[a-z]{3,20}\/permission\/malformed-output$/.test(normalizedCandidate)) return true;
+  if (/^session_[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/.test(normalizedCandidate)) {
+    return true;
+  }
+  if (
+    /^(?=[a-z0-9-]*[a-z])(?=[a-z0-9-]*[0-9])[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/.test(
+      normalizedCandidate,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^Microsoft\.PowerShell\.Cmdletization\.GeneratedTypes\.ScheduledTask\.[A-Z][A-Za-z]{2,48}$/.test(
+      normalizedCandidate,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /^\/[A-Za-z0-9](?:[A-Za-z0-9.-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/(?:issues|pull)\/[1-9][0-9]*$/.test(
+      normalizedCandidate,
+    )
+  ) {
+    return true;
+  }
+
+  // A repository branch reference is public metadata only when it names the
+  // canonical owner and the complete, documented release-reconciliation lane.
+  // The repository segment remains lexical, while every branch word is closed
+  // over the explicit release vocabulary. Arbitrary slash-delimited prose is
+  // deliberately excluded from this admission.
+  const branch = normalizedCandidate.match(
+    /^marius-patrik\/[a-z][a-z0-9.-]{1,38}\/(?:[a-z]+-){2,}[a-z]+$/,
+  );
+  if (!branch) return false;
+  const branchName = normalizedCandidate.slice(normalizedCandidate.lastIndexOf("/") + 1);
+  return (
+    branchName === "reconcile-main-after-release" &&
+    branchName.split("-").every((word) => PUBLIC_RELEASE_BRANCH_WORDS.has(word))
+  );
+}
 
 function secretLikeText(value: string): boolean {
   // Canonical docs and tests may name the upstream local-reset command or the
@@ -302,7 +373,14 @@ function secretLikeText(value: string): boolean {
       /(?<![A-Za-z0-9_])(?:ghr_)?FAKE_REGISTRATION_TOKEN(?:_0123456789)?(?![A-Za-z0-9_])/g,
       "",
     )
-    .replace(/(?<![A-Za-z0-9])token\s*:\s*`config\.cmd(?=[`\s])/gi, "");
+    // Admit only the two complete public command examples. In particular,
+    // never erase a `token:` assignment prefix independently of its value.
+    .replace(/(?<![A-Za-z0-9])`config\.cmd remove --local`(?![A-Za-z0-9_])/gi, "")
+    .replace(/(?<![A-Za-z0-9])`token=abc123`(?![A-Za-z0-9_])/gi, "")
+    .replace(
+      /(?<![A-Za-z0-9])`config\.cmd --url https:\/\/github\.com\/[a-z0-9](?:[a-z0-9.-]{0,38}[a-z0-9])?\/[a-z0-9][a-z0-9._-]{0,99} --token <token> --labels \.\.\.`(?![A-Za-z0-9_])/gi,
+      "",
+    );
   if (
     /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(inspectedValue) ||
     /(?<![A-Za-z0-9])AKIA[A-Z0-9]{16}(?![A-Za-z0-9])/.test(inspectedValue) ||
@@ -349,22 +427,27 @@ function secretLikeText(value: string): boolean {
     canonicalCompactionSnapshotLeaf: boolean,
   ): boolean => {
     const normalized = segment.trim();
+    const inspectedSegment = isLeaf && normalized.endsWith(".") ? normalized.slice(0, -1) : normalized;
     if (isLeaf && canonicalCompactionSnapshotLeaf) return false;
-    if (UUID.test(normalized)) return true;
-    const wordSlugFile = normalized.match(
-      /^([a-z]{3,15}(?:-[a-z]{3,15}){2,})-(\d{8})\.([a-z0-9]{1,10})$/,
+    if (UUID.test(inspectedSegment)) return true;
+    const wordSlugFile = inspectedSegment.match(
+      /^((?:[a-z]{3,15}|\d{1,8})(?:-(?:[a-z]{3,15}|\d{1,8})){2,})\.([a-z0-9]{1,10})$/,
     );
     if (isLeaf && wordSlugFile) {
-      const lexicalWords = (wordSlugFile[1] ?? "").split("-");
+      const slugParts = (wordSlugFile[1] ?? "").split("-");
+      const lexicalWords = slugParts.filter((part) => /^[a-z]+$/.test(part));
+      const numericParts = slugParts.filter((part) => /^\d+$/.test(part));
       const vowelCounts = lexicalWords.map((word) => (word.match(/[aeiouy]/g) ?? []).length);
       if (
+        lexicalWords.length >= 3 &&
+        numericParts.length <= 1 &&
         vowelCounts.every((count) => count >= 2) &&
         lexicalWords.every((word) => !/[^aeiouy]{4}/.test(word))
       ) {
         return false;
       }
     }
-    return (normalized.match(/[A-Za-z0-9_+.-]{16,}/g) ?? []).some((candidate) => {
+    return (inspectedSegment.match(/[A-Za-z0-9_+.-]{16,}/g) ?? []).some((candidate) => {
       const token = candidate.replace(/[_+.-]/g, "");
       if (candidate.length >= 32) return true;
       if (token.length < 16) return false;
@@ -568,36 +651,7 @@ function secretLikeText(value: string): boolean {
     ) {
       continue;
     }
-    const publicIdentifierWords = candidate
-      .replace(/^[-.\\/]+|[-.\\/]+$/g, "")
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      .split(/[-._\\/\s]+/)
-      .filter(Boolean)
-      .map((word) => word.toLowerCase());
-    const publicIdentifierSegments = candidate
-      .replace(/^[-.\\/]+|[-.\\/]+$/g, "")
-      .split(/[-._\\/]+/)
-      .filter(Boolean);
-    const looksLikePublicOperationalIdentifier =
-      !/[0-9]/.test(candidate) &&
-      !candidate.includes("\\") &&
-      (!candidate.includes("/") ||
-        publicIdentifierSegments.every(
-          (segment) =>
-            /^[a-z]+$/.test(segment) ||
-            /^[A-Z]{2,12}$/.test(segment) ||
-            /^[a-z]+(?:[A-Z][a-z]+){1,2}$/.test(segment) ||
-            /^[A-Z][a-z]+(?:[A-Z][a-z]+){1,2}$/.test(segment),
-        )) &&
-      publicIdentifierWords.length >= 3 &&
-      publicIdentifierWords.some((word) => PUBLIC_IDENTIFIER_ANCHORS.has(word)) &&
-      publicIdentifierWords.every(
-        (word) =>
-          /^[a-z]+$/.test(word) &&
-          word.length <= 20 &&
-          (word.length <= 3 || (/[aeiouy]/.test(word) && !/[^aeiouy]{5}/.test(word))),
-      );
-    if (looksLikePublicOperationalIdentifier) continue;
+    if (isPublicOperationalIdentifier(candidate)) continue;
     if (/[A-Za-z]/.test(candidate) && (/[0-9]/.test(candidate) || /[_+\\/-]/.test(candidate))) {
       return true;
     }
