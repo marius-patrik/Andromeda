@@ -244,12 +244,91 @@ agents os exec <name> -- <args...>
 agents os terminal <name> [--shell bash]
 agents os remove <name> [--prune-data] [--dry-run]
 agents os deploy <profile> [--image agents-os] [--env agents-os] [--channel dev] [--dry-run]
+agents runner install|enable|disable|status|repair [--json]
 ```
 
 Memory mutations require `--source`, `--hash`, `--source-class`, and
 `--confidence`. Secret commands never print secret values. A live
 `agents secrets github sync` is an external mutation and requires an explicit
 repository or owner target; use `--dry-run` to validate command construction.
+
+`agents runner ...` manages the persistent lifecycle of the trusted DarkFactory
+`df-local` GitHub Actions runner (`df-darkfactory-agent`): it provisions and
+registers the runner with the `self-hosted, Windows, X64, df-local` labels,
+persists it across reboot/logon through a least-privilege per-user scheduled
+task bound through an absolute inbox Windows PowerShell path to the canonical
+`bin\agents.ps1` launcher, starts only after a healthy `agents state doctor`,
+never persists a registration token, reconciles stale/duplicate registrations
+and processes, and reports redacted health via `status --json`. The
+checksum-verified runner build is version-pinned with its upstream self-updater
+disabled, so local version truth remains Agent OS-owned.
+Runner mutations are Windows-only and fail closed on other platforms; `status`
+is read-only everywhere.
+
+### Runner status contract
+
+The authoritative readiness result is the seven-field `readiness` block:
+`installed`, `registered`, `enabled`, `persistent`, `process`, `online`, and
+`launcherBinding`. Each field is tri-state: `true` means the condition was
+proven healthy, `false` means it was proven absent, drifted, or unhealthy, and
+`null` means the observation boundary was inaccessible, rejected, malformed,
+or ambiguous. Human status prints `unknown` for `null`; JSON preserves `null`.
+Consumers must not reinterpret unknown as false, zero, an empty list, offline,
+missing, disabled, or healthy.
+
+The top-level `installed`, `registered`, and `enabled` fields are compatibility
+booleans only. Each is true exactly when its matching readiness field is
+`true`, so these projections fail closed and cannot distinguish false from
+unknown. New consumers, including DarkFactory #263, must use `readiness`
+together with the detailed evidence and issues. Detailed process, task,
+registration, and doctor fields are also `null` when their observation is
+uncertain; counts and lists are zero or empty only after a positive
+observation.
+
+Runner `ok` requires Windows, all seven readiness fields to be true, the
+complete state doctor to be healthy, and no remaining runner issue. A busy
+runner is still online; capacity is a separate concern.
+
+`readiness.persistent` is deliberately limited to one uniquely identified task
+at the exact Task Scheduler root, exactly one `AtLogOn` trigger for the current
+principal, Interactive logon, and Limited run level. Task enabled state is
+reported separately by `readiness.enabled`. Canonical constants and state paths
+are always the observation targets; a persisted runner record is comparison
+evidence and never redirects status.
+
+`readiness.launcherBinding` exclusively owns the canonical `bin\agents.ps1`
+launcher and the scheduled-task action's correctness and cardinality. It does
+not prove that the DarkFactory package build, `dist/cli.js`, global `df`
+command, or TUI is runnable; DarkFactory #263 must test those surfaces
+separately.
+
+Status is read-only and performs no live repair. Install, enable, disable, and
+repair remain the mutation commands, and each fails closed when required
+evidence is uncertain. A Task Scheduler state of `Running` is never accepted as
+process health: a successful start must observe one exact
+`Runner.Listener.exe` identity from the canonical install. Direct supervised
+starts retain that PID, executable path, and creation time and terminate only
+that identity if startup times out or fails.
+
+All mutations serialize through one renewable runner-lifecycle lock. Local
+ownership comes from the physical `.runner` file's exact positive runner ID;
+the canonical `runner.json` ID is only a recovery fallback when `.runner` is
+absent. Same-name rows never authorize deletion or takeover without that exact
+ID, and every retained or removed row must also match the canonical Windows OS
+and exact label set. Runner enumeration consumes every GitHub API page before
+reconciliation. A stale local configuration is cleared by invoking the
+upstream `Runner.Listener.exe remove --local` operation directly before a fresh
+short-lived registration token is used; neither a removal nor registration
+token is persisted. Configure and run use that same exact Listener executable,
+so lifecycle code never relies on ambient batch-command parsing.
+
+The scheduled-task definition also fixes duplicate and durability behavior:
+`IgnoreNew`, battery-safe start/continuation, three one-minute restart attempts,
+and no execution time limit. Drift in any of those settings is unhealthy and
+repair recreates the exact task. Failed actions report `changed: true` with
+`details.partialMutation: true` once an external mutation may have occurred.
+Status never creates shared state, and reports provider version/heartbeat plus
+the observed registration OS and labels when the GitHub API exposes them.
 
 ## Validation
 
