@@ -97,11 +97,10 @@ export function attestCodexPreworkResponse(
     return policy;
   }
 
-  const writableRoots = Array.isArray(started.sandbox.writableRoots)
-    ? started.sandbox.writableRoots
-    : [];
+  const writableRoots = started.sandbox.writableRoots;
   if (
     started.sandbox.type !== "workspaceWrite" ||
+    !Array.isArray(writableRoots) ||
     writableRoots.length !== 0 ||
     started.sandbox.networkAccess !== false
   ) {

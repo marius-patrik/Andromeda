@@ -362,6 +362,16 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
         fixture.started,
       ),
     ).toThrow("resolved execution policy does not match");
+
+    fixture.started.sandbox = { type: "workspaceWrite", networkAccess: false };
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("resolved execution policy does not match");
   });
 
   test("pre-work denied: workspace-write resolving read-only is rejected", () => {
