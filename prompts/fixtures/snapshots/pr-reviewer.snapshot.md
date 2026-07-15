@@ -196,14 +196,13 @@ Format: JSON
 Emit exactly one JSON object and no prose. Required keys:
 
 - `schemaVersion`: integer `1`.
-- `phase`: `iterative` or `final`.
-- `verdict`: `clean`, `findings`, or `blocked`.
-- `target`: object with `repository`, `pullRequest`, `base`, and `head`.
-- `completeFindingSet`: boolean; `clean` requires `true`.
-- `findings`: array of objects with stable `id`, `severity`, `category`, `path`,
-  `line`, `summary`, `evidence`, and `requiredChange`.
-- `validationAssessment`: array of objects with `check`, `result`, and `evidence`.
-- `evidence`: array of objects with `kind`, `ref`, and `summary`.
-- `blockers`: array of concrete blockers.
+- `approved`: boolean; true exactly when there are no blocking findings.
+- `summary`: bounded review summary.
+- `findingsComplete`: literal `true`, confirming the response contains the
+  complete current blocking finding set.
+- `blockingFindings`: array of objects with exactly `title`, `details`, `path`,
+  and `line`. Use null for an inapplicable path or line.
+- `nonBlockingNotes`: array of bounded strings.
 
-Unknown keys are forbidden. `clean` requires the exact current head, no findings, and no blockers.
+Unknown keys are forbidden. Do not invent finding identifiers; the trusted
+Autoreview runtime derives stable identifiers from the complete finding data.

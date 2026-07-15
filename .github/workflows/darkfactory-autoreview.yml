@@ -61,13 +61,40 @@ jobs:
             exit 1
           }
 
-      - name: Checkout trusted control definition
+      - name: Mint bounded DarkFactory installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
+          private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: |
+            ${{ github.event.repository.name }}
+            DarkFactory
+            darkfactory-data
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Checkout protected DarkFactory control runtime
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          repository: marius-patrik/DarkFactory
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 1
           persist-credentials: false
           path: darkfactory-autoreview-control
+
+      - name: Record exact control revision
+        id: control
+        run: |
+          $revision = (git -C darkfactory-autoreview-control rev-parse HEAD).Trim()
+          if ($revision -notmatch '^[0-9a-f]{40}$') {
+            Write-Output "::error::DarkFactory control revision is not an exact commit."
+            exit 1
+          }
+          "revision=$revision" >> $env:GITHUB_OUTPUT
 
       - name: Verify canonical Agent OS
         run: |
@@ -83,20 +110,6 @@ jobs:
           pwsh -NoLogo -NoProfile -File $agentsLauncher state doctor --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Mint bounded DarkFactory installation token
-        id: app-token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
-          private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: |
-            ${{ github.event.repository.name }}
-            darkfactory-data
-          permission-contents: write
-          permission-issues: write
-          permission-pull-requests: write
-
       - name: Run bounded medium-to-clean and high confirmation protocol
         env:
           DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -106,4 +119,5 @@ jobs:
           DF_EXPECTED_BASE: ${{ github.event.pull_request.base.ref || '' }}
           DF_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
           DF_OWNER_OVERRIDE_COMMENT: ${{ inputs.owner_override_comment || '' }}
-        run: node darkfactory-autoreview-control/.github/scripts/run-darkfactory-autoreview.mjs
+          DF_CONTROL_REVISION: ${{ steps.control.outputs.revision }}
+        run: node --experimental-strip-types darkfactory-autoreview-control/.github/scripts/run-darkfactory-autoreview.mjs

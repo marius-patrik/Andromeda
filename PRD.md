@@ -46,7 +46,7 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 - **Zero-token by default**: sequencing (priority + Blocked-by graph resolution), dispatch, concurrency caps, branch/PR/label/merge mechanics, dashboards, state reconstruction, enforcement conformance checks (required-file lists, CI conclusions, git cleanliness), and PRD↔backlog structural diffing are ALL pure code — no model in the loop.
 - **Tokens only for**: implementing issues (L3 workers — the core spend), writing issue bodies from PRD deltas when a template can't, semantic deep audits (rare, scheduled sparsely), review gates, and L0 escalation runs.
 - **L0 is a state machine first**: each orchestrator tick runs deterministic rules (ready→dispatch, blocked→requeue, red→file incident issue). An AI orchestrator run happens ONLY when the rules hit an explicit "needs judgment" condition (conflicting priorities, repeated worker failure, PRD ambiguity) — and its brief is minimal, not a global context dump.
-- **Small briefs**: workers get the issue body + acceptance criteria + AGENTS.md pointer, not repository dumps; context is fetched by the worker on demand.
+- **Small composed briefs**: workers get one checksummed role/policy/tier/effort/repository/output composition with delimited issue data and verified state, not repository dumps; repository guidance is fetched from the isolated checkout on demand.
 - **Measured**: every loop records its token spend in the run ledger; token cost per merged PR is a tracked metric and a standing optimization target.
 
 ## Architecture

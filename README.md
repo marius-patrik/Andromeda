@@ -152,19 +152,31 @@ turn through the same launcher without provider or model flags. It never falls
 back to an ambient `agents` command. Provider selection, identity, memory, and
 session state therefore come exclusively from `$AGENTS_HOME`.
 
+Every worker turn is assembled by the versioned `prompts/` composer from the
+logical worker profile, independently authorized tier and effort, immutable
+policy, verified live state, repository-type overlay, delimited issue data,
+validation lane, and output contract. The hand-built task-brief and summary
+scratch files are retired. A malformed result or missing/stale input blocks
+before DarkFactory publishes a branch.
+
 `darkfactory-autoreview.yml` is base-trusted and runs only on the trusted
-`df-local` runner. It invokes `$AGENTS_HOME\bin\agents.ps1`; repository workflows
-never select providers, models, homes, or credentials. Pull-request and issue
-content is serialized as bounded untrusted prompt data into an empty turn
-workspace. Review turns are read-only and never checkout or execute target
+`df-local` runner. The base-trusted workflow checks out protected
+`marius-patrik/DarkFactory@main` as its control runtime and records the resolved
+commit before composing a turn; it never loads the composer, prompts, or runner
+from the pull-request head. It invokes `$AGENTS_HOME\bin\agents.ps1`; repository
+workflows never select providers, models, homes, or credentials. Pull-request
+and issue content is serialized as bounded untrusted prompt data into an empty
+turn workspace. Review turns are read-only and never checkout or execute target
 hooks, scripts, builds, tests, or image inputs. Autofix turns return strict
 hash-bound whole-file proposals; the trusted runner applies them only after a
 fresh same-repository/provenance/base/head check and a normal non-force push.
 Existing tests and `.agents`, `.darkfactory`, `.github`, `AGENTS.md`, and package
 control files are protected from autofix. Validation remains a separate gate.
 
-The protocol records every model tier, effort, resolved provider/model/preset,
-prompt version, complete finding set, usage, and fix version in
+The protocol records the exact control revision, prompt manifest and contract
+version/checksum, composed prompt and input checksums, role, skills, tier,
+effort, overlays, output schema, resolved provider/model/preset, complete
+finding set, usage, and fix version in
 `marius-patrik/darkfactory-data`. Missing/malformed verdicts, stale targets,
 provider failures, receipt failures, and exhausted medium/high budgets block
 closed. Issue mutation preserves an owner-text/history section and re-fetches
