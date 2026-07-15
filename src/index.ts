@@ -457,6 +457,21 @@ function assertContainedPath(root: string, candidate: string, label: string): vo
   }
 }
 
+function corpusEvidenceUri(absolute: string, relativePath: string): string {
+  if (findSecretLikePath(relativePath)) {
+    throw new Error("secret-like candidate content cannot cross the memory plugin boundary at corpus path metadata");
+  }
+  // The absolute root is operator-selected and physically contained. Encode
+  // its components so filesystem-generated identifiers are not mistaken for
+  // credentials while the unencoded corpus-relative path remains admitted.
+  const uri = pathToFileURL(absolute);
+  uri.pathname = uri.pathname
+    .split("/")
+    .map((segment) => (segment ? percentEncodeEveryByte(decodeURIComponent(segment)) : ""))
+    .join("/");
+  return uri.href;
+}
+
 async function corpusFiles(
   root: string,
   limits: { maxFiles: number; maxDirectories: number; maxDepth: number },
@@ -652,7 +667,7 @@ export async function processHistoricalCorpus(
         predicate: "historical-candidate",
         value,
         evidence: {
-          uri: pathToFileURL(absolute).href,
+          uri: corpusEvidenceUri(absolute, relativePath),
           contentHash: sha256(bytes),
           sourceClass: "inferred",
           confidence: 0.5,
@@ -967,6 +982,25 @@ export async function migrateDreamV13Cursor(
       throw new Error("Dream cursor source changed during admission");
     }
     sourceBytes = await sourceHandle.readFile();
+    if (sourceBytes.byteLength > MAX_DREAM_CURSOR_SOURCE_BYTES) {
+      throw new Error("Dream cursor source exceeds the admission size limit");
+    }
+    const after = await sourceHandle.stat();
+    const pathAfter = await lstat(sourcePath);
+    if (
+      !after.isFile() ||
+      !pathAfter.isFile() ||
+      pathAfter.isSymbolicLink() ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      after.size !== opened.size ||
+      pathAfter.dev !== after.dev ||
+      pathAfter.ino !== after.ino ||
+      pathAfter.size !== after.size ||
+      sourceBytes.byteLength !== after.size
+    ) {
+      throw new Error("Dream cursor source changed during admission");
+    }
   } finally {
     await sourceHandle.close();
   }

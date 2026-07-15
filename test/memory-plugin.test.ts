@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile, mkdir, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -434,6 +434,26 @@ describe("Dream v1.3 cursor migration", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(targetFixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects oversized or concurrently growing cursor sources before canonical mutation", async () => {
+    const { root, state } = await fixture();
+    try {
+      const admissionLimit = 1024 * 1024;
+      const serialized = `${JSON.stringify(cursor)}\n`;
+      const oversized = path.join(root, "oversized-cursor.json");
+      await writeFile(oversized, `${serialized}${" ".repeat(admissionLimit)}`);
+      await expect(migrateDreamV13Cursor(state, oversized)).rejects.toThrow(/admission size limit/);
+
+      const growing = path.join(root, "growing-cursor.json");
+      await writeFile(growing, `${serialized}${" ".repeat(admissionLimit - Buffer.byteLength(serialized))}`);
+      const migration = migrateDreamV13Cursor(state, growing);
+      await appendFile(growing, " ");
+      await expect(migration).rejects.toThrow(/changed during admission|admission size limit/);
+      expect(await listMemoryRecords(state, { scope: "memory-plugin" })).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 
