@@ -888,6 +888,7 @@ describe("encrypted cross-machine event exchange", () => {
         'Read failed at "/safe/Project release-20260715/report.txt"',
         "Read failed at file:///C:/Users/patrik/.agents/experience/active-memory-session-reorient-20260715.json",
         "Read failed at file:///C:/Users/patrik/.agents/memory/snapshots/compaction/20260715-102030-0123456789abcdef0123456789abcdef.json",
+        "Read failed at file:///C:/Users/patrik/.agents/memory/snapshots/compaction/20260715-102030-0123456789abcdef0123456789abcdef-rollback.json",
         'Compared "C:\\Users\\Patrik Smith\\Andromeda\\src\\file.ts" and "/home/Patrik Smith/Andromeda/src/file.ts"',
       ] as const;
       for (const [index, message] of messages.entries()) {
@@ -927,6 +928,8 @@ describe("encrypted cross-machine event exchange", () => {
         'Read failed at "/safe/ghijkl-memory-session-20260715.json"',
         'Read failed at "/safe/active-memory-session-20260715.json/report.txt"',
         'Read failed at "/safe/20260715-102030-0123456789abcdef0123456789abcdef.json"',
+        'Read failed at "/safe/20260715-102030-0123456789abcdef0123456789abcdef-rollback.json"',
+        "Read failed at file:///C:/Users/patrik/.agents/memory/snapshots/compaction/20260715-102030-0123456789abcdef0123456789abcdef-rollback-extra.json",
         "Read failed at /safe/src dQwErTyUiOpAsDfG/hJkLzXcVbNmQwErT/0123456789",
         "Read failed at C:\\safe\\src dQwErTyUiOpAsDfG\\hJkLzXcVbNmQwErT\\0123456789",
         "Read failed at /safe/src cache/dQwErTyUiOpAsDfG/hJkLzXcVbNmQwErT/0123456789",

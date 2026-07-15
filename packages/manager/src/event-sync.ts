@@ -45,6 +45,7 @@ const MAX_BUNDLE_BYTES = 512 * 1024 * 1024;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const CANONICAL_HASH_OR_ID = /^(?:[a-f0-9]{32}|[a-f0-9]{64})$/;
 const COMPACTION_CAPSULE_ID = /^\d{8}-\d{6}-[a-f0-9]{32}$/;
+const COMPACTION_SNAPSHOT_STEM = /^\d{8}-\d{6}-[a-f0-9]{32}(?:-rollback)?$/;
 const CANONICAL_REPO_SLUG = /^\/?[a-z0-9](?:[a-z0-9.-]{0,38}[a-z0-9])?\/[a-z0-9][a-z0-9._-]{0,99}$/;
 
 interface SyncConfig {
@@ -437,7 +438,7 @@ function secretLikeText(value: string): boolean {
       const compactionSnapshot = normalizedPath.match(
         /\/\.agents\/memory\/snapshots\/compaction\/([^/]+)\.json$/,
       );
-      const canonicalCompactionSnapshotLeaf = COMPACTION_CAPSULE_ID.test(compactionSnapshot?.[1] ?? "");
+      const canonicalCompactionSnapshotLeaf = COMPACTION_SNAPSHOT_STEM.test(compactionSnapshot?.[1] ?? "");
       if (pathSegments.some((segment, index) =>
         containsOpaquePathToken(segment, index === leafIndex, canonicalCompactionSnapshotLeaf)
       )) {
