@@ -26,6 +26,7 @@ import {
 } from "./packages";
 import { listSecrets, secretPath, syncGitHubSecret, writeSecret } from "./secrets";
 import { osCommand } from "./os-lifecycle";
+import { runnerCommand } from "./runner-lifecycle";
 import { TuiApp, configuredProviderModels } from "./tui";
 import { formatToolStatus, readToolStatus, toolStateSpecs } from "./state-consolidation";
 import { doctorState, formatStateDoctor } from "./state-doctor";
@@ -175,6 +176,7 @@ Usage:
   agents os terminal <name> [--shell bash]
   agents os remove <name> [--prune-data] [--dry-run]
   agents os deploy <profile> [--image agents-os] [--env agents-os] [--channel dev] [--dry-run]
+  agents runner install|enable|disable|status|repair [--json]
 
 All runtime data is shared through .agents so every managed CLI sees the same
 skills, plugins, CLI metadata, and credit store.`);
@@ -1242,6 +1244,7 @@ async function main(): Promise<void> {
   if (command === "credits") return credits(values, flags);
   if (command === "doctor") return doctor();
   if (command === "os") return osCommand(rest);
+  if (command === "runner") return runnerCommand(rest);
   throw new Error(`unknown command: ${command}`);
 }
 
