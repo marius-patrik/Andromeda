@@ -700,8 +700,18 @@ describe("encrypted cross-machine event exchange", () => {
         value: "marius.patrik/andromeda.platform-long-repository-name",
         evidence,
       });
+      await rememberMemory(source, {
+        scope: "project",
+        subject: "memory-event",
+        predicate: "canonical-evidence-uri",
+        value: "canonical long-slug evidence file",
+        evidence: {
+          ...evidence,
+          uri: "file:///C:/Users/patrik/.agents/experience/active-memory-session-20260715.json",
+        },
+      });
       const exported = await exportEventBundle(source, path.join(root, "safe-identifiers.bundle.json"));
-      expect(exported.entries).toBe(7);
+      expect(exported.entries).toBe(8);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -876,6 +886,7 @@ describe("encrypted cross-machine event exchange", () => {
         "Read failed at C:\\safe\\EventSyncV2Handler.ts",
         "Read failed at /safe/windows-2026-build/GraphQLHTTPAPI.ts",
         'Read failed at "/safe/Project release-20260715/report.txt"',
+        "Read failed at file:///C:/Users/patrik/.agents/experience/active-memory-session-reorient-20260715.json",
         'Compared "C:\\Users\\Patrik Smith\\Andromeda\\src\\file.ts" and "/home/Patrik Smith/Andromeda/src/file.ts"',
       ] as const;
       for (const [index, message] of messages.entries()) {
@@ -907,6 +918,13 @@ describe("encrypted cross-machine event exchange", () => {
         'Read failed at "/safe/src abcdefghijklmnop/qrstuvwxyzabcdef/ghijklmnopqrstuv"',
         "Read failed at file:///safe/abcdefghijklmnop/qrstuvwxyzabcdef/ghijklmnopqrstuv",
         'Read failed at "/safe/src/dQwErTyUiOpAsDfG/x/hJkLzXcVbNmQwErT/y/0123456789"',
+        'Read failed at "/safe/Ab3dEf5h_Ij7lMn9p/report.json"',
+        'Read failed at "/safe/Ab3dEf5h+Ij7lMn9p/report.json"',
+        'Read failed at "/safe/Ab3dEf5h.Ij7lMn9p/report.json"',
+        'Read failed at "/safe/Ab3d-Ef5h-Ij7l-Mn9p/report.json"',
+        'Read failed at "/safe/gh7k2m9q-pr8vz4nx-w6ty3abc.json"',
+        'Read failed at "/safe/ghijkl-memory-session-20260715.json"',
+        'Read failed at "/safe/active-memory-session-20260715.json/report.txt"',
         "Read failed at /safe/src dQwErTyUiOpAsDfG/hJkLzXcVbNmQwErT/0123456789",
         "Read failed at C:\\safe\\src dQwErTyUiOpAsDfG\\hJkLzXcVbNmQwErT\\0123456789",
         "Read failed at /safe/src cache/dQwErTyUiOpAsDfG/hJkLzXcVbNmQwErT/0123456789",

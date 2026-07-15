@@ -288,8 +288,26 @@ function secretLikeText(value: string): boolean {
     /[\r\n\t"'`\[\]{}<>,;:=|?*]/.test(character);
   const looksLikeFileLeaf = (component: string): boolean =>
     /[^.]\.[A-Za-z0-9][A-Za-z0-9._-]{0,15}$/.test(component.trim());
-  const containsOpaquePathToken = (segment: string): boolean =>
-    (segment.match(/[A-Za-z0-9_+.-]{16,}/g) ?? []).some((token) => {
+  const containsOpaquePathToken = (segment: string, isLeaf: boolean): boolean => {
+    const normalized = segment.trim();
+    if (UUID.test(normalized)) return true;
+    const wordSlugFile = normalized.match(
+      /^([a-z]{3,15}(?:-[a-z]{3,15}){2,})-(\d{8})\.([a-z0-9]{1,10})$/,
+    );
+    if (isLeaf && wordSlugFile) {
+      const lexicalWords = (wordSlugFile[1] ?? "").split("-");
+      const vowelCounts = lexicalWords.map((word) => (word.match(/[aeiouy]/g) ?? []).length);
+      if (
+        vowelCounts.every((count) => count >= 2) &&
+        lexicalWords.every((word) => !/[^aeiouy]{4}/.test(word))
+      ) {
+        return false;
+      }
+    }
+    return (normalized.match(/[A-Za-z0-9_+.-]{16,}/g) ?? []).some((candidate) => {
+      const token = candidate.replace(/[_+.-]/g, "");
+      if (candidate.length >= 32) return true;
+      if (token.length < 16) return false;
       const counts = new Map<string, number>();
       for (const character of token) counts.set(character, (counts.get(character) ?? 0) + 1);
       const entropy = [...counts.values()].reduce((total, count) => {
@@ -298,6 +316,7 @@ function secretLikeText(value: string): boolean {
       }, 0);
       return entropy >= 4;
     });
+  };
   const findPathEnd = (
     input: string,
     start: number,
@@ -406,9 +425,10 @@ function secretLikeText(value: string): boolean {
       );
       if (end <= start + root.length || /[\u0000-\u001f\u007f]/.test(input.slice(start, end))) continue;
       const absolutePath = input.slice(start, end);
-      if (absolutePath.split(/[\\/]+/).some((segment) =>
-        segment.trim().length >= 32 || containsOpaquePathToken(segment)
-      )) {
+      const pathSegments = absolutePath.split(/[\\/]+/);
+      let leafIndex = pathSegments.length - 1;
+      while (leafIndex >= 0 && !(pathSegments[leafIndex] ?? "").trim()) leafIndex -= 1;
+      if (pathSegments.some((segment, index) => containsOpaquePathToken(segment, index === leafIndex))) {
         longSegment = true;
       }
       for (let index = start; index < end; index += 1) {
