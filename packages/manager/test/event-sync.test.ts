@@ -3,12 +3,13 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ensureSharedState, sharedState } from "../src/state";
+import { ensureSharedState, sharedState, type SharedState } from "../src/state";
 import { writeSecret } from "../src/secrets";
 import { rebuildMemoryProjections, rememberMemory, retractMemory, supersedeMemory } from "../src/memory";
 import {
   createSession,
   inspectSessionIntegrity,
+  sessionPaths,
   withSessionWriteLock,
   withSessionWriteTransaction,
 } from "../../harness/session";
@@ -40,8 +41,7 @@ async function exchangeState(root: string) {
   return state;
 }
 
-async function assistantMessageState(root: string, sessionId: string, content: string) {
-  const state = await exchangeState(root);
+async function appendAssistantMessage(state: SharedState, sessionId: string, content: string): Promise<void> {
   await createSession(state, {
     sessionId,
     provider: "codex",
@@ -58,6 +58,11 @@ async function assistantMessageState(root: string, sessionId: string, content: s
     });
     await transaction.completeTurn(turnId);
   });
+}
+
+async function assistantMessageState(root: string, sessionId: string, content: string) {
+  const state = await exchangeState(root);
+  await appendAssistantMessage(state, sessionId, content);
   return state;
 }
 
@@ -869,6 +874,7 @@ describe("encrypted cross-machine event exchange", () => {
   test("bounded absolute paths admit ordinary spaces and filesystem punctuation", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-spaced-paths-"));
     try {
+      const source = await exchangeState(path.join(root, "source"));
       const messages = [
         'Read failed at "C:\\Users\\Patrik Smith\\marius-patrik\\Andromeda\\packages\\manager\\src\\event-sync.ts"',
         "Read failed at '/home/Patrik Smith/Andromeda/packages/manager/src/event-sync.ts'",
@@ -892,9 +898,16 @@ describe("encrypted cross-machine event exchange", () => {
         'Compared "C:\\Users\\Patrik Smith\\Andromeda\\src\\file.ts" and "/home/Patrik Smith/Andromeda/src/file.ts"',
       ] as const;
       for (const [index, message] of messages.entries()) {
-        const source = await assistantMessageState(path.join(root, `source-${index}`), `spaced-path-${index}`, message);
-        const exported = await exportEventBundle(source, path.join(root, `spaced-path-${index}.bundle.json`));
-        expect(exported.entries).toBeGreaterThan(0);
+        const sessionId = `spaced-path-${index}`;
+        const bundle = path.join(root, `${sessionId}.bundle.json`);
+        await appendAssistantMessage(source, sessionId, message);
+        try {
+          const exported = await exportEventBundle(source, bundle);
+          expect(exported.entries).toBeGreaterThan(0);
+        } finally {
+          await rm(sessionPaths(source, sessionId).dir, { recursive: true, force: true });
+          await rm(bundle, { force: true });
+        }
       }
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -918,9 +931,27 @@ describe("encrypted cross-machine event exchange", () => {
     }
   });
 
+  test("canonical public trust-policy shorthand is admitted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-trust-policy-shorthand-"));
+    try {
+      const messages = [
+        "Worker policy forbids review/admin/bypass/force-push/deletion across the protected lane.",
+        "Never permit review/admin/bypass/force-push/deletion.",
+      ] as const;
+      for (const [index, message] of messages.entries()) {
+        const source = await assistantMessageState(path.join(root, `source-${index}`), `policy-${index}`, message);
+        const exported = await exportEventBundle(source, path.join(root, `policy-${index}.bundle.json`));
+        expect(exported.entries).toBeGreaterThan(0);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("bounded absolute paths preserve secret-like suffixes and ambiguous spans", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-bounded-path-denials-"));
     try {
+      const source = await exchangeState(path.join(root, "source"));
       const opaqueSuffix = ["dQwErTyUiOpA", "sDfGhJkLzXc", "VbNmQwErTyU", "iOpAsD"].join("");
       const githubToken = ["gh", "p_", "ABCDEFGHIJKLMNOPQRST"].join("");
       const deniedMessages = [
@@ -961,10 +992,15 @@ describe("encrypted cross-machine event exchange", () => {
         "Read failed at C:\\Users\\Patrik Smith\\Andromeda\\event-sync.ts then https://example.invalid/dQwErTyUiOpAsDfG/hJkLzXcVbNmQwErT/0123456789",
       ] as const;
       for (const [index, message] of deniedMessages.entries()) {
-        const source = await assistantMessageState(path.join(root, `source-${index}`), `bounded-denial-${index}`, message);
-        await expect(exportEventBundle(source, path.join(root, `bounded-denial-${index}.bundle.json`))).rejects.toThrow(
-          "secret-like",
-        );
+        const sessionId = `bounded-denial-${index}`;
+        const bundle = path.join(root, `${sessionId}.bundle.json`);
+        await appendAssistantMessage(source, sessionId, message);
+        try {
+          await expect(exportEventBundle(source, bundle)).rejects.toThrow("secret-like");
+        } finally {
+          await rm(sessionPaths(source, sessionId).dir, { recursive: true, force: true });
+          await rm(bundle, { force: true });
+        }
       }
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -985,6 +1021,27 @@ describe("encrypted cross-machine event exchange", () => {
       for (const [index, message] of messages.entries()) {
         const source = await assistantMessageState(path.join(root, `source-${index}`), `df-denial-${index}`, message);
         await expect(exportEventBundle(source, path.join(root, `df-denial-${index}.bundle.json`))).rejects.toThrow(
+          "secret-like",
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("trust-policy shorthand admission remains exact and token-bounded", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-trust-policy-denials-"));
+    try {
+      const opaqueSuffix = ["dQwErTyUiOpA", "sDfGhJkLzXc", "VbNmQwErTyU", "iOpAsD"].join("");
+      const messages = [
+        `${opaqueSuffix}/review/admin/bypass/force-push/deletion`,
+        `review/admin/bypass/force-push/deletion/${opaqueSuffix}`,
+        `review/admin/bypass/force-push/deletions/${opaqueSuffix}`,
+        `review/admin/bypass/force-push/deletion.${opaqueSuffix}`,
+      ] as const;
+      for (const [index, message] of messages.entries()) {
+        const source = await assistantMessageState(path.join(root, `source-${index}`), `policy-denial-${index}`, message);
+        await expect(exportEventBundle(source, path.join(root, `policy-denial-${index}.bundle.json`))).rejects.toThrow(
           "secret-like",
         );
       }
