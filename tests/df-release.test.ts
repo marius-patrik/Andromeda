@@ -76,6 +76,25 @@ test("release closure planning rejects truncated comparison history", async () =
   await assert.rejects(release.releaseClosurePlan(repo(), SHA.main, SHA.dev), /history is truncated/);
 });
 
+test("release closure planning paginates commit-associated pull requests", async () => {
+  const gh = {
+    request: async (method: string, path: string) => {
+      if (method === "GET" && path.includes("/compare/")) {
+        return { total_commits: 1, commits: [{ sha: SHA.merge, commit: { message: "implementation" } }] };
+      }
+      if (method === "GET" && path.includes(`/commits/${SHA.merge}/pulls`) && path.includes("page=1")) {
+        return Array.from({ length: 100 }, () => ({ body: "no closing reference" }));
+      }
+      if (method === "GET" && path.includes(`/commits/${SHA.merge}/pulls`) && path.includes("page=2")) {
+        return [{ body: "Closes #77" }];
+      }
+      throw new Error(`unexpected mocked request: ${method} ${path}`);
+    }
+  };
+  release.configureReleaseRuntime({ gh, controlRepo: { owner: "marius-patrik", repo: "DarkFactory" } });
+  assert.deepEqual(await release.releaseClosurePlan(repo(), SHA.main, SHA.dev), [77]);
+});
+
 test("green dev-ahead release creates one marker-owned branch/PR and arms automerge idempotently", async () => {
   const refs = new Map([["main", SHA.main], ["dev", SHA.dev]]);
   const pulls: any[] = [];

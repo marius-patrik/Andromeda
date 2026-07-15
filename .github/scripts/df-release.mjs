@@ -712,7 +712,7 @@ export async function releaseClosurePlan(repository, mainSha, devSha) {
     for (const number of extractClosingIssueNumbers(commit?.commit?.message || "", repoName(repository))) issues.add(number);
     if (typeof commit?.sha !== "string") continue;
     let pulls = [];
-    try { pulls = await gh.request("GET", `/repos/${repoName(repository)}/commits/${commit.sha}/pulls?per_page=20`); } catch (error) { if (error.status !== 404) throw error; }
+    try { pulls = await listAll(`/repos/${repoName(repository)}/commits/${commit.sha}/pulls?per_page=100`); } catch (error) { if (error.status !== 404) throw error; }
     for (const pull of Array.isArray(pulls) ? pulls : []) {
       for (const number of extractClosingIssueNumbers(pull?.body || "", repoName(repository))) issues.add(number);
     }
