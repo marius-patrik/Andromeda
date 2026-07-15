@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { modelExecutionRequestFromCli, selectsModelExecution } from "../src/model-execution-cli";
+import { canonicalChildEnvironment } from "../src/runtime-paths";
 import { ensureSharedState, sharedStateAt, writeSessionConfig, type SharedState } from "../src/state";
 
 const cliPath = path.resolve(import.meta.dir, "..", "src", "cli.ts");
@@ -40,7 +41,7 @@ async function executionFixture(): Promise<{
 
 function executionEnv(state: SharedState): Record<string, string | undefined> {
   return {
-    ...process.env,
+    ...canonicalChildEnvironment(process.env),
     AGENTS_HOME: state.stateDir,
     AGENTS_USER_HOME: state.userHome,
     AGENTS_ROOT: state.root,
@@ -280,7 +281,6 @@ describe("model execution CLI prompt boundary", () => {
       launcherPath,
       [
         "$ErrorActionPreference = 'Stop'",
-        "Get-ChildItem Env: | Where-Object { $_.Name -like 'ROMMIE_*' -or $_.Name -like 'AGENTOS_*' } | ForEach-Object { Remove-Item \"Env:$($_.Name)\" }",
         `$env:HOME = ${psLiteral(state.userHome)}`,
         `$env:AGENTS_HOME = ${psLiteral(state.stateDir)}`,
         `$env:AGENTS_USER_HOME = ${psLiteral(state.userHome)}`,
