@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { stat } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { systemDataPath, type SharedState } from "./state";
 import { providerBinarySafetyReason } from "./session-adapters";
 import { canonicalChildEnvironment } from "./runtime-paths";
@@ -31,6 +31,16 @@ export interface AdapterDoctorResult {
   ok: boolean;
   pinned: boolean;
   notes: string[];
+  evidence: AdapterDoctorEvidence;
+}
+
+/** Sanitized, path-free evidence that downstream route checks may consume. */
+export interface AdapterDoctorEvidence {
+  schemaVersion: 1;
+  provider: CliId;
+  pinned: boolean;
+  executableVerified: boolean;
+  credentialsPresent: boolean;
 }
 
 export const adapters: Record<CliId, CliAdapter> = {
@@ -78,6 +88,16 @@ export function adapterHome(state: SharedState, id: CliId): string {
   return path.join(state.clisDir, id);
 }
 
+const AGY_DISABLE_AUTO_UPDATE_ENV = "AGY_CLI_DISABLE_AUTO_UPDATE";
+
+function forceAgyAutoUpdateDisabled(env: Record<string, string | undefined>, id: CliId): void {
+  if (id !== "agy") return;
+  for (const name of Object.keys(env)) {
+    if (name.toUpperCase() === AGY_DISABLE_AUTO_UPDATE_ENV) delete env[name];
+  }
+  env[AGY_DISABLE_AUTO_UPDATE_ENV] = "true";
+}
+
 export function adapterEnv(state: SharedState, id: CliId): Record<string, string> {
   const spec = adapter(id);
   const env: Record<string, string> = {
@@ -100,12 +120,76 @@ export function adapterEnv(state: SharedState, id: CliId): Record<string, string
     AGENTS_SYSTEM_DATA_ROOT: systemDataPath(state),
   };
   for (const [name, dir] of Object.entries(spec.homeEnv)) env[name] = path.join(state.clisDir, dir);
+  if (id === "agy") {
+    // Agy (antigravity-cli) resolves its config root from the OS user profile
+    // and ignores HOME on Windows. Bind the explicit absolute canonical config
+    // root and isolate both home variables into the provider home so no
+    // resolution path can fall back to the forbidden standalone ~/.gemini.
+    const providerHome = path.join(state.clisDir, "agy");
+    env.GEMINI_DIR = path.join(providerHome, ".gemini");
+    env.HOME = providerHome;
+    env.USERPROFILE = providerHome;
+    env[AGY_DISABLE_AUTO_UPDATE_ENV] = "true";
+  }
   return env;
 }
 
-async function exists(file: string): Promise<boolean> {
+/**
+ * Verify a credential as a physical regular file beneath the canonical
+ * provider home. The doctor owns provider-home inspection; downstream route
+ * consumers receive only the sanitized evidence above.
+ */
+function containsPath(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function credentialAuthorityBoundary(state: SharedState, providerRoot: string): string {
+  const controlledRoot = path.resolve(providerRoot);
+  const candidates = [state.userHome, state.root, state.stateDir]
+    .map((candidate) => path.resolve(candidate))
+    .filter((candidate) => containsPath(candidate, controlledRoot));
+  // Prefer the outermost declared authority. Platform aliases above this
+  // boundary are outside Agent OS ownership; every component inside remains
+  // link-free and physically contained.
+  candidates.sort((left, right) => {
+    const leftDepth = path.relative(left, controlledRoot).split(path.sep).filter(Boolean).length;
+    const rightDepth = path.relative(right, controlledRoot).split(path.sep).filter(Boolean).length;
+    return rightDepth - leftDepth;
+  });
+  return candidates[0] ?? controlledRoot;
+}
+
+async function isPhysicalCredentialFile(
+  state: SharedState,
+  root: string,
+  candidate: string,
+): Promise<boolean> {
+  const controlledRoot = path.resolve(root);
+  const target = path.resolve(candidate);
+  const relative = path.relative(controlledRoot, target);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
   try {
-    await stat(file);
+    const authority = credentialAuthorityBoundary(state, controlledRoot);
+    const [physicalAuthority, physicalRoot, physicalTarget] = await Promise.all([
+      realpath(authority),
+      realpath(controlledRoot),
+      realpath(target),
+    ]);
+    if (!containsPath(physicalAuthority, physicalRoot) || !containsPath(physicalRoot, physicalTarget)) {
+      return false;
+    }
+    const authorityInfo = await lstat(authority);
+    if (!authorityInfo.isDirectory() || authorityInfo.isSymbolicLink()) return false;
+    const segments = path.relative(authority, target).split(path.sep);
+    let current = authority;
+    for (let index = 0; index < segments.length; index += 1) {
+      current = path.join(current, segments[index]!);
+      const info = await lstat(current);
+      if (info.isSymbolicLink()) return false;
+      const leaf = index === segments.length - 1;
+      if (leaf ? !info.isFile() : !info.isDirectory()) return false;
+    }
     return true;
   } catch {
     return false;
@@ -133,7 +217,10 @@ export async function doctorAdapter(state: SharedState, id: CliId): Promise<Adap
   const registration = registry.providers[id];
   let binary: string | null;
   if (registration) {
-    const verification = await verifyProviderRegistration(registration);
+    const verification = await verifyProviderRegistration(registration).catch(() => ({
+      ok: false,
+      issues: ["pinned provider executable verification failed"],
+    }));
     notes.push(...verification.issues);
     binary = verification.ok ? registration.executable : null;
   } else {
@@ -146,13 +233,22 @@ export async function doctorAdapter(state: SharedState, id: CliId): Promise<Adap
     );
   }
   if (!binary) notes.push(`no verified pinned binary: ${spec.binaries.join(" or ")}`);
+  let credentialsPresent = true;
   for (const credentialPath of spec.credentialPaths) {
     const target = path.join(root, credentialPath);
-    if (!(await exists(target))) {
+    if (!(await isPhysicalCredentialFile(state, root, target))) {
+      credentialsPresent = false;
       notes.push(`credential not present in canonical provider home: ${credentialPath}`);
     }
   }
-  return { id, home: root, binary, ok: binary !== null, pinned: Boolean(registration), notes };
+  const evidence: AdapterDoctorEvidence = {
+    schemaVersion: 1,
+    provider: id,
+    pinned: Boolean(registration),
+    executableVerified: binary !== null,
+    credentialsPresent,
+  };
+  return { id, home: root, binary, ok: binary !== null, pinned: Boolean(registration), notes, evidence };
 }
 
 export async function pinAdapter(
@@ -167,6 +263,7 @@ export async function pinAdapter(
   if (unsafeReason) throw new Error(`cannot pin ${id}: ${unsafeReason}`);
 
   const env = { ...canonicalChildEnvironment(), ...adapterEnv(state, id) };
+  forceAgyAutoUpdateDisabled(env, id);
   const child = Bun.spawn(commandInvocation(binary, ["--version"], env), {
     cwd: state.root,
     env,
