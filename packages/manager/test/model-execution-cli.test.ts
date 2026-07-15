@@ -42,6 +42,7 @@ describe("model execution CLI prompt boundary", () => {
       workdir: root,
       mode: "orchestrator",
       prompt: "review this",
+      promptSource: "positional",
     });
   });
 
@@ -56,6 +57,7 @@ describe("model execution CLI prompt boundary", () => {
       workdir: root,
     });
     expect(fromFile.prompt).toBe(prompt);
+    expect(fromFile.promptSource).toBe("file");
 
     const fromStdin = await modelExecutionRequestFromCli({
       values: [],
@@ -64,6 +66,7 @@ describe("model execution CLI prompt boundary", () => {
       stdin: Readable.from(["first", " second"]),
     });
     expect(fromStdin.prompt).toBe("first second");
+    expect(fromStdin.promptSource).toBe("stdin");
   });
 
   test("multiple, missing, and malformed prompt sources fail closed", async () => {
@@ -99,6 +102,19 @@ describe("model execution CLI prompt boundary", () => {
       await expect(
         modelExecutionRequestFromCli({ values: ["prompt"], flags: incomplete, workdir: root }),
       ).rejects.toThrow(`run requires --${name}`);
+    }
+  });
+
+  test("logical tier selection rejects direct route and TUI overrides", async () => {
+    const root = await rootFixture();
+    for (const name of ["provider", "model", "agent", "agent-preset", "tui"]) {
+      await expect(
+        modelExecutionRequestFromCli({
+          values: ["prompt"],
+          flags: { ...flags(root), [name]: name === "tui" ? true : "override" },
+          workdir: root,
+        }),
+      ).rejects.toThrow(`cannot be combined with --${name}`);
     }
   });
 });

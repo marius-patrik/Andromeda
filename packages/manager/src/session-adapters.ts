@@ -15,6 +15,7 @@ import { rebuildMemoryProjections } from "./memory";
 import { commandInvocation } from "./process-command";
 import { readProviderRegistry, sha256File, verifyProviderRegistration, type ProviderRegistration } from "./provider-registry";
 import type { KimiAcpTimeouts } from "./kimi-acp";
+import { preflightCodexExecutionPolicy, type NarrowExecutionPolicy } from "./codex-preflight";
 
 export interface CliAdapterOptions {
   id: string;
@@ -43,6 +44,16 @@ export interface CliAdapterOptions {
    * launch material is prepared and immediately before the provider is spawned.
    */
   verifyPreSpawn?: (descriptor: SessionDescriptor, attestation: unknown) => Promise<void>;
+  /**
+   * Resolve and attest provider authority before any model turn begins. This
+   * gate is separate from registry preflight because it may consult a
+   * provider-native zero-token control plane.
+   */
+  preworkExecutionPolicy?: (
+    descriptor: SessionDescriptor,
+    request: TurnRequest,
+    env: Record<string, string | undefined>,
+  ) => Promise<NarrowExecutionPolicy>;
   /**
    * Fail-closed gate run after the provider process exits and before its
    * output is parsed, returned, or recorded. Receives the exact attestation
@@ -136,6 +147,9 @@ export class CliProviderAdapter implements ProviderAdapter {
     if (this.options.verifyPreSpawn) {
       await this.options.verifyPreSpawn(descriptor, attestationS0);
     }
+    const preworkExecutionPolicy = this.options.preworkExecutionPolicy
+      ? await this.options.preworkExecutionPolicy(descriptor, request, env)
+      : undefined;
     const proc = Bun.spawn(invocation, spawnOptions);
     if (stdinText !== undefined && proc.stdin && typeof proc.stdin !== "number") {
       proc.stdin.write(stdinText);
@@ -162,7 +176,10 @@ export class CliProviderAdapter implements ProviderAdapter {
     const result = (this.options.parseResult ?? defaultParseResult)(stdout, stderr, code);
     result.resolvedExecutionPolicy = this.options.resolveExecutionPolicy
       ? await this.options.resolveExecutionPolicy(descriptor, request, result)
-      : request.executionPolicy ?? "read-only";
+      : preworkExecutionPolicy ?? request.executionPolicy ?? "read-only";
+    if (preworkExecutionPolicy && result.resolvedExecutionPolicy !== preworkExecutionPolicy) {
+      throw new Error("provider pre-work and completed-turn execution-policy receipts disagree");
+    }
     if (this.options.receipt) result.receipt = await this.options.receipt(descriptor, request, result);
     return result;
   }
@@ -384,14 +401,25 @@ export function buildProviderArgs(
       ];
     }
     case "codex": {
-      const codexEffort = request.effort ? [`model_reasoning_effort=\"${request.effort}\"`] : [];
+      const codexConfig = [
+        ...(request.effort ? [`model_reasoning_effort=\"${request.effort}\"`] : []),
+        ...(executionPolicy === "workspace-write"
+          ? [
+              "sandbox_workspace_write.network_access=false",
+              "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+              "sandbox_workspace_write.exclude_slash_tmp=true",
+              "sandbox_workspace_write.writable_roots=[]",
+            ]
+          : []),
+      ];
       return [
         "--ask-for-approval",
         "never",
         "exec",
         "--sandbox",
         executionPolicy,
-        ...(codexEffort.length > 0 ? ["--config", ...codexEffort] : []),
+        ...codexConfig.flatMap((value) => ["--config", value]),
+        "--ignore-user-config",
         "--strict-config",
         ...modelArgs,
         "--json",
@@ -743,6 +771,8 @@ export function codexSessionAdapter(binaryOverride?: string): ProviderAdapter {
     buildArgs: (request, transcript, descriptor) => buildProviderArgs("codex", descriptor.model, request, transcript),
     buildStdin: (request, transcript) => transcriptAsPrompt(request, transcript),
     parseResult: parseCodexJsonResult,
+    preworkExecutionPolicy: (descriptor, request, env) =>
+      preflightCodexExecutionPolicy(binary, descriptor, request, env),
     resolveExecutionPolicy: async (descriptor, request, result) => {
       const providerThreadId = exactRecord(result.receipt) ? result.receipt.providerThreadId : null;
       if (typeof providerThreadId !== "string") throw new Error("Codex native execution receipt is missing");

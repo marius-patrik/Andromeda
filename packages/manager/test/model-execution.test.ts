@@ -111,6 +111,7 @@ function request(
     workdir: root,
     mode: "task" as const,
     prompt: "Review the admitted fixture.",
+    promptSource: "positional" as const,
   };
 }
 
@@ -207,6 +208,7 @@ describe("canonical model execution route and receipt", () => {
       successfulDependencies([], { resolvedExecutionPolicy: "read-only", content: "looks green" }),
     );
     expect(result.ok).toBe(false);
+    expect(result.content).toBe("");
     expect(result.receipt.blockReason).toBe("execution_policy_mismatch");
     expect(result.receipt.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
   });
@@ -234,6 +236,24 @@ describe("canonical model execution route and receipt", () => {
     expect(failed.receipt.blockReason).toBe("provider_failed");
     expect(serialized).not.toContain(secret);
     expect(await Bun.file(failedInput.receiptPath).text()).not.toContain(secret);
+  });
+
+  test("Agy never copies file/stdin-admitted prompt content into provider argv", async () => {
+    const { root, state, receiptDir } = await fixture();
+    let calls = 0;
+    const input = { ...request(root, receiptDir, "low", "low"), promptSource: "file" as const };
+    const result = await executeModelRequest(state, input, {
+      ...successfulDependencies(),
+      execute: async () => {
+        calls += 1;
+        throw new Error("must not execute");
+      },
+    });
+    expect(calls).toBe(0);
+    expect(result.ok).toBe(false);
+    expect(result.content).toBe("");
+    expect(result.receipt.blockReason).toBe("provider_prompt_transport_unsupported");
+    expect(JSON.stringify(result.receipt)).not.toContain(input.prompt);
   });
 
   test("receipt path is absolute, inside the workdir, new, and identity-bound", async () => {

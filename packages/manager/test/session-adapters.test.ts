@@ -26,6 +26,7 @@ import { ensureSharedState, sharedStateAt } from "../src/state";
 import { rememberMemory } from "../src/memory";
 import { inspectProviderExecutable, readProviderRegistry, verifyProviderRegistration, writeProviderRegistration } from "../src/provider-registry";
 import { stateV2Paths } from "../src/state-v2";
+import { attestCodexPreworkResponse } from "../src/codex-preflight";
 
 type CompletedTurnEvent = Extract<SessionEvent, { type: "turn.completed" }>;
 
@@ -61,6 +62,7 @@ describe("provider CLI session arguments", () => {
       "exec",
       "--sandbox",
       "read-only",
+      "--ignore-user-config",
       "--strict-config",
       "--model",
       "gpt-test",
@@ -101,6 +103,7 @@ describe("provider CLI session arguments", () => {
       "exec",
       "--sandbox",
       "read-only",
+      "--ignore-user-config",
       "--strict-config",
       "--model",
       "gpt-test",
@@ -189,6 +192,15 @@ describe("provider CLI session arguments", () => {
       "workspace-write",
       "--config",
       'model_reasoning_effort="high"',
+      "--config",
+      "sandbox_workspace_write.network_access=false",
+      "--config",
+      "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+      "--config",
+      "sandbox_workspace_write.exclude_slash_tmp=true",
+      "--config",
+      "sandbox_workspace_write.writable_roots=[]",
+      "--ignore-user-config",
       "--strict-config",
       "--model",
       "gpt-5.6-sol",
@@ -270,6 +282,98 @@ describe("provider CLI session arguments", () => {
 });
 
 describe("Codex resolved execution-policy attestation (issue #257)", () => {
+  function preworkFixture(
+    root: string,
+    executionPolicy: "read-only" | "workspace-write",
+  ): {
+    descriptor: SessionDescriptor;
+    request: TurnRequest;
+    initialized: Record<string, unknown>;
+    started: Record<string, unknown>;
+  } {
+    const descriptor: SessionDescriptor = {
+      sessionId: `canonical-prework-${executionPolicy}`,
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      mode: "task",
+      workdir: root,
+      stateDir: path.join(root, ".agents"),
+    };
+    const policyRequest: TurnRequest = {
+      prompt: "fixture",
+      effort: "high",
+      executionPolicy,
+    };
+    return {
+      descriptor,
+      request: policyRequest,
+      initialized: { codexHome: path.join(descriptor.stateDir, "clis", "codex") },
+      started: {
+        model: descriptor.model,
+        cwd: root,
+        runtimeWorkspaceRoots: [root],
+        approvalPolicy: "never",
+        reasoningEffort: policyRequest.effort,
+        thread: { ephemeral: true, cwd: root },
+        sandbox:
+          executionPolicy === "read-only"
+            ? { type: "readOnly", networkAccess: false }
+            : {
+                type: "workspaceWrite",
+                writableRoots: [root],
+                networkAccess: false,
+                excludeTmpdirEnvVar: true,
+                excludeSlashTmp: true,
+              },
+      },
+    };
+  }
+
+  test("pre-work primary: zero-token thread receipts attest both narrow policies", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework");
+    for (const executionPolicy of ["read-only", "workspace-write"] as const) {
+      const fixture = preworkFixture(root, executionPolicy);
+      expect(
+        attestCodexPreworkResponse(
+          fixture.descriptor,
+          fixture.request,
+          fixture.initialized,
+          fixture.started,
+        ),
+      ).toBe(executionPolicy);
+    }
+  });
+
+  test("pre-work edge: extra writable roots fail closed before a model turn", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework-extra-root");
+    const fixture = preworkFixture(root, "workspace-write");
+    (fixture.started.sandbox as { writableRoots: string[] }).writableRoots.push(
+      path.resolve(root, "..", "outside"),
+    );
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("resolved execution policy does not match");
+  });
+
+  test("pre-work denied: workspace-write resolving read-only is rejected", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework-denied");
+    const fixture = preworkFixture(root, "workspace-write");
+    fixture.started.sandbox = { type: "readOnly", networkAccess: false };
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("resolved execution policy does not match");
+  });
+
   async function writeCodexRollout(
     root: string,
     descriptor: SessionDescriptor,
@@ -744,6 +848,7 @@ interface FakeKimiAcpCapture {
   agentsHome: string | null;
   kimiCodeHome: string | null;
   requests: Array<{ method: string; params: Record<string, unknown> }>;
+  responses: Array<Record<string, unknown>>;
 }
 
 async function seedKimiCanonicalStartup(
@@ -777,6 +882,13 @@ async function fakeKimiAcpBinary(
     malformedProtocolJson?: boolean;
     wrongSessionUpdate?: boolean;
     hangAt?: "initialize" | "prompt";
+    permissionRequest?: {
+      kind: "edit" | "execute";
+      path: string;
+      sessionId?: string;
+      status?: "pending" | "in_progress";
+      duplicateAllowOnce?: boolean;
+    };
   } = {},
 ): Promise<string> {
   const binDir = path.join(stateDir, "clis", "kimi", "bin");
@@ -790,9 +902,11 @@ import { createInterface } from "node:readline";
 const capturePath = ${JSON.stringify(capturePath)};
 const behavior = ${behavior};
 const requests = [];
+const responses = [];
 let activeSessionId = "native-kimi-session";
 let model = "kimi-test";
 let mode = "manual";
+let pendingPromptId = null;
 
 function configOptions() {
   return [
@@ -825,6 +939,7 @@ function capture() {
     agentsHome: process.env.AGENTS_HOME ?? null,
     kimiCodeHome: process.env.KIMI_CODE_HOME ?? null,
     requests,
+    responses,
   }));
 }
 
@@ -832,12 +947,34 @@ function send(message) {
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
 }
 
+function finishPrompt(id) {
+  send({ method: "session/update", params: {
+    sessionId: behavior.wrongSessionUpdate ? "provider-secret-wrong-session" : activeSessionId,
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "kimi-probe-ok" },
+    },
+  } });
+  send({ id, result: {
+    stopReason: "end_turn",
+    usage: { inputTokens: 13, outputTokens: 5, totalTokens: 18 },
+  } });
+}
+
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let stop = false;
 for await (const line of lines) {
   if (!line.trim()) continue;
   const message = JSON.parse(line);
-  if (typeof message.method !== "string") continue;
+  if (typeof message.method !== "string") {
+    responses.push(message);
+    capture();
+    if (message.id === 900 && pendingPromptId !== null) {
+      finishPrompt(pendingPromptId);
+      pendingPromptId = null;
+    }
+    continue;
+  }
   const params = message.params ?? {};
   requests.push({ method: message.method, params });
   capture();
@@ -881,14 +1018,29 @@ for await (const line of lines) {
       break;
     case "session/prompt":
       if (behavior.hangAt === "prompt") break;
-      send({ method: "session/update", params: {
-        sessionId: behavior.wrongSessionUpdate ? "provider-secret-wrong-session" : activeSessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "kimi-probe-ok" },
-        },
-      } });
-      send({ id: message.id, result: { stopReason: "end_turn" } });
+      if (behavior.permissionRequest) {
+        pendingPromptId = message.id;
+        const permission = behavior.permissionRequest;
+        send({ id: 900, method: "session/request_permission", params: {
+          sessionId: permission.sessionId ?? activeSessionId,
+          toolCall: {
+            title: "managed permission fixture",
+            kind: permission.kind,
+            status: permission.status ?? "pending",
+            toolCallId: "tool-900",
+            locations: [{ path: permission.path }],
+          },
+          options: [
+            { kind: "allow_once", name: "Allow once", optionId: "allow-once" },
+            ...(permission.duplicateAllowOnce
+              ? [{ kind: "allow_once", name: "Also allow once", optionId: "allow-once-2" }]
+              : []),
+            { kind: "reject_once", name: "Reject", optionId: "reject-once" },
+          ],
+        } });
+      } else {
+        finishPrompt(message.id);
+      }
       break;
     default:
       send({ id: message.id, error: { code: -32601, message: "method not found" } });
@@ -970,6 +1122,7 @@ describe("managed Kimi native continuation (issue #254)", () => {
       expect(result.content).toBe("kimi-probe-ok");
       expect(result.error).toBeUndefined();
       expect(result.receipt).toEqual(nativeKimiReceipt());
+      expect(result.usage).toEqual({ tokensIn: 13, tokensOut: 5, totalTokens: 18 });
 
       const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
       expect(captured.argv).toEqual(["acp"]);
@@ -995,6 +1148,117 @@ describe("managed Kimi native continuation (issue #254)", () => {
         nativeKimiReceipt(),
       );
       expect(Object.keys(result.receipt!).sort()).toEqual(["model", "provider", "providerSessionId", "transport"]);
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace policy primary: manual ACP grants one edit inside the exact worktree", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-write-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const target = path.join(root, "managed.txt");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      await writeFile(target, "before\n");
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        permissionRequest: { kind: "edit", path: target },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+
+      const result = await runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+        prompt: "Edit the managed file.",
+        executionPolicy: "workspace-write",
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.resolvedExecutionPolicy).toBe("workspace-write");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      const mode = captured.requests.find(
+        ({ method, params }) => method === "session/set_config_option" && params.configId === "mode",
+      );
+      expect(mode?.params.value).toBe("manual");
+      expect(captured.responses.find((response) => response.id === 900)).toMatchObject({
+        result: { outcome: { outcome: "selected", optionId: "allow-once" } },
+      });
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace policy edge: an out-of-worktree edit is cancelled and fails the turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-escape-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const outside = path.resolve(root, "..", `${path.basename(root)}-outside.txt`);
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        permissionRequest: { kind: "edit", path: outside },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt an escaped edit.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("requested permission despite the confirmed execution policy");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 900)).toMatchObject({
+        result: { outcome: { outcome: "cancelled" } },
+      });
+    } finally {
+      restore();
+      await rm(outside, { force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace policy denied: shell execution is never promoted to workspace-write", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-execute-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        permissionRequest: { kind: "execute", path: path.join(root, "package.json") },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt a shell command.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("requested permission despite the confirmed execution policy");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 900)).toMatchObject({
+        result: { outcome: { outcome: "cancelled" } },
+      });
     } finally {
       restore();
       await rm(root, { recursive: true, force: true });

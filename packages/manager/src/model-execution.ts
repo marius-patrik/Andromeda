@@ -83,6 +83,7 @@ export interface ModelExecutionRequest {
   workdir: string;
   mode: SessionMode;
   prompt: string;
+  promptSource: "positional" | "file" | "stdin";
   systemPrompt?: string;
 }
 
@@ -442,6 +443,22 @@ export async function executeModelRequest(
       await reservation.commit(finalReceipt);
       return { ok: false, content, sessionId, receipt: finalReceipt };
     }
+    // Agy 1.1.1 has no stdin/file prompt transport: --print consumes the
+    // prompt as the next argv token. Low-tier positional text is already
+    // caller-visible argv and remains suitable for trivial work, but content
+    // admitted from a secret-safe file/stdin boundary must never be copied
+    // into a downstream process argv.
+    if (route.provider === "agy" && input.promptSource !== "positional") {
+      finalReceipt = blockedReceipt(
+        tier,
+        effort,
+        route,
+        safeVersion,
+        "provider_prompt_transport_unsupported",
+      );
+      await reservation.commit(finalReceipt);
+      return { ok: false, content, sessionId, receipt: finalReceipt };
+    }
 
     let executed: { outcome: ManagedProviderOutcome; sessionId: string };
     try {
@@ -459,7 +476,7 @@ export async function executeModelRequest(
       return { ok: false, content, sessionId, receipt: finalReceipt };
     }
     sessionId = executed.sessionId;
-    content = executed.outcome.result.content;
+    const providerContent = executed.outcome.result.content;
     if (executed.outcome.resolvedExecutionPolicy !== executionPolicy) {
       finalReceipt = blockedReceipt(tier, effort, route, safeVersion, "execution_policy_mismatch");
     } else if (executed.outcome.result.error) {
@@ -470,6 +487,7 @@ export async function executeModelRequest(
         ? successReceipt(tier, effort, route, safeVersion, usage)
         : blockedReceipt(tier, effort, route, safeVersion, "usage_malformed");
     }
+    content = finalReceipt.outcome === "success" ? providerContent : "";
     await reservation.commit(finalReceipt);
     return { ok: finalReceipt.outcome === "success", content, sessionId, receipt: finalReceipt };
   } finally {

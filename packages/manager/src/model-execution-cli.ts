@@ -7,6 +7,7 @@ import {
 } from "./model-execution";
 
 const MODEL_RUN_MODES = new Set<SessionMode>(["orchestrator", "default", "chat", "task"]);
+const TIER_CONFLICTING_FLAGS = ["provider", "model", "agent", "agent-preset", "tui"] as const;
 
 export interface ModelExecutionCliInput {
   values: string[];
@@ -33,6 +34,10 @@ function optionalStringFlag(flags: Record<string, string | boolean>, name: strin
  * use --prompt-file or --prompt-stdin so it never appears in the process argv.
  */
 export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput): Promise<ModelExecutionRequest> {
+  const conflicting = TIER_CONFLICTING_FLAGS.find((name) => input.flags[name] !== undefined);
+  if (conflicting) {
+    throw new Error(`run --model-tier cannot be combined with --${conflicting}`);
+  }
   const promptFile = optionalStringFlag(input.flags, "prompt-file");
   const promptStdin = input.flags["prompt-stdin"] === true;
   if (input.flags["prompt-stdin"] !== undefined && !promptStdin) {
@@ -44,11 +49,18 @@ export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput
     throw new Error("run requires exactly one prompt source: positional text, --prompt-file, or --prompt-stdin");
   }
   let prompt: string;
-  if (promptFile) prompt = await readPromptFile(promptFile);
-  else if (promptStdin) {
+  let promptSource: ModelExecutionRequest["promptSource"];
+  if (promptFile) {
+    prompt = await readPromptFile(promptFile);
+    promptSource = "file";
+  } else if (promptStdin) {
     if (!input.stdin) throw new Error("run --prompt-stdin requires piped input");
     prompt = await readPromptStdin(input.stdin);
-  } else prompt = positional;
+    promptSource = "stdin";
+  } else {
+    prompt = positional;
+    promptSource = "positional";
+  }
 
   const modeValue = optionalStringFlag(input.flags, "mode") ?? "default";
   if (!MODEL_RUN_MODES.has(modeValue as SessionMode)) throw new Error("run --mode is invalid");
@@ -61,5 +73,6 @@ export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput
     workdir: input.workdir,
     mode: modeValue as SessionMode,
     prompt,
+    promptSource,
   };
 }

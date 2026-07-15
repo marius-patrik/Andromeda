@@ -2,10 +2,14 @@ import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   type Client,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
   type SessionConfigOption,
   type SessionNotification,
   type Stream,
 } from "@agentclientprotocol/sdk";
+import { lstat, realpath } from "node:fs/promises";
+import path from "node:path";
 import type {
   SessionDescriptor,
   SessionTranscript,
@@ -18,6 +22,7 @@ import { commandInvocation } from "./process-command";
 const KIMI_RECEIPT_KEYS = ["model", "provider", "providerSessionId", "transport"] as const;
 const MAX_PROVIDER_SESSION_ID_BYTES = 512;
 const MAX_ACP_INPUT_LINE_CHARS = 16 * 1024 * 1024;
+const MAX_PERMISSION_LOCATIONS = 32;
 const DEFAULT_KIMI_ACP_TIMEOUTS: KimiAcpTimeouts = {
   controlRequestMs: 30_000,
   promptMs: 10 * 60_000,
@@ -210,6 +215,87 @@ function assertConfigValue(configOptions: SessionConfigOption[], id: string, val
   }
 }
 
+function acpUsage(value: unknown): TurnResult["usage"] | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const inputTokens = value.inputTokens;
+  const outputTokens = value.outputTokens;
+  if (
+    !Number.isSafeInteger(inputTokens) ||
+    (inputTokens as number) < 0 ||
+    !Number.isSafeInteger(outputTokens) ||
+    (outputTokens as number) < 0
+  ) {
+    return undefined;
+  }
+  const totalTokens = (inputTokens as number) + (outputTokens as number);
+  if (!Number.isSafeInteger(totalTokens)) return undefined;
+  return { tokensIn: inputTokens as number, tokensOut: outputTokens as number, totalTokens };
+}
+
+function containsPath(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function workspaceEditLocation(workdir: string, candidate: string): Promise<boolean> {
+  if (!path.isAbsolute(candidate) || candidate.includes("\0")) return false;
+  const lexicalRoot = path.resolve(workdir);
+  const lexicalTarget = path.resolve(candidate);
+  if (!containsPath(lexicalRoot, lexicalTarget) || lexicalTarget === lexicalRoot) return false;
+
+  const rootInfo = await lstat(lexicalRoot).catch(() => null);
+  if (!rootInfo?.isDirectory() || rootInfo.isSymbolicLink()) return false;
+  const physicalRoot = await realpath(lexicalRoot).catch(() => null);
+  if (!physicalRoot) return false;
+
+  const relative = path.relative(lexicalRoot, lexicalTarget);
+  let cursor = lexicalRoot;
+  for (const component of relative.split(path.sep)) {
+    cursor = path.join(cursor, component);
+    const info = await lstat(cursor).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!info) break;
+    if (info.isSymbolicLink()) return false;
+    if (cursor === lexicalTarget && !info.isFile()) return false;
+    const physical = await realpath(cursor).catch(() => null);
+    if (!physical || !containsPath(physicalRoot, physical)) return false;
+  }
+  return true;
+}
+
+async function workspacePermission(
+  params: RequestPermissionRequest,
+  activeSessionId: string | null,
+  workdir: string,
+  executionPolicy: "read-only" | "workspace-write",
+): Promise<RequestPermissionResponse | null> {
+  if (
+    executionPolicy !== "workspace-write" ||
+    !activeSessionId ||
+    params.sessionId !== activeSessionId ||
+    params.toolCall.kind !== "edit" ||
+    (params.toolCall.status !== undefined && params.toolCall.status !== null && params.toolCall.status !== "pending") ||
+    !params.toolCall.locations ||
+    params.toolCall.locations.length === 0 ||
+    params.toolCall.locations.length > MAX_PERMISSION_LOCATIONS
+  ) {
+    return null;
+  }
+  for (const location of params.toolCall.locations) {
+    if (!(await workspaceEditLocation(workdir, location.path))) return null;
+  }
+  const allowOnce = params.options.filter((option) => option.kind === "allow_once");
+  if (allowOnce.length !== 1) return null;
+  return {
+    outcome: {
+      outcome: "selected",
+      optionId: allowOnce[0]!.optionId,
+    },
+  };
+}
+
 function processInputStream(stdin: Bun.FileSink): WritableStream<Uint8Array> {
   return new WritableStream<Uint8Array>({
     async write(chunk) {
@@ -390,7 +476,11 @@ export async function runKimiAcpTurn(options: KimiAcpTurnOptions): Promise<TurnR
   if (executionPolicy !== "read-only" && executionPolicy !== "workspace-write") {
     throw new KimiContinuityError("Kimi execution policy is unsupported");
   }
-  const providerMode = executionPolicy === "read-only" ? "plan" : "auto";
+  // Kimi's auto mode can execute ambient provider tools without a manager
+  // authorization callback. Workspace-write therefore uses manual mode and
+  // grants only one workspace-bounded edit at a time; shell/delete/move and
+  // every out-of-root or link-bearing target remain denied.
+  const providerMode = executionPolicy === "read-only" ? "plan" : "manual";
   const timeouts = resolveTimeouts(options.timeouts);
   const priorReceipt = nativeReceiptForContinuation(
     options.transcript,
@@ -419,7 +509,14 @@ export async function runKimiAcpTurn(options: KimiAcpTurnOptions): Promise<TurnR
   let unexpectedSessionUpdate = false;
   let activeSessionId = priorReceipt?.providerSessionId ?? null;
   const client: Client = {
-    async requestPermission() {
+    async requestPermission(params) {
+      const granted = await workspacePermission(
+        params,
+        activeSessionId,
+        options.descriptor.workdir,
+        executionPolicy,
+      ).catch(() => null);
+      if (granted) return granted;
       unexpectedPermissionRequest = true;
       return { outcome: { outcome: "cancelled" } };
     },
@@ -536,6 +633,7 @@ export async function runKimiAcpTurn(options: KimiAcpTurnOptions): Promise<TurnR
       content: output.join(""),
       role: "assistant",
       finishReason: response.stopReason,
+      usage: acpUsage(response.usage),
       resolvedExecutionPolicy: executionPolicy,
       receipt: {
         provider: "kimi",
