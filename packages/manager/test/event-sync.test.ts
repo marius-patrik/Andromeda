@@ -959,6 +959,48 @@ describe("encrypted cross-machine event exchange", () => {
     }
   });
 
+  test("bounded public operational identifiers are admitted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-public-operational-identifiers-"));
+    try {
+      const messages = [
+        "Publish online/offline/busy/version/labels/last for runner health.",
+        "Track lifecycle/persistence/registration/supervision/observability as acceptance lanes.",
+        "Call updatePackagesAndEnvironmentsState after installation.",
+        "Run ./node_modules/typescript/bin/tsc for the core type gate.",
+        "Use marius-patrik/agent/reconcile-main-after-release for the protected release lane.",
+        "Report platform/now/doctor/scheduler/host/readCredential/username without exposing the credential.",
+      ] as const;
+      for (const [index, message] of messages.entries()) {
+        const source = await assistantMessageState(path.join(root, `source-${index}`), `identifier-${index}`, message);
+        const exported = await exportEventBundle(source, path.join(root, `identifier-${index}.bundle.json`));
+        expect(exported.entries).toBeGreaterThan(0);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bounded public runner release references and fixtures are admitted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-public-runner-references-"));
+    try {
+      const commit = "a".repeat(40);
+      const messages = [
+        "Fetch /repos/actions/runner/releases/assets/123456789.",
+        "Download https://github.com/actions/runner/releases/download/v2.335.1/actions-runner-win-x64-2.335.1.zip.",
+        `Compare -${commit} with the protected release commit.`,
+        "Synthetic token: ghr_FAKE_REGISTRATION_TOKEN_0123456789.",
+        "Local reset token: `config.cmd remove --local` before registration.",
+      ] as const;
+      for (const [index, message] of messages.entries()) {
+        const source = await assistantMessageState(path.join(root, `source-${index}`), `runner-reference-${index}`, message);
+        const exported = await exportEventBundle(source, path.join(root, `runner-reference-${index}.bundle.json`));
+        expect(exported.entries).toBeGreaterThan(0);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("bounded absolute paths preserve secret-like suffixes and ambiguous spans", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-bounded-path-denials-"));
     try {
@@ -1061,6 +1103,30 @@ describe("encrypted cross-machine event exchange", () => {
       for (const [index, message] of messages.entries()) {
         const source = await assistantMessageState(path.join(root, `source-${index}`), `policy-denial-${index}`, message);
         await expect(exportEventBundle(source, path.join(root, `policy-denial-${index}.bundle.json`))).rejects.toThrow(
+          "secret-like",
+        );
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("public operational identifier admission preserves opaque and credential denials", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-sync-public-identifier-denials-"));
+    try {
+      const opaque = ["dQwErTyUiOpA", "sDfGhJkLzXc", "VbNmQwErTyU", "iOpAsD"].join("");
+      const messages = [
+        "correct/horse/battery/staple/velvet",
+        "install/abcdefghijklmnop/qrstuvwxyzabcdef",
+        `/repos/actions/runner/releases/assets/${opaque}`,
+        `https://github.com/actions/runner/releases/download/v2.335.1/actions-runner-win-x64-2.335.1.zip?token=${opaque}`,
+        "token: `correcthorsebatterystaple`",
+        "token: `config.cmd-opaquevalue`",
+        `token: ghr_FAKE_REGISTRATION_TOKEN_0123456789${opaque}`,
+      ] as const;
+      for (const [index, message] of messages.entries()) {
+        const source = await assistantMessageState(path.join(root, `source-${index}`), `identifier-denial-${index}`, message);
+        await expect(exportEventBundle(source, path.join(root, `identifier-denial-${index}.bundle.json`))).rejects.toThrow(
           "secret-like",
         );
       }

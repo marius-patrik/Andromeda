@@ -251,25 +251,78 @@ const STRUCTURAL_STRING_FIELDS = new Set([
   "nextCheckAt",
 ]);
 
+const PUBLIC_IDENTIFIER_ANCHORS = new Set([
+  "actions",
+  "admin",
+  "cli",
+  "commands",
+  "core",
+  "deletion",
+  "disable",
+  "doctor",
+  "enable",
+  "environments",
+  "github",
+  "install",
+  "labels",
+  "lifecycle",
+  "manager",
+  "main",
+  "modules",
+  "node",
+  "observability",
+  "packages",
+  "persistence",
+  "reconcile",
+  "registration",
+  "release",
+  "repair",
+  "repos",
+  "review",
+  "runner",
+  "scripts",
+  "secrets",
+  "service",
+  "source",
+  "state",
+  "status",
+  "supervision",
+  "typescript",
+  "update",
+  "version",
+]);
+
 function secretLikeText(value: string): boolean {
+  // Canonical docs and tests may name the upstream local-reset command or the
+  // deliberately non-secret registration fixture. Strip only those bounded
+  // public literals before explicit-assignment and entropy inspection;
+  // lookalikes and extensions remain in the fail-closed lane.
+  const inspectedValue = value
+    .replace(
+      /(?<![A-Za-z0-9_])(?:ghr_)?FAKE_REGISTRATION_TOKEN(?:_0123456789)?(?![A-Za-z0-9_])/g,
+      "",
+    )
+    .replace(/(?<![A-Za-z0-9])token\s*:\s*`config\.cmd(?=[`\s])/gi, "");
   if (
-    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(value) ||
-    /(?<![A-Za-z0-9])AKIA[A-Z0-9]{16}(?![A-Za-z0-9])/.test(value) ||
-    /(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,}(?![A-Za-z0-9_])/.test(value) ||
-    /(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}(?![A-Za-z0-9])/.test(value) ||
+    /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(inspectedValue) ||
+    /(?<![A-Za-z0-9])AKIA[A-Z0-9]{16}(?![A-Za-z0-9])/.test(inspectedValue) ||
+    /(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,}(?![A-Za-z0-9_])/.test(inspectedValue) ||
+    /(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{20,}(?![A-Za-z0-9])/.test(inspectedValue) ||
     /(?<![A-Za-z0-9])(?:sk-(?:ant-|proj-)?|xox[baprs]-|hf_|npm_|pypi-)[A-Za-z0-9_\-]{16,}(?![A-Za-z0-9_\-])/.test(
-      value,
+      inspectedValue,
     ) ||
-    /(?<![A-Za-z0-9])AIza[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])/.test(value) ||
+    /(?<![A-Za-z0-9])AIza[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])/.test(inspectedValue) ||
     /(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])/.test(
-      value,
+      inspectedValue,
     ) ||
-    /(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._~+\/-]{16,}={0,2}(?![A-Za-z0-9._~+\/=-])/i.test(value) ||
+    /(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._~+\/-]{16,}={0,2}(?![A-Za-z0-9._~+\/=-])/i.test(
+      inspectedValue,
+    ) ||
     /(?<![A-Za-z0-9])(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp|https?):\/\/[^\s/:@]+:[^\s/@]+@/i.test(
-      value,
+      inspectedValue,
     ) ||
     /(?<![A-Za-z0-9])(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret|authorization|connection[_-]?string|dsn)\s*[:=]\s*["']?[^\s"']{8,}/i.test(
-      value,
+      inspectedValue,
     )
   ) {
     return true;
@@ -452,7 +505,7 @@ function secretLikeText(value: string): boolean {
     }
     return { value: output.join(""), longSegment };
   };
-  let entropyInput = value
+  let entropyInput = inspectedValue
     // Strip only the scheme of an unambiguous local file URI. The remaining
     // absolute path must pass the same segment inspection as native paths.
     .replace(/\bfile:\/\/(?=\/|[A-Za-z]:[\\/])/gi, (scheme) => " ".repeat(scheme.length))
@@ -495,11 +548,59 @@ function secretLikeText(value: string): boolean {
     );
   for (const candidate of entropyInput.match(/[A-Za-z0-9_+.\\/-]{32,}={0,2}/g) ?? []) {
     if (UUID.test(candidate)) continue;
-    if (/^(?:[a-f0-9]{40}|[a-f0-9]{64})\.?$/.test(candidate)) continue;
+    if (/^-?(?:[a-f0-9]{40}|[a-f0-9]{64})\.?$/.test(candidate)) continue;
     // Bare GitHub-style owner/repository slugs in prose are identifiers. Requiring
     // repository punctuation avoids exempting arbitrary lowercase slash tokens.
     if (CANONICAL_REPO_SLUG.test(candidate) && /[.-]/.test(candidate)) continue;
-    if (/[A-Za-z]/.test(candidate) && (/[0-9]/.test(candidate) || /[_+\\/-]/.test(candidate))) return true;
+    if (
+      /^\/\/github\.com\/[A-Za-z0-9](?:[A-Za-z0-9.-]{0,38}[A-Za-z0-9])?\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}(?:\.git)?$/.test(
+        candidate,
+      )
+    ) {
+      continue;
+    }
+    if (
+      /^(?:(?:\/\/github\.com)?\/actions\/runner\/releases\/download\/v)?\d+\.\d+\.\d+\/actions-runner-(?:linux|osx|win)-[a-z0-9-]+-\d+\.\d+\.\d+\.(?:tar\.gz|zip)\.?$/.test(
+        candidate,
+      ) ||
+      /^actions-runner-(?:linux|osx|win)-[a-z0-9-]+-\d+\.\d+\.\d+\.(?:tar\.gz|zip)\.?$/.test(candidate) ||
+      /^\/?repos\/actions\/runner\/releases\/assets\/[0-9]+$/.test(candidate)
+    ) {
+      continue;
+    }
+    const publicIdentifierWords = candidate
+      .replace(/^[-.\\/]+|[-.\\/]+$/g, "")
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .split(/[-._\\/\s]+/)
+      .filter(Boolean)
+      .map((word) => word.toLowerCase());
+    const publicIdentifierSegments = candidate
+      .replace(/^[-.\\/]+|[-.\\/]+$/g, "")
+      .split(/[-._\\/]+/)
+      .filter(Boolean);
+    const looksLikePublicOperationalIdentifier =
+      !/[0-9]/.test(candidate) &&
+      !candidate.includes("\\") &&
+      (!candidate.includes("/") ||
+        publicIdentifierSegments.every(
+          (segment) =>
+            /^[a-z]+$/.test(segment) ||
+            /^[A-Z]{2,12}$/.test(segment) ||
+            /^[a-z]+(?:[A-Z][a-z]+){1,2}$/.test(segment) ||
+            /^[A-Z][a-z]+(?:[A-Z][a-z]+){1,2}$/.test(segment),
+        )) &&
+      publicIdentifierWords.length >= 3 &&
+      publicIdentifierWords.some((word) => PUBLIC_IDENTIFIER_ANCHORS.has(word)) &&
+      publicIdentifierWords.every(
+        (word) =>
+          /^[a-z]+$/.test(word) &&
+          word.length <= 20 &&
+          (word.length <= 3 || (/[aeiouy]/.test(word) && !/[^aeiouy]{5}/.test(word))),
+      );
+    if (looksLikePublicOperationalIdentifier) continue;
+    if (/[A-Za-z]/.test(candidate) && (/[0-9]/.test(candidate) || /[_+\\/-]/.test(candidate))) {
+      return true;
+    }
     if (/[a-z]/.test(candidate) && /[A-Z]/.test(candidate)) {
       const counts = new Map<string, number>();
       for (const character of candidate) counts.set(character, (counts.get(character) ?? 0) + 1);
@@ -507,7 +608,9 @@ function secretLikeText(value: string): boolean {
         const probability = count / candidate.length;
         return total - probability * Math.log2(probability);
       }, 0);
-      if (entropy >= 4) return true;
+      if (entropy >= 4) {
+        return true;
+      }
     }
   }
   return false;
