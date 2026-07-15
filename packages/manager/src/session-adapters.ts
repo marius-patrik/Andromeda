@@ -9,7 +9,12 @@ import type {
   TurnResult,
 } from "../../harness/session";
 import { FakeProviderAdapter, renderTranscriptForCli } from "../../harness/session-adapters";
-import { canonicalChildEnvironment, resolvePersonalAgentsHome, resolveUserHome } from "./runtime-paths";
+import {
+  canonicalChildEnvironment,
+  overlayChildEnvironment,
+  resolvePersonalAgentsHome,
+  resolveUserHome,
+} from "./runtime-paths";
 import { sharedStateAt, type SharedState } from "./state";
 import { rebuildMemoryProjections } from "./memory";
 import { commandInvocation } from "./process-command";
@@ -134,7 +139,11 @@ export class CliProviderAdapter implements ProviderAdapter {
     const args = this.options.buildArgs(request, effectiveTranscript, descriptor);
     const stdinText = this.options.buildStdin?.(request, effectiveTranscript, descriptor);
     const cwd = this.options.cwd ?? descriptor.workdir;
-    const env = { ...canonicalChildEnvironment(), ...canonicalProviderEnv(this.id, descriptor), ...this.options.env };
+    const env = overlayChildEnvironment(
+      canonicalChildEnvironment(),
+      this.options.env ?? {},
+      canonicalProviderEnv(this.id, descriptor),
+    );
     forceAgyAutoUpdateDisabled(env, this.id);
     const invocation = commandInvocation(this.options.binary, args, env);
     const spawnOptions = {
@@ -318,7 +327,15 @@ export function canonicalProviderEnv(provider: string, descriptor: SessionDescri
   };
   if (provider === "codex") env.CODEX_HOME = providerHome;
   if (provider === "claude") env.CLAUDE_CONFIG_DIR = providerHome;
-  if (provider === "kimi") env.KIMI_CODE_HOME = providerHome;
+  if (provider === "kimi") {
+    // Bind the documented Kimi root and both platform fallback homes. This
+    // prevents a managed launch from recreating standalone ~/.kimi-code state
+    // when a provider version ignores or temporarily falls back from its
+    // provider-specific variable.
+    env.KIMI_CODE_HOME = providerHome;
+    env.HOME = providerHome;
+    env.USERPROFILE = providerHome;
+  }
   if (provider === "agy") {
     // Agy (antigravity-cli) resolves its config root ("GeminiDir") from the OS
     // user profile and ignores HOME on Windows, which previously escaped to the
@@ -697,7 +714,10 @@ class KimiAcpProviderAdapter implements ProviderAdapter {
         error: `canonical startup memory unavailable: ${(error as Error).message}`,
       };
     }
-    const env = { ...canonicalChildEnvironment(), ...canonicalProviderEnv("kimi", descriptor) };
+    const env = overlayChildEnvironment(
+      canonicalChildEnvironment(),
+      canonicalProviderEnv("kimi", descriptor),
+    );
     // Keep the provider-specific ACP/Zod boundary off unrelated manager
     // startup paths; a managed Kimi turn loads it only after canonical startup
     // and provider environment preparation have succeeded.

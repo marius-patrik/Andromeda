@@ -847,6 +847,8 @@ interface FakeKimiAcpCapture {
   argv: string[];
   agentsHome: string | null;
   kimiCodeHome: string | null;
+  home: string | null;
+  userProfile: string | null;
   requests: Array<{ method: string; params: Record<string, unknown> }>;
   responses: Array<Record<string, unknown>>;
 }
@@ -882,6 +884,7 @@ async function fakeKimiAcpBinary(
     malformedProtocolJson?: boolean;
     wrongSessionUpdate?: boolean;
     hangAt?: "initialize" | "prompt";
+    probeHomeFallback?: boolean;
     permissionRequest?: {
       kind: "edit" | "execute";
       path: string;
@@ -896,7 +899,8 @@ async function fakeKimiAcpBinary(
   const server = path.join(binDir, "fake-kimi-acp.mjs");
   const behavior = JSON.stringify(opts);
   const source = `
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
 
 const capturePath = ${JSON.stringify(capturePath)};
@@ -934,10 +938,16 @@ function configOptions() {
 }
 
 function capture() {
+  if (behavior.probeHomeFallback) {
+    const platformHome = process.env.USERPROFILE ?? process.env.HOME;
+    if (platformHome) mkdirSync(path.join(platformHome, ".kimi-code"), { recursive: true });
+  }
   writeFileSync(capturePath, JSON.stringify({
     argv: process.argv.slice(2),
     agentsHome: process.env.AGENTS_HOME ?? null,
     kimiCodeHome: process.env.KIMI_CODE_HOME ?? null,
+    home: process.env.HOME ?? null,
+    userProfile: process.env.USERPROFILE ?? null,
     requests,
     responses,
   }));
@@ -1106,7 +1116,7 @@ describe("managed Kimi native continuation (issue #254)", () => {
     try {
       const state = sharedStateAt(root, stateDir, userHome);
       await seedKimiCanonicalStartup(state, stateDir);
-      const binary = await fakeKimiAcpBinary(stateDir, capturePath);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, { probeHomeFallback: true });
       const adapter = kimiSessionAdapter(binary);
       const descriptor = await createSession(state, {
         provider: "kimi",
@@ -1128,6 +1138,10 @@ describe("managed Kimi native continuation (issue #254)", () => {
       expect(captured.argv).toEqual(["acp"]);
       expect(captured.agentsHome).toBe(stateDir);
       expect(captured.kimiCodeHome).toBe(path.join(stateDir, "clis", "kimi"));
+      expect(captured.home).toBe(path.join(stateDir, "clis", "kimi"));
+      expect(captured.userProfile).toBe(path.join(stateDir, "clis", "kimi"));
+      expect(await pathExists(path.join(userHome, ".kimi-code"))).toBe(false);
+      expect(await pathExists(path.join(stateDir, "clis", "kimi", ".kimi-code"))).toBe(true);
       expect(captured.requests.map(({ method }) => method)).toEqual([
         "initialize",
         "session/new",

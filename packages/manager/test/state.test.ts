@@ -5,6 +5,7 @@ import path from "node:path";
 import { ensureSharedState, sharedState, sharedStateFromEnv, writeSessionConfig } from "../src/state";
 import {
   canonicalChildEnvironment,
+  overlayChildEnvironment,
   resolvePersonalAgentsHome,
   resolveRuntimeAgentsHome,
   resolveUserHome,
@@ -78,6 +79,15 @@ describe("runtime path resolution", () => {
         PATH: "/bin",
       }),
     ).toEqual({ AGENTS_HOME: "/canonical", PATH: "/bin" });
+  });
+
+  test("authoritative child overlays remove mixed-case aliases", () => {
+    expect(
+      overlayChildEnvironment(
+        { HOME: "/ambient", userprofile: "/ambient-profile", kimi_code_home: "/ambient-kimi", PATH: "/bin" },
+        { HOME: "/managed", USERPROFILE: "/managed", KIMI_CODE_HOME: "/managed/kimi" },
+      ),
+    ).toEqual({ HOME: "/managed", USERPROFILE: "/managed", KIMI_CODE_HOME: "/managed/kimi", PATH: "/bin" });
   });
 
   test("explicit user home wins over a provider-rooted HOME", () => {
