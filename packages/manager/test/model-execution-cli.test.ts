@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Readable } from "node:stream";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { modelExecutionRequestFromCli } from "../src/model-execution-cli";
+import { modelExecutionRequestFromCli, selectsModelExecution } from "../src/model-execution-cli";
+import { ensureSharedState, sharedStateAt, writeSessionConfig, type SharedState } from "../src/state";
+
+const cliPath = path.resolve(import.meta.dir, "..", "src", "cli.ts");
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -14,6 +17,65 @@ async function rootFixture(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "agents-model-cli-"));
   roots.push(root);
   return root;
+}
+
+async function executionFixture(): Promise<{
+  root: string;
+  state: SharedState;
+  receiptDir: string;
+}> {
+  const container = await rootFixture();
+  const root = path.join(container, "workspace with spaces");
+  const userHome = path.join(container, "user home");
+  const state = sharedStateAt(root, path.join(userHome, ".agents"), userHome);
+  const receiptDir = path.join(root, "receipt folder");
+  await mkdir(receiptDir, { recursive: true });
+  await ensureSharedState(state);
+  await writeSessionConfig(state, {
+    schemaVersion: 1,
+    providerModels: { codex: ["gpt-5.6-sol"] },
+  });
+  return { root, state, receiptDir };
+}
+
+function executionEnv(state: SharedState): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    AGENTS_HOME: state.stateDir,
+    AGENTS_USER_HOME: state.userHome,
+    AGENTS_ROOT: state.root,
+    AGENTS_WORKSPACE: state.workspaceDir,
+    AGENTS_SYSTEM_DATA_ROOT: state.stateDir,
+  };
+}
+
+async function runProcess(
+  argv: string[],
+  root: string,
+  env: Record<string, string | undefined>,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn(argv, {
+    cwd: root,
+    env,
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  return { code, stdout, stderr };
+}
+
+async function readBlockedReceipt(receiptPath: string): Promise<{
+  requested: { modelTier: string; effort: string };
+  resolved: { provider: string; model: string };
+  outcome: string;
+  blockReason: string;
+}> {
+  return JSON.parse(await readFile(receiptPath, "utf8"));
 }
 
 function flags(root: string): Record<string, string | boolean> {
@@ -92,6 +154,15 @@ describe("model execution CLI prompt boundary", () => {
     await expect(
       modelExecutionRequestFromCli({ values: ["prompt"], flags: { ...flags(root), mode: "unsafe" }, workdir: root }),
     ).rejects.toThrow("--mode is invalid");
+    const interactive = Object.assign(Readable.from(["should not be read"]), { isTTY: true });
+    await expect(
+      modelExecutionRequestFromCli({
+        values: [],
+        flags: { ...flags(root), "prompt-stdin": true },
+        workdir: root,
+        stdin: interactive,
+      }),
+    ).rejects.toThrow("requires piped input");
   });
 
   test("required policy flags remain explicit rather than silently defaulting", async () => {
@@ -103,6 +174,21 @@ describe("model execution CLI prompt boundary", () => {
         modelExecutionRequestFromCli({ values: ["prompt"], flags: incomplete, workdir: root }),
       ).rejects.toThrow(`run requires --${name}`);
     }
+    expect(selectsModelExecution({ effort: "high" })).toBe(true);
+    expect(selectsModelExecution({ receipt: path.join(root, "receipt.json") })).toBe(true);
+    expect(selectsModelExecution({ provider: "codex", model: "gpt-5.6-sol" })).toBe(false);
+    await expect(
+      modelExecutionRequestFromCli({
+        values: [],
+        flags: {
+          effort: "high",
+          "execution-policy": "read-only",
+          receipt: path.join(root, "receipt.json"),
+          "prompt-file": path.join(root, "missing-sensitive-input.txt"),
+        },
+        workdir: root,
+      }),
+    ).rejects.toThrow("run requires --model-tier");
   });
 
   test("logical tier selection rejects direct route and TUI overrides", async () => {
@@ -116,5 +202,139 @@ describe("model execution CLI prompt boundary", () => {
         }),
       ).rejects.toThrow(`cannot be combined with --${name}`);
     }
+  });
+
+  test("agents run routes the complete logical-tier contract and emits only a stable block", async () => {
+    const { root, state, receiptDir } = await executionFixture();
+    const receiptPath = path.join(receiptDir, "direct receipt.json");
+    const prompt = "DIRECT_TIER_PROMPT_SENTINEL";
+    const result = await runProcess(
+      [
+        process.execPath,
+        cliPath,
+        "run",
+        "--model-tier",
+        "high",
+        "--effort",
+        "low",
+        "--execution-policy",
+        "read-only",
+        "--receipt",
+        receiptPath,
+        "--mode",
+        "task",
+        prompt,
+      ],
+      root,
+      executionEnv(state),
+    );
+    const receipt = await readBlockedReceipt(receiptPath);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe(`execution blocked: ${receipt.blockReason}`);
+    expect(`${result.stdout}${result.stderr}`).not.toContain(prompt);
+    expect(receipt.requested).toEqual({ modelTier: "high", effort: "low" });
+    expect(receipt.resolved).toMatchObject({ provider: "codex", model: "gpt-5.6-sol" });
+    expect(receipt.outcome).toBe("blocked");
+  });
+
+  test("partial logical-tier flags cannot fall through to legacy provider execution", async () => {
+    const { root, state, receiptDir } = await executionFixture();
+    const receiptPath = path.join(receiptDir, "must not exist.json");
+    const result = await runProcess(
+      [
+        process.execPath,
+        cliPath,
+        "run",
+        "--effort",
+        "low",
+        "--execution-policy",
+        "read-only",
+        "--receipt",
+        receiptPath,
+        "prompt",
+      ],
+      root,
+      executionEnv(state),
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("agents: run requires --model-tier");
+    await expect(readFile(receiptPath, "utf8")).rejects.toThrow();
+  });
+
+  test("installed Windows PowerShell launcher preserves the full contract through @args", async () => {
+    if (process.platform !== "win32") return;
+    const { root, state, receiptDir } = await executionFixture();
+    const launcherDir = path.join(state.stateDir, "bin");
+    const launcherPath = path.join(launcherDir, "agents.ps1");
+    const promptPath = path.join(root, "prompt source with spaces.txt");
+    const receiptPath = path.join(receiptDir, "launcher receipt with spaces.json");
+    const prompt = "WINDOWS_LAUNCHER_PROMPT_SENTINEL";
+    const psLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+    await mkdir(launcherDir, { recursive: true });
+    await writeFile(promptPath, prompt);
+    await writeFile(
+      launcherPath,
+      [
+        "$ErrorActionPreference = 'Stop'",
+        "Get-ChildItem Env: | Where-Object { $_.Name -like 'ROMMIE_*' -or $_.Name -like 'AGENTOS_*' } | ForEach-Object { Remove-Item \"Env:$($_.Name)\" }",
+        `$env:HOME = ${psLiteral(state.userHome)}`,
+        `$env:AGENTS_HOME = ${psLiteral(state.stateDir)}`,
+        `$env:AGENTS_USER_HOME = ${psLiteral(state.userHome)}`,
+        `$env:AGENTS_ROOT = ${psLiteral(state.root)}`,
+        `$env:AGENTS_WORKSPACE = ${psLiteral(state.workspaceDir)}`,
+        `$env:AGENTS_SYSTEM_DATA_ROOT = ${psLiteral(state.stateDir)}`,
+        `$env:AGENTS_BUN = ${psLiteral(process.execPath)}`,
+        `$env:AGENTS_ENTRYPOINT = ${psLiteral(cliPath)}`,
+        "& $env:AGENTS_BUN $env:AGENTS_ENTRYPOINT @args",
+        "exit $LASTEXITCODE",
+        "",
+      ].join("\r\n"),
+    );
+    const powershell = path.join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const result = await runProcess(
+      [
+        powershell,
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        launcherPath,
+        "run",
+        "--model-tier",
+        "high",
+        "--effort",
+        "low",
+        "--execution-policy",
+        "read-only",
+        "--receipt",
+        receiptPath,
+        "--mode",
+        "task",
+        "--prompt-file",
+        promptPath,
+      ],
+      root,
+      executionEnv(state),
+    );
+    const receipt = await readBlockedReceipt(receiptPath);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe(`execution blocked: ${receipt.blockReason}`);
+    expect(`${result.stdout}${result.stderr}`).not.toContain(prompt);
+    expect(receipt.requested).toEqual({ modelTier: "high", effort: "low" });
+    expect(receipt.resolved).toMatchObject({ provider: "codex", model: "gpt-5.6-sol" });
+    expect(receipt.outcome).toBe("blocked");
   });
 });

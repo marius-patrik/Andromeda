@@ -76,12 +76,14 @@ receipt containing the provider, canonical model, `acp` transport, and opaque
 native session id. A later turn must resume that id, verify the resumed native
 model still matches the canonical model, and keep the same receipt. Missing,
 malformed, conflicting, or model-mismatched receipts fail before launch; an
-ACP resume failure never falls back to `session/new`. The adapter selects Kimi's
-automatic permission mode for headless parity and cancels any permission request
-that still reaches the non-interactive client. ACP control requests have a
-30-second deadline, prompts have a 10-minute deadline, and process exit plus
-stderr draining use bounded one-second cleanup windows; an expired phase
-terminates the provider and records only a sanitized timeout failure.
+ACP resume failure never falls back to `session/new`. Read-only turns select
+Kimi's `plan` mode. Workspace-write turns select `manual` mode and admit only
+bounded create/update operations inside the physical worktree; shell execution,
+delete/move operations, linked-path escapes, and all other permission requests
+are denied. ACP control requests have a 30-second deadline, prompts have a
+10-minute deadline, and process exit plus stderr draining use bounded one-second
+cleanup windows; an expired phase terminates the provider and records only a
+sanitized timeout failure.
 
 The Agy (`antigravity-cli`) boundary is enforced per launch:
 
@@ -177,6 +179,7 @@ There is no compatibility mode or alternate loader to bypass.
 ## Command surface
 
 ```text
+agents run --model-tier low|medium|high|max --effort low|medium|high --execution-policy read-only|workspace-write --receipt <absolute-new-path> [--mode orchestrator|default|chat|task] [--prompt-file <absolute-path> | --prompt-stdin | <prompt>]
 agents run [--mode orchestrator|default] [--provider <id>] [--model <model>] [--tui] <prompt>
 agents tui [--provider <id>] [--model <model>] [--mode <mode>]
 agents sessions list [--json]
@@ -246,6 +249,28 @@ agents os remove <name> [--prune-data] [--dry-run]
 agents os deploy <profile> [--image agents-os] [--env agents-os] [--channel dev] [--dry-run]
 agents runner install|enable|disable|status|repair [--json]
 ```
+
+### Logical-tier execution
+
+The logical-tier form is the canonical automation boundary used by managed
+DarkFactory work. Its stable routes are `low` to Agy, `medium` to Kimi, `high`
+to Codex with the Sol preset, and `max` to Claude with the Fable preset. The
+concrete model and pinned provider executable come only from canonical Agent OS
+state. A caller cannot override the provider, model, agent preset, executable,
+registry, fallback, or TUI.
+
+Model tier and model effort are independent axes. Every invocation must also
+declare either `read-only` or `workspace-write`; the provider adapter must attest
+that exact effective policy before a successful result is accepted. Exactly one
+prompt source is allowed: one positional value, one absolute `--prompt-file`, or
+`--prompt-stdin`. File and stdin input stay out of downstream process argv.
+
+`--receipt` must name an absolute, nonexistent file inside the physical
+worktree. The manager reserves it with a blocked `execution_pending` receipt
+before provider work begins, then replaces it through the same file identity
+with the final route, provider version, attempt, usage, outcome, and sanitized
+block reason. Provider errors and prompt content never enter receipts or blocked
+CLI output; a route, doctor, policy, usage, or provider failure remains blocked.
 
 Memory mutations require `--source`, `--hash`, `--source-class`, and
 `--confidence`. Secret commands never print secret values. A live

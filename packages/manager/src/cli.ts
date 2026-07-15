@@ -59,6 +59,8 @@ import {
   type SessionMode,
 } from "../../harness/session";
 import { providerSessionAdapter } from "./session-adapters";
+import { executeModelRequest } from "./model-execution";
+import { modelExecutionRequestFromCli, selectsModelExecution } from "./model-execution-cli";
 import {
   orchestratorSystemPrompt,
   startOrchestratorHeartbeat,
@@ -102,6 +104,7 @@ function help(): void {
   console.log(`agents - Bun agent package manager
 
 Usage:
+  agents run --model-tier low|medium|high|max --effort low|medium|high --execution-policy read-only|workspace-write --receipt <absolute-new-path> [--mode orchestrator|default|chat|task] [--prompt-file <absolute-path> | --prompt-stdin | <prompt>]
   agents run [--mode orchestrator|default] [--provider <id>] [--model <model>] [--tui] <prompt>
   agents tui [--provider <id>] [--model <model>] [--mode <mode>]
   agents sessions list [--json]
@@ -740,6 +743,28 @@ async function tuiCommand(args: string[], flags: Record<string, string | boolean
 }
 
 async function runCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
+  if (selectsModelExecution(flags)) {
+    // Parse and admit the complete logical-tier contract before initializing
+    // canonical state. Provider/model/TUI overrides and ambiguous prompt
+    // sources therefore fail before any runtime mutation.
+    const request = await modelExecutionRequestFromCli({
+      values: args,
+      flags,
+      workdir: root,
+      stdin: process.stdin,
+    });
+    const state = runtimeState();
+    await ensureSharedState(state);
+    const result = await executeModelRequest(state, request);
+    if (result.ok) console.log(result.content);
+    else {
+      console.error(`execution blocked: ${result.receipt.blockReason ?? "execution_blocked"}`);
+      process.exitCode = 1;
+    }
+    if (result.sessionId) console.error(`session: ${result.sessionId}`);
+    return;
+  }
+
   const prompt = args.join(" ").trim();
   const useTui = Boolean(flags.tui);
   if (!prompt && !useTui) throw new Error("run requires a prompt");

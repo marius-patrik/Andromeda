@@ -8,6 +8,16 @@ import {
 
 const MODEL_RUN_MODES = new Set<SessionMode>(["orchestrator", "default", "chat", "task"]);
 const TIER_CONFLICTING_FLAGS = ["provider", "model", "agent", "agent-preset", "tui"] as const;
+const TIER_EXECUTION_FLAGS = [
+  "model-tier",
+  "effort",
+  "execution-policy",
+  "receipt",
+  "prompt-file",
+  "prompt-stdin",
+  "agent",
+  "agent-preset",
+] as const;
 
 export interface ModelExecutionCliInput {
   values: string[];
@@ -29,6 +39,11 @@ function optionalStringFlag(flags: Record<string, string | boolean>, name: strin
   return value.trim();
 }
 
+/** Keep partial canonical requests from silently falling through to legacy run. */
+export function selectsModelExecution(flags: Record<string, string | boolean>): boolean {
+  return TIER_EXECUTION_FLAGS.some((name) => flags[name] !== undefined);
+}
+
 /**
  * Admit exactly one prompt source. Large or sensitive review material should
  * use --prompt-file or --prompt-stdin so it never appears in the process argv.
@@ -38,6 +53,15 @@ export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput
   if (conflicting) {
     throw new Error(`run --model-tier cannot be combined with --${conflicting}`);
   }
+  // Admit the complete control contract before opening or consuming a prompt
+  // source. An incomplete invocation must not touch potentially sensitive input.
+  const modelTier = requiredStringFlag(input.flags, "model-tier");
+  const effort = requiredStringFlag(input.flags, "effort");
+  const executionPolicy = requiredStringFlag(input.flags, "execution-policy");
+  const receiptPath = requiredStringFlag(input.flags, "receipt");
+  const modeValue = optionalStringFlag(input.flags, "mode") ?? "default";
+  if (!MODEL_RUN_MODES.has(modeValue as SessionMode)) throw new Error("run --mode is invalid");
+
   const promptFile = optionalStringFlag(input.flags, "prompt-file");
   const promptStdin = input.flags["prompt-stdin"] === true;
   if (input.flags["prompt-stdin"] !== undefined && !promptStdin) {
@@ -54,7 +78,9 @@ export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput
     prompt = await readPromptFile(promptFile);
     promptSource = "file";
   } else if (promptStdin) {
-    if (!input.stdin) throw new Error("run --prompt-stdin requires piped input");
+    if (!input.stdin || (input.stdin as Readable & { isTTY?: boolean }).isTTY === true) {
+      throw new Error("run --prompt-stdin requires piped input");
+    }
     prompt = await readPromptStdin(input.stdin);
     promptSource = "stdin";
   } else {
@@ -62,14 +88,11 @@ export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput
     promptSource = "positional";
   }
 
-  const modeValue = optionalStringFlag(input.flags, "mode") ?? "default";
-  if (!MODEL_RUN_MODES.has(modeValue as SessionMode)) throw new Error("run --mode is invalid");
-
   return {
-    modelTier: requiredStringFlag(input.flags, "model-tier"),
-    effort: requiredStringFlag(input.flags, "effort"),
-    executionPolicy: requiredStringFlag(input.flags, "execution-policy"),
-    receiptPath: requiredStringFlag(input.flags, "receipt"),
+    modelTier,
+    effort,
+    executionPolicy,
+    receiptPath,
     workdir: input.workdir,
     mode: modeValue as SessionMode,
     prompt,
