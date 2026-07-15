@@ -65,6 +65,17 @@ test("release plans are deterministic for identical, ahead, diverged, and blocke
   );
 });
 
+test("release closure planning rejects truncated comparison history", async () => {
+  const gh = {
+    request: async (method: string, path: string) => {
+      if (method === "GET" && path.includes("/compare/")) return { total_commits: 251, commits: [] };
+      throw new Error(`unexpected mocked request: ${method} ${path}`);
+    }
+  };
+  release.configureReleaseRuntime({ gh, controlRepo: { owner: "marius-patrik", repo: "DarkFactory" } });
+  await assert.rejects(release.releaseClosurePlan(repo(), SHA.main, SHA.dev), /history is truncated/);
+});
+
 test("green dev-ahead release creates one marker-owned branch/PR and arms automerge idempotently", async () => {
   const refs = new Map([["main", SHA.main], ["dev", SHA.dev]]);
   const pulls: any[] = [];

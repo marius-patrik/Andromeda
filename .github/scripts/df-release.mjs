@@ -701,10 +701,14 @@ async function verifyReleasePullEvidence(repository, observation) {
   return { green: true, pull_request: pull.html_url, head_sha: pull.head.sha, checks, issues: issueNumbers };
 }
 
-async function releaseClosurePlan(repository, mainSha, devSha) {
+export async function releaseClosurePlan(repository, mainSha, devSha) {
   const comparison = await compare(repository, mainSha, devSha);
+  const commits = Array.isArray(comparison?.commits) ? comparison.commits : [];
+  if (Number.isInteger(comparison?.total_commits) && comparison.total_commits !== commits.length) {
+    throw new Error(`release closure history is truncated: observed ${commits.length} of ${comparison.total_commits} commits`);
+  }
   const issues = new Set();
-  for (const commit of Array.isArray(comparison?.commits) ? comparison.commits : []) {
+  for (const commit of commits) {
     for (const number of extractClosingIssueNumbers(commit?.commit?.message || "", repoName(repository))) issues.add(number);
     if (typeof commit?.sha !== "string") continue;
     let pulls = [];
