@@ -11,10 +11,9 @@ import {
   writeRunLedger
 } from "./df-lib.mjs";
 import {
-  AUTOREVIEW_RESULT_MARKER,
-  AUTOREVIEW_TARGET_VERSION_MARKER_PREFIX,
   resolveEffectiveIssueContent
 } from "../../src/issue-spec.ts";
+import { classifyExactAutoreviewResult } from "./run-darkfactory-autoreview.mjs";
 
 const CONTROL_REPOSITORY = { owner: "marius-patrik", repo: "DarkFactory" };
 const AUTOREVIEW_WORKFLOW = "darkfactory-autoreview.yml";
@@ -154,11 +153,18 @@ async function collectPullCandidates(repository) {
     if (!SHA.test(baseSha) || !SHA.test(headSha) || !Number.isSafeInteger(pull.number) || pull.number < 1) continue;
     const version = `${baseSha}:${headSha}`;
     const comments = await listAll(`/repos/${repoName(repository)}/issues/${pull.number}/comments?per_page=100`);
-    if (hasExactCompletion(comments, version) || hasFreshPending(comments, "pull-request", pull.number, version)) continue;
+    const completion = classifyExactAutoreviewResult(comments, version);
+    if (isSuccessfulCompletion(completion) || hasFreshPending(comments, "pull-request", pull.number, version)) continue;
     const checks = await gh.request("GET", `/repos/${repoName(repository)}/commits/${headSha}/check-runs?per_page=100`);
     if (Array.isArray(checks?.check_runs) && checks.check_runs.some((check) => check?.name === "DarkFactory Autoreview"
       && check?.app?.id === TRUSTED_GATE_APP_ID && check?.head_sha === headSha && check?.status !== "completed")) continue;
-    candidates.push({ kind: "pull_request", repository: repoName(repository), number: pull.number, version });
+    candidates.push({
+      kind: "pull_request",
+      repository: repoName(repository),
+      number: pull.number,
+      version,
+      recoveryReason: completion === "blocked" ? "blocked-result" : "missing-or-stale-result"
+    });
   }
   return candidates;
 }
@@ -171,14 +177,29 @@ async function collectIssueCandidates(repository) {
     if (labels.has("df:no-dispatch") || labels.has("df:running")) continue;
     const comments = await listAll(`/repos/${repoName(repository)}/issues/${issue.number}/comments?per_page=100`);
     const version = resolveEffectiveIssueContent(issue, comments).version;
-    if (!/^[0-9a-f]{64}$/.test(version) || hasExactCompletion(comments, version) || hasFreshPending(comments, "issue", issue.number, version)) continue;
-    candidates.push({ kind: "issue", repository: repoName(repository), number: issue.number, version });
+    const completion = classifyExactAutoreviewResult(comments, version);
+    if (!/^[0-9a-f]{64}$/.test(version)
+      || (isSuccessfulCompletion(completion) && labels.has("df:reviewed"))
+      || hasFreshPending(comments, "issue", issue.number, version)) continue;
+    candidates.push({
+      kind: "issue",
+      repository: repoName(repository),
+      number: issue.number,
+      version,
+      recoveryReason: isSuccessfulCompletion(completion)
+        ? "reviewed-label-repair"
+        : completion === "blocked" ? "blocked-result" : "missing-or-stale-result"
+    });
   }
   return candidates;
 }
 
 async function dispatchCandidate(candidate, context) {
-  await assertCandidateCurrent(candidate);
+  if (await assertCandidateCurrent(candidate)) {
+    const result = { ...publicCandidate(candidate), status: "current", workflow: AUTOREVIEW_WORKFLOW };
+    await recordLedger("autoreview-recovery-dispatch", candidate.repository, result);
+    return result;
+  }
   await recordLedger("autoreview-recovery-admission", candidate.repository, {
     status: "admitted",
     ...publicCandidate(candidate),
@@ -190,7 +211,14 @@ async function dispatchCandidate(candidate, context) {
   const comment = await gh.request("POST", `/repos/${candidate.repository}/issues/${candidate.number}/comments`, { body: marker });
   try {
     if (!Number.isSafeInteger(comment?.id)) throw new Error(`Recovery pending marker for ${candidate.repository}#${candidate.number} has no exact comment identity`);
-    await assertCandidateCurrent(candidate, comment.id);
+    if (await assertCandidateCurrent(candidate, comment.id)) {
+      await gh.request("PATCH", `/repos/${candidate.repository}/issues/comments/${comment.id}`, {
+        body: renderPendingMarker(candidate, "current", "Exact successful completion became current before recovery dispatch.")
+      });
+      const result = { ...publicCandidate(candidate), status: "current", workflow: AUTOREVIEW_WORKFLOW, pendingComment: comment?.html_url || null };
+      await recordLedger("autoreview-recovery-dispatch", candidate.repository, result);
+      return result;
+    }
     await gh.request("POST", `/repos/${candidate.repository}/actions/workflows/${AUTOREVIEW_WORKFLOW}/dispatches`, {
       ref: "main",
       inputs: { target_kind: candidate.kind, target_number: String(candidate.number), target_version: candidate.version }
@@ -220,13 +248,13 @@ async function assertCandidateCurrent(candidate, admittedCommentId = null) {
       throw new Error(`Pull request ${candidate.repository}#${candidate.number} changed before recovery dispatch`);
     }
     const comments = await listAll(`/repos/${repoName(repository)}/issues/${candidate.number}/comments?per_page=100`);
-    assertNoConcurrentResult(candidate, comments, admittedCommentId);
+    if (assertNoConcurrentResult(candidate, comments, admittedCommentId)) return true;
     const checks = await gh.request("GET", `/repos/${repoName(repository)}/commits/${pull.head.sha}/check-runs?per_page=100`);
     if (Array.isArray(checks?.check_runs) && checks.check_runs.some((check) => check?.name === "DarkFactory Autoreview"
       && check?.app?.id === TRUSTED_GATE_APP_ID && check?.head_sha === pull.head.sha && check?.status !== "completed")) {
       throw new Error(`Pull request ${candidate.repository}#${candidate.number} acquired a trusted pending Autoreview check before recovery dispatch`);
     }
-    return;
+    return false;
   }
   const issue = await gh.request("GET", `/repos/${candidate.repository}/issues/${candidate.number}`);
   const comments = await listAll(`/repos/${repoName(repository)}/issues/${candidate.number}/comments?per_page=100`);
@@ -236,12 +264,13 @@ async function assertCandidateCurrent(candidate, admittedCommentId = null) {
   if (resolveEffectiveIssueContent(issue, comments).version !== candidate.version) {
     throw new Error(`Issue ${candidate.repository}#${candidate.number} changed before recovery dispatch`);
   }
-  assertNoConcurrentResult(candidate, comments, admittedCommentId);
+  return assertNoConcurrentResult(candidate, comments, admittedCommentId, issue);
 }
 
-function assertNoConcurrentResult(candidate, comments, admittedCommentId) {
-  if (hasExactCompletion(comments, candidate.version)) {
-    throw new Error(`${candidate.repository}#${candidate.number} acquired an exact Autoreview result before recovery dispatch`);
+function assertNoConcurrentResult(candidate, comments, admittedCommentId, issue = null) {
+  const completion = classifyExactAutoreviewResult(comments, candidate.version);
+  if (isSuccessfulCompletion(completion)) {
+    if (candidate.kind === "pull_request" || issueLabels(issue).has("df:reviewed")) return true;
   }
   const kind = candidate.kind === "pull_request" ? "pull-request" : "issue";
   const otherComments = admittedCommentId === null
@@ -250,14 +279,17 @@ function assertNoConcurrentResult(candidate, comments, admittedCommentId) {
   if (hasFreshPending(otherComments, kind, candidate.number, candidate.version)) {
     throw new Error(`${candidate.repository}#${candidate.number} acquired another fresh recovery admission before dispatch`);
   }
+  return false;
 }
 
-function hasExactCompletion(comments, version) {
-  const marker = `${AUTOREVIEW_TARGET_VERSION_MARKER_PREFIX}${version} -->`;
-  return comments.some((comment) => normalizeWorkerPullRequestActor(comment?.user) !== null
-    && typeof comment?.body === "string"
-    && comment.body.startsWith(AUTOREVIEW_RESULT_MARKER)
-    && comment.body.includes(marker));
+function isSuccessfulCompletion(value) {
+  return value === "clean" || value === "owner_override";
+}
+
+function issueLabels(issue) {
+  return new Set((Array.isArray(issue?.labels) ? issue.labels : [])
+    .map((label) => typeof label === "string" ? label : label?.name)
+    .filter((label) => typeof label === "string" && label));
 }
 
 function hasFreshPending(comments, kind, number, version) {
@@ -279,7 +311,13 @@ function renderPendingMarker(candidate, status, detail) {
 }
 
 function publicCandidate(candidate) {
-  return { kind: candidate.kind, repository: candidate.repository, number: candidate.number, version: candidate.version };
+  return {
+    kind: candidate.kind,
+    repository: candidate.repository,
+    number: candidate.number,
+    version: candidate.version,
+    recoveryReason: candidate.recoveryReason
+  };
 }
 
 async function recordLedger(kind, target, payload) {

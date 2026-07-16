@@ -50,6 +50,7 @@ const PROTECTED_BRANCHES = new Set(["main", "dev"]);
 const ALLOWED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const TEXT_FILE_BYTES = 1000000;
 const WINDOWS_RESERVED_SEGMENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+const SUCCESSFUL_RESULT_VERDICTS = new Set(["clean", "owner_override"]);
 
 function stableError(code, message) {
   const error = new Error(message);
@@ -202,6 +203,75 @@ function ownerHistory(title, body) {
 
 function pullVersion(pull) {
   return `${pull.base?.sha || "missing"}:${pull.head?.sha || "missing"}`;
+}
+
+function issueLabels(issue) {
+  return new Set((Array.isArray(issue?.labels) ? issue.labels : [])
+    .map((label) => typeof label === "string" ? label : label?.name)
+    .filter((label) => typeof label === "string" && label));
+}
+
+export function classifyExactAutoreviewResult(comments, version) {
+  if (!Array.isArray(comments) || typeof version !== "string" || !version) return "none";
+  const latest = [...comments].reverse().find((comment) =>
+    normalizeWorkerPullRequestActor(comment?.user) !== null
+      && typeof comment?.body === "string"
+      && comment.body.startsWith(REVIEW_MARKER)
+  );
+  if (!latest) return "none";
+  const lines = latest.body.replace(/\r\n/g, "\n").split("\n");
+  if (!lines.includes(autoreviewTargetVersionMarker(version))) return "stale";
+  const verdict = lines.find((line) => line.startsWith("**Verdict:** ")) || "";
+  if (verdict === "**Verdict:** Clean high confirmation") return "clean";
+  if (verdict === "**Verdict:** Auditable owner override") return "owner_override";
+  if (verdict === "**Verdict:** Blocked closed") return "blocked";
+  return "unknown";
+}
+
+export async function reconcileExactIssueCompletion({ gh, repository, number, expectedVersion }) {
+  if (!/^[0-9a-f]{64}$/.test(expectedVersion || "")) {
+    throw stableError("target_policy_blocked", "Issue completion reconciliation requires an exact lowercase SHA-256 version");
+  }
+  const readEvidence = async () => {
+    const [issue, comments] = await Promise.all([
+      gh.request("GET", `/repos/${repoName(repository)}/issues/${number}`),
+      fetchAll(gh, `/repos/${repoName(repository)}/issues/${number}/comments`)
+    ]);
+    if (issue?.pull_request || issue?.state !== "open") {
+      throw stableError("target_policy_blocked", "Issue completion reconciliation requires an open issue");
+    }
+    const effective = resolveEffectiveIssueContent(issue, comments);
+    if (effective.version !== expectedVersion) {
+      throw stableError("stale_target", "Issue changed before completion reconciliation");
+    }
+    return {
+      issue,
+      comments,
+      verdict: classifyExactAutoreviewResult(comments, expectedVersion),
+      reviewed: issueLabels(issue).has("df:reviewed")
+    };
+  };
+
+  let evidence = await readEvidence();
+  if (!SUCCESSFUL_RESULT_VERDICTS.has(evidence.verdict)) return null;
+  const labelStatus = evidence.reviewed ? "current" : "applied";
+  if (!evidence.reviewed) {
+    await gh.request("POST", `/repos/${repoName(repository)}/issues/${number}/labels`, { labels: ["df:reviewed"] });
+    evidence = await readEvidence();
+    if (!SUCCESSFUL_RESULT_VERDICTS.has(evidence.verdict) || !evidence.reviewed) {
+      throw stableError("automation_failure", "GitHub did not confirm the exact successful issue result and reviewed label together");
+    }
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    ok: true,
+    state: evidence.verdict,
+    code: null,
+    targetVersion: expectedVersion,
+    rounds: Object.freeze([]),
+    recovered: true,
+    reviewedLabel: labelStatus
+  });
 }
 
 function commandEnvironment(token, hooksRoot) {
@@ -932,9 +1002,14 @@ export async function executeAutoreview(environment = process.env) {
     const directBaseSha = environment.DF_EXPECTED_BASE_SHA?.trim() || "";
     const directHeadSha = environment.DF_EXPECTED_HEAD_SHA?.trim() || "";
     const expectedPullVersion = environment.DF_EXPECTED_PR_VERSION?.trim() || "";
+    const expectedIssueVersion = environment.DF_EXPECTED_ISSUE_VERSION?.trim() || "";
     const [versionBaseSha = "", versionHeadSha = "", ...extraVersionParts] = expectedPullVersion.split(":");
     if (kind === "pull_request" && (!directBaseSha || !directHeadSha) && (extraVersionParts.length > 0 || !versionBaseSha || !versionHeadSha)) {
       throw stableError("target_policy_blocked", "Pull request version must be exact BASE_SHA:HEAD_SHA");
+    }
+    if (kind === "issue") {
+      const recovered = await reconcileExactIssueCompletion({ gh, repository, number, expectedVersion: expectedIssueVersion });
+      if (recovered) return recovered;
     }
     const target = kind === "pull_request"
       ? await createPullRequestTarget({
@@ -1003,9 +1078,13 @@ export async function executeAutoreview(environment = process.env) {
     if (!result.ok) return result;
 
     if (kind === "issue") {
-      const finalSnapshot = await target.read();
-      if (finalSnapshot.version !== result.targetVersion) throw stableError("stale_target", "Issue changed before reviewed label publication");
-      await gh.request("POST", `/repos/${repoName(repository)}/issues/${number}/labels`, { labels: ["df:reviewed"] });
+      const completion = await reconcileExactIssueCompletion({
+        gh,
+        repository,
+        number,
+        expectedVersion: result.targetVersion
+      });
+      if (!completion) throw stableError("automation_failure", "Exact clean issue result was not observable before reviewed label publication");
     }
     return result;
   } finally {

@@ -201,6 +201,50 @@ test("Autoreview result comments never patch an untrusted marker owner", async (
   assert.deepEqual(writes, [{ method: "POST", path: "/repos/marius-patrik/DarkFactory/issues/39/comments" }]);
 });
 
+test("exact clean issue completion repairs a missing reviewed label idempotently after a failed label write", async () => {
+  // @ts-ignore The base-trusted workflow runner is native ESM and shared directly with recovery.
+  const { reconcileExactIssueCompletion } = await import("../.github/scripts/run-darkfactory-autoreview.mjs");
+  const repository = { owner: "marius-patrik", repo: "DarkFactory" };
+  const issue = { number: 39, title: "Reviewed issue", body: "# Goal\n\nExact", state: "open", labels: [] as any[] };
+  const version = issueVersion(issue);
+  const comments = [{
+    id: 91,
+    user: { login: "darkfactory-agent[bot]", type: "Bot" },
+    body: [
+      AUTOREVIEW_RESULT_MARKER,
+      `<!-- darkfactory-autoreview-target version=${version} -->`,
+      "## DarkFactory Autoreview",
+      "",
+      "**Verdict:** Clean high confirmation"
+    ].join("\n")
+  }];
+  let labelAttempts = 0;
+  const gh = {
+    async request(method: string, requestPath: string) {
+      if (method === "GET" && requestPath === "/repos/marius-patrik/DarkFactory/issues/39") return structuredClone(issue);
+      if (method === "GET" && requestPath.includes("/repos/marius-patrik/DarkFactory/issues/39/comments?")) return structuredClone(comments);
+      if (method === "POST" && requestPath === "/repos/marius-patrik/DarkFactory/issues/39/labels") {
+        labelAttempts += 1;
+        if (labelAttempts === 1) throw new Error("transient label write failure");
+        issue.labels = [{ name: "df:reviewed" }];
+        return issue.labels;
+      }
+      throw new Error(`unexpected ${method} ${requestPath}`);
+    }
+  };
+
+  await assert.rejects(
+    reconcileExactIssueCompletion({ gh, repository, number: 39, expectedVersion: version }),
+    /transient label write failure/
+  );
+  const repaired = await reconcileExactIssueCompletion({ gh, repository, number: 39, expectedVersion: version });
+  assert.equal(repaired.reviewedLabel, "applied");
+  assert.equal(repaired.state, "clean");
+  const current = await reconcileExactIssueCompletion({ gh, repository, number: 39, expectedVersion: version });
+  assert.equal(current.reviewedLabel, "current");
+  assert.equal(labelAttempts, 2);
+});
+
 test("only a prior Autoreview failure is retryable without changing owner intent", () => {
   const reviewed = reviewedState();
   const blocked = {

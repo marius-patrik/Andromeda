@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { issueVersion } from "../src/issue-spec.ts";
 
 // @ts-ignore Native ESM workflow policy is exercised directly.
 const policyModule: any = await import("../.github/scripts/df-trigger-policy.mjs");
 // @ts-ignore Trusted recovery controller is native ESM and exercised directly.
 const recoveryModule: any = await import("../.github/scripts/df-autoreview-recovery.mjs?unit=trigger-policy-recovery-test");
+// @ts-ignore Base-trusted Autoreview result classification is exercised directly.
+const autoreviewRunner: any = await import("../.github/scripts/run-darkfactory-autoreview.mjs?unit=trigger-policy-result-test");
 const {
   REQUIRED_LOOP_IDS,
   admitLoopInvocation,
@@ -238,7 +241,7 @@ test("Autoreview recovery suppresses exact completed and fresh pending targets",
       if (method === "GET" && requestPath.includes("/issues/3/comments?")) return [{
         user: trusted,
         created_at: "2026-07-16T11:59:00Z",
-        body: `<!-- darkfactory-autoreview -->\n<!-- darkfactory-autoreview-target version=${version} -->\nclean`
+        body: `<!-- darkfactory-autoreview -->\n<!-- darkfactory-autoreview-target version=${version} -->\n## DarkFactory Autoreview\n\n**Verdict:** Clean high confirmation`
       }];
       if (method === "GET" && requestPath.includes("/issues/4/comments?")) return [{
         user: trusted,
@@ -263,6 +266,98 @@ test("Autoreview recovery suppresses exact completed and fresh pending targets",
   const result = await recoveryModule.recoverAutoreviews({ kind: "all", maxDispatches: 2, trigger: "test" });
   assert.equal(result.candidates, 0);
   assert.deepEqual(result.dispatched, []);
+});
+
+test("Autoreview result classification admits only exact trusted clean or owner-override verdicts", () => {
+  const version = `${"1".repeat(40)}:${"2".repeat(40)}`;
+  const trusted = { login: "darkfactory-agent[bot]", type: "Bot" };
+  const result = (verdict: string, user = trusted, targetVersion = version, suffix = "") => [{
+    user,
+    body: [
+      "<!-- darkfactory-autoreview -->",
+      `<!-- darkfactory-autoreview-target version=${targetVersion} -->`,
+      "## DarkFactory Autoreview",
+      "",
+      `**Verdict:** ${verdict}`,
+      suffix
+    ].join("\n")
+  }];
+
+  assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Clean high confirmation"), version), "clean");
+  assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Blocked closed"), version), "blocked");
+  assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Auditable owner override"), version), "owner_override");
+  assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Clean high confirmation", { login: "attacker", type: "User" }), version), "none");
+  assert.equal(autoreviewRunner.classifyExactAutoreviewResult(result("Clean high confirmation", trusted, `${"3".repeat(40)}:${"4".repeat(40)}`), version), "stale");
+  assert.equal(
+    autoreviewRunner.classifyExactAutoreviewResult(result("Blocked closed", trusted, version, "**Verdict:** Clean high confirmation"), version),
+    "blocked"
+  );
+});
+
+test("Autoreview recovery retries blocked results and dispatches exact reviewed-label repair only when needed", async () => {
+  const trusted = { login: "darkfactory-agent[bot]", type: "Bot" };
+  const issues = [
+    { number: 8, title: "Repair label", body: "# Goal\n\nRepair", state: "open", labels: [] },
+    { number: 9, title: "Already clean", body: "# Goal\n\nClean", state: "open", labels: [{ name: "df:reviewed" }] },
+    { number: 10, title: "Owner override", body: "# Goal\n\nOverride", state: "open", labels: ["df:reviewed"] },
+    { number: 11, title: "Retry blocked", body: "# Goal\n\nBlocked", state: "open", labels: [] }
+  ];
+  const verdicts = new Map([[8, "Clean high confirmation"], [9, "Clean high confirmation"], [10, "Auditable owner override"], [11, "Blocked closed"]]);
+  const comments = new Map<number, any[]>(issues.map((issue) => [issue.number, [{
+    id: issue.number * 10,
+    user: trusted,
+    created_at: "2026-07-16T10:00:00Z",
+    body: [
+      "<!-- darkfactory-autoreview -->",
+      `<!-- darkfactory-autoreview-target version=${issueVersion(issue)} -->`,
+      "## DarkFactory Autoreview",
+      "",
+      `**Verdict:** ${verdicts.get(issue.number)}`
+    ].join("\n")
+  }]]));
+  const dispatches: any[] = [];
+  let nextCommentId = 1_000;
+  const gh = {
+    async request(method: string, requestPath: string, body?: any) {
+      if (method === "GET" && requestPath.includes("/pulls?")) return [];
+      if (method === "GET" && requestPath.includes("/issues?state=open")) return issues;
+      const commentMatch = /\/issues\/(\d+)\/comments\?/.exec(requestPath);
+      if (method === "GET" && commentMatch) return comments.get(Number(commentMatch[1])) || [];
+      const issueMatch = /\/issues\/(\d+)$/.exec(requestPath);
+      if (method === "GET" && issueMatch) return issues.find((issue) => issue.number === Number(issueMatch[1]));
+      const commentPost = /\/issues\/(\d+)\/comments$/.exec(requestPath);
+      if (method === "POST" && commentPost) {
+        const number = Number(commentPost[1]);
+        const comment = { id: nextCommentId++, user: trusted, created_at: "2026-07-16T12:00:00Z", body: body.body, html_url: `https://github.com/comment/${nextCommentId}` };
+        comments.get(number)?.push(comment);
+        return comment;
+      }
+      if (method === "POST" && requestPath.endsWith("/actions/workflows/darkfactory-autoreview.yml/dispatches")) {
+        dispatches.push(body);
+        return {};
+      }
+      throw new Error(`unexpected ${method} ${requestPath}`);
+    }
+  };
+  recoveryModule.configureAutoreviewRecoveryRuntime({
+    gh,
+    ledgerGh: gh,
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    controlRevision: "a".repeat(40),
+    controlMetadata: { archived: false, disabled: false },
+    activeRepositories: [],
+    dataRepositories: [],
+    now: Date.parse("2026-07-16T12:00:00Z"),
+    async writeLedger() {}
+  });
+
+  const result = await recoveryModule.recoverAutoreviews({ kind: "issue", maxDispatches: 4, trigger: "test" });
+  assert.equal(result.candidates, 2);
+  assert.deepEqual(result.dispatched.map((entry: any) => [entry.number, entry.recoveryReason]), [
+    [8, "reviewed-label-repair"],
+    [11, "blocked-result"]
+  ]);
+  assert.deepEqual(dispatches.map((entry) => Number(entry.inputs.target_number)), [8, 11]);
 });
 
 test("active recovery workflows bind trusted main, Agent OS, scoped tokens, exact plans, and no bypasses", async () => {
