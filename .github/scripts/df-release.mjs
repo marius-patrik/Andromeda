@@ -117,11 +117,12 @@ function validateProducer(producer) {
   }
 }
 
-export function classifyConvergence(mainSha, devSha, comparison) {
+export function classifyConvergence(mainSha, devSha, comparison, mainTreeSha = null, devTreeSha = null) {
   if (!mainSha && !devSha) return "missing-both";
   if (!mainSha) return "missing-main";
   if (!devSha) return "missing-dev";
   if (mainSha === devSha) return "identical";
+  if (mainTreeSha && devTreeSha && mainTreeSha === devTreeSha) return "tree-identical";
   if (!isRecord(comparison)
       || !["ahead", "behind", "diverged", "identical"].includes(comparison.status)
       || !Number.isInteger(comparison.ahead_by)
@@ -201,7 +202,11 @@ export async function observeReleaseState(repository) {
   ]);
   let comparison = null;
   if (mainSha && devSha && mainSha !== devSha) comparison = await compare(repository, "main", "dev");
-  const classification = classifyConvergence(mainSha, devSha, comparison);
+  const [mainTreeSha, devTreeSha] = await Promise.all([
+    mainSha ? commitTreeSha(repository, mainSha) : null,
+    devSha ? commitTreeSha(repository, devSha) : null
+  ]);
+  const classification = classifyConvergence(mainSha, devSha, comparison, mainTreeSha, devTreeSha);
   const mainChecks = mainSha && mainProtection
     ? evaluateRequiredChecks(
         mainProtection,
@@ -211,7 +216,7 @@ export async function observeReleaseState(repository) {
       )
     : null;
   return {
-    repository: repoName(repository), metadata, policy, mainSha, devSha, comparison, classification,
+    repository: repoName(repository), metadata, policy, mainSha, devSha, mainTreeSha, devTreeSha, comparison, classification,
     protections: { main: summarizeProtection(mainProtection, policy), dev: summarizeProtection(devProtection, policy) },
     rawProtections: { main: mainProtection, dev: devProtection },
     mainChecks,
@@ -224,6 +229,8 @@ export function buildReleasePlan(observation) {
     repository: observation.repository,
     main: observation.mainSha || null,
     dev: observation.devSha || null,
+    mainTree: observation.mainTreeSha || null,
+    devTree: observation.devTreeSha || null,
     classification: observation.classification,
     policy: observation.policy?.mode || null
   };
@@ -232,8 +239,9 @@ export function buildReleasePlan(observation) {
   let reason = observation.classification;
   if (observation.classification === "non-releasing") { action = "skip"; reason = "policy-disabled"; }
   else if (observation.classification === "identical") { action = "verify"; reason = "main-dev-identical"; }
+  else if (observation.classification === "tree-identical") { action = "verify"; reason = "reviewed-pr-tree-converged"; }
   else if (observation.classification === "dev-ahead") { action = "release"; reason = "verified-dev-ahead"; }
-  else if (observation.classification === "main-ahead") { action = "owner-required"; reason = "reviewed-pr-versus-exact-sha-contract"; }
+  else if (observation.classification === "main-ahead") { action = "reconcile-fast-forward"; reason = "review-main-into-dev"; }
   else if (observation.classification === "diverged") { action = "reconcile-merge"; reason = "main-dev-diverged"; }
   else if (observation.classification === "missing-dev") { action = "owner-required"; reason = "missing-dev-recovery-contract"; }
   return { schemaVersion: 1, planId, evidence, action, reason };
@@ -285,6 +293,8 @@ export async function runReleaseCommand({ mode, repository }) {
       repository: repoName(repository),
       main_sha: action.main_sha,
       dev_sha: action.dev_sha,
+      main_tree_sha: action.main_tree_sha,
+      dev_tree_sha: action.dev_tree_sha,
       policy_mode: action.policy_mode,
       release: action.release,
       publication: action.publication
@@ -365,12 +375,40 @@ export async function reconcile(repository, observation, plan) {
 }
 
 async function reconcileFastForward(repository, observation, plan) {
-  return await upsertConvergenceContractIssue(repository, observation, plan);
+  await assertRefsUnchanged(repository, observation.mainSha, observation.devSha);
+  await assertCurrentProtections(repository, observation.policy);
+  const branch = `${observation.policy.reconcileBranchPrefix}${observation.mainSha.slice(0, 8)}-${observation.devSha.slice(0, 8)}`;
+  await ensureExactBranch(repository, branch, observation.mainSha);
+  const pull = await ensurePull(repository, {
+    branch,
+    base: "dev",
+    title: `Reconcile main into dev (${plan.planId})`,
+    body: reconciliationPullBody(observation, plan, branch, observation.mainSha)
+  });
+  assertTrustedPull(repository, pull, branch, "dev", observation.mainSha);
+  let currentProtections = await assertCurrentProtections(repository, observation.policy);
+  let checks = await checksFor(repository, pull.head.sha, currentProtections.dev, observation.policy);
+  if (!checks.green) return { action: "reconcile", status: "waiting-for-green", pull_request: pull.html_url, branch, checks };
+  await assertRefsUnchanged(repository, observation.mainSha, observation.devSha);
+  currentProtections = await assertCurrentProtections(repository, observation.policy);
+  const currentPull = await gh.request("GET", `/repos/${repoName(repository)}/pulls/${pull.number}`);
+  assertTrustedPull(repository, currentPull, branch, "dev", observation.mainSha);
+  if (currentPull.state !== "open") throw new Error("reconciliation pull request is no longer open");
+  checks = await checksFor(repository, currentPull.head.sha, currentProtections.dev, observation.policy);
+  if (!checks.green) return { action: "reconcile", status: "waiting-for-green", pull_request: pull.html_url, branch, checks };
+  await enableAutoMerge(currentPull);
+  return { action: "reconcile", status: "automerge-armed", pull_request: pull.html_url, branch, checks };
 }
 
 export async function verifyRelease(repository, observation, plan) {
-  if (observation.classification !== "identical" || !observation.mainSha || observation.mainSha !== observation.devSha) {
-    throw new Error(`release verification requires exact main/dev identity, observed ${observation.classification}`);
+  const exactCommitIdentity = Boolean(observation.mainSha && observation.mainSha === observation.devSha);
+  const exactTreeIdentity = Boolean(
+    observation.mainTreeSha
+    && observation.devTreeSha
+    && observation.mainTreeSha === observation.devTreeSha
+  );
+  if (!exactCommitIdentity && !exactTreeIdentity) {
+    throw new Error(`release verification requires exact commit or tree identity, observed ${observation.classification}`);
   }
   assertMutationPreconditions(observation);
   await assertRefsUnchanged(repository, observation.mainSha, observation.devSha);
@@ -399,6 +437,7 @@ export async function verifyRelease(repository, observation, plan) {
   return {
     action: "verify", status: "verified", verified: true,
     repository: repoName(repository), main_sha: observation.mainSha, dev_sha: observation.devSha,
+    main_tree_sha: observation.mainTreeSha || null, dev_tree_sha: observation.devTreeSha || null,
     policy_mode: observation.policy.mode, checks, release: releaseEvidence, publication: declared,
     verified_absent_automation_branches: cleaned
   };
@@ -454,6 +493,15 @@ async function optionalRefHead(repository, branch) {
     if (error.status === 404 || error.status === 409) return null;
     throw error;
   }
+}
+
+async function commitTreeSha(repository, sha) {
+  const commit = await gh.request("GET", `/repos/${repoName(repository)}/git/commits/${sha}`);
+  const treeSha = commit?.tree?.sha;
+  if (typeof treeSha !== "string" || !/^[0-9a-f]{40}$/i.test(treeSha)) {
+    throw new Error(`commit ${sha} returned no exact tree identity`);
+  }
+  return treeSha.toLowerCase();
 }
 
 async function optionalProtection(repository, branch) {
@@ -669,15 +717,24 @@ async function ensureDeclaredPublication(repository, observation, evidence) {
 }
 
 async function verifyReleasePullEvidence(repository, observation) {
-  const pulls = await listAll(`/repos/${repoName(repository)}/pulls?state=closed&base=main&per_page=100`);
+  const pulls = await listAll(`/repos/${repoName(repository)}/pulls?state=closed&per_page=100`);
   const candidates = [];
   for (const summary of pulls) {
     const pull = await gh.request("GET", `/repos/${repoName(repository)}/pulls/${summary.number}`);
-    if (!isTrustedReleasePull(repository, observation.policy, pull)) continue;
     if (pull?.merged !== true || !pull?.merged_at || typeof pull?.head?.sha !== "string") continue;
-    const relation = await compare(repository, pull.head.sha, observation.mainSha);
+    const kind = isTrustedReleasePull(repository, observation.policy, pull)
+      ? "release"
+      : isTrustedReconciliationPull(repository, observation.policy, pull) ? "reconcile" : null;
+    if (!kind) continue;
+    const targetSha = kind === "release" ? observation.mainSha : observation.devSha;
+    const relation = await compare(repository, pull.head.sha, targetSha);
     if (!isValidComparison(relation) || !["ahead", "identical"].includes(relation.status) || relation.behind_by !== 0) continue;
-    candidates.push(pull);
+    const headTreeSha = await commitTreeSha(repository, pull.head.sha);
+    const convergedTreeSha = observation.mainTreeSha && observation.mainTreeSha === observation.devTreeSha
+      ? observation.mainTreeSha
+      : null;
+    if (!convergedTreeSha || headTreeSha !== convergedTreeSha) continue;
+    candidates.push({ pull, kind });
   }
   if (candidates.length === 0) {
     return {
@@ -688,17 +745,20 @@ async function verifyReleasePullEvidence(repository, observation) {
       pull_request: null, issues: []
     };
   }
-  candidates.sort((a, b) => String(b.merged_at).localeCompare(String(a.merged_at)));
-  const pull = candidates[0];
-  const checks = await checksFor(repository, pull.head.sha, observation.rawProtections.main, observation.policy);
-  if (!checks.green) return { green: false, reason: "release-pr-gates-not-green", pull_request: pull.html_url, checks };
-  const marker = String(pull.body || "").match(/<!-- darkfactory:release-issues ([0-9,]*) -->/);
+  candidates.sort((a, b) => String(b.pull.merged_at).localeCompare(String(a.pull.merged_at)));
+  const { pull, kind } = candidates[0];
+  const protection = kind === "release" ? observation.rawProtections.main : observation.rawProtections.dev;
+  const checks = await checksFor(repository, pull.head.sha, protection, observation.policy);
+  if (!checks.green) return { green: false, reason: `${kind}-pr-gates-not-green`, pull_request: pull.html_url, checks };
+  const marker = kind === "release"
+    ? String(pull.body || "").match(/<!-- darkfactory:release-issues ([0-9,]*) -->/)
+    : null;
   const issueNumbers = marker?.[1] ? marker[1].split(",").map(Number).filter((number) => Number.isInteger(number) && number > 0) : [];
   for (const issueNumber of issueNumbers) {
     const issue = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
     if (issue?.state !== "closed" || issue?.pull_request) return { green: false, reason: `linked-issue-${issueNumber}-not-closed`, pull_request: pull.html_url, checks };
   }
-  return { green: true, pull_request: pull.html_url, head_sha: pull.head.sha, checks, issues: issueNumbers };
+  return { green: true, kind, pull_request: pull.html_url, head_sha: pull.head.sha, tree_sha: observation.mainTreeSha, checks, issues: issueNumbers };
 }
 
 export async function releaseClosurePlan(repository, mainSha, devSha) {
@@ -738,25 +798,23 @@ async function upsertConvergenceContractIssue(repository, observation, plan) {
   const existing = await findOpenIssueByMarker(repository, marker);
   const body = [
     marker,
-    "# Decide the protected-branch convergence invariant",
+    "# Restore the missing protected dev branch",
     "",
     `Repository: ${repoName(repository)}`,
     `Observed state: ${observation.classification}`,
     `Main: \`${observation.mainSha || "missing"}\``,
     `Dev: \`${observation.devSha || "missing"}\``,
     "",
-    "GitHub cannot simultaneously provide exact main/dev SHA identity, normal reviewed PR landing, and a ban on direct protected-ref writes: merge commits are no-ff and rebase/squash create new SHAs. A deleted dev base likewise cannot be recreated by a PR.",
+    "DarkFactory uses PR-only protected landing and defines convergence as reviewed ancestry plus exact tree identity. That contract handles normal main-ahead reconciliation without writing either protected ref.",
     "",
-    "Choose one explicit contract:",
-    "1. permit an auditable compare-and-swap, non-force dev ref update or creation only after exact green reviewed-PR evidence; or",
-    "2. retain PR-only landing and define convergence as reviewed ancestry plus exact tree identity instead of identical commit SHA.",
+    "The dev branch is absent, so GitHub has no PR base on which to perform that reviewed landing. Restoring it requires an explicit owner action to create the protected branch before DarkFactory can resume through a PR.",
     "",
-    "DarkFactory remains fail-closed and performs neither protected-ref mutation nor a misleading convergence claim until this owner decision is recorded in #41."
+    "DarkFactory remains fail-closed: it will not create or update the protected dev ref, bypass protection, or claim convergence until the owner restores the branch and the normal reviewed lane completes."
   ].join("\n");
   const issue = existing
     ? await gh.request("PATCH", `/repos/${repoName(repository)}/issues/${existing.number}`, { body, labels: ["P0", "df:ask-owner"] })
     : await gh.request("POST", `/repos/${repoName(repository)}/issues`, {
-      title: "Choose exact-SHA or PR-only release convergence", body, labels: ["P0", "df:ask-owner"]
+      title: "Restore the missing protected dev branch", body, labels: ["P0", "df:ask-owner"]
     });
   return { action: "release-contract", status: "owner-required", reason: plan.reason, issue: issue.html_url };
 }
@@ -855,6 +913,9 @@ function publicObservation(observation) {
     classification: observation.classification,
     main_sha: observation.mainSha || null,
     dev_sha: observation.devSha || null,
+    main_tree_sha: observation.mainTreeSha || null,
+    dev_tree_sha: observation.devTreeSha || null,
+    convergence_invariant: "reviewed-ancestry-and-exact-tree-identity",
     policy: observation.policy,
     protections: observation.protections,
     main_checks: observation.mainChecks

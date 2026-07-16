@@ -260,15 +260,16 @@ and a completion receipt afterward. There is no force, bypass, or prune mode.
 ancestry and declared release policy without writing. `reconcile` creates one
 marker-owned reviewed lane for diverged state; conflicts that GitHub cannot
 merge are escalated with bounded exact diff hunks instead of a guessed
-resolution. Main-ahead and missing-dev states fail closed with one App-owned
-`df:ask-owner` contract issue: GitHub cannot combine normal reviewed PR landing,
-identical post-release commit SHAs, and a ban on direct protected-ref writes.
-The owner must choose either evidence-gated compare-and-swap of `dev`, or
-PR-only convergence defined by reviewed ancestry and identical trees. `run`
+resolution. The selected invariant is PR-only convergence: different merge
+commit identities are converged only when their Git trees are exactly equal and
+trusted, gated release or reconciliation PR ancestry proves how each protected
+branch arrived there. Main-ahead state therefore reconciles through a normal PR
+to `dev`; missing `dev` alone fails closed with an App-owned `df:ask-owner`
+issue because GitHub cannot open a PR against a nonexistent base branch. `run`
 creates or resumes `release/<dev-sha>` and arms
 automerge only after current app-bound Validate and clean high-confirmed
 DarkFactory Autoreview gates. `verify` proves green main CI, release-PR evidence,
-linked issue closure, exact main/dev identity, branch protections, and declared
+linked issue closure, exact main/dev tree identity, branch protections, and declared
 tag/artifact/publication policy, then emits the receipt consumed by submodule
 autoupdate. GitHub's configured atomic delete-on-merge owns automation-branch
 cleanup; DarkFactory verifies trusted release and reconciliation branches are

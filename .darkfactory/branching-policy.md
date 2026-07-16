@@ -10,6 +10,9 @@ repository's canonical released product state.
 - Force-pushes, deletion, and administrative gate bypass remain disabled.
 - Release pull requests move reviewed `dev` state to `main` through an eligible
   `release/<id>` branch without deleting long-lived `dev`.
+- Post-merge convergence is exact Git tree identity backed by trusted reviewed
+  PR ancestry; merge-commit SHA identity is neither required nor simulated with
+  protected-ref writes. Main-ahead state returns to `dev` through a reviewed PR.
 - DarkFactory and Andromeda retain their explicit independent product, version,
   tag, and release authority.
 - State and data repositories may commit directly to `main` when their own policy permits it.

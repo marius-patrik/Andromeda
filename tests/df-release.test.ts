@@ -9,9 +9,17 @@ const SHA = {
   dev: "2222222222222222222222222222222222222222",
   merge: "3333333333333333333333333333333333333333"
 };
+const TREE = {
+  converged: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  different: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+};
 
 test("release convergence classifies every branch relation and exposes missing dev", () => {
   assert.equal(release.classifyConvergence(SHA.main, SHA.main, null), "identical");
+  assert.equal(
+    release.classifyConvergence(SHA.main, SHA.dev, { status: "behind", ahead_by: 0, behind_by: 1 }, TREE.converged, TREE.converged),
+    "tree-identical"
+  );
   assert.equal(release.classifyConvergence(SHA.main, SHA.dev, { status: "ahead", ahead_by: 2, behind_by: 0 }), "dev-ahead");
   assert.equal(release.classifyConvergence(SHA.main, SHA.dev, { status: "behind", ahead_by: 0, behind_by: 2 }), "main-ahead");
   assert.equal(release.classifyConvergence(SHA.main, SHA.dev, { status: "diverged", ahead_by: 1, behind_by: 1 }), "diverged");
@@ -55,8 +63,9 @@ test("required release checks fail closed on missing, red, or wrong-App evidence
 test("release plans are deterministic for identical, ahead, diverged, and blocked evidence", () => {
   const base = { repository: "marius-patrik/example", mainSha: SHA.main, devSha: SHA.dev, policy: releasePolicy() };
   assert.equal(release.buildReleasePlan({ ...base, classification: "identical" }).action, "verify");
+  assert.equal(release.buildReleasePlan({ ...base, classification: "tree-identical" }).action, "verify");
   assert.equal(release.buildReleasePlan({ ...base, classification: "dev-ahead" }).action, "release");
-  assert.equal(release.buildReleasePlan({ ...base, classification: "main-ahead" }).action, "owner-required");
+  assert.equal(release.buildReleasePlan({ ...base, classification: "main-ahead" }).action, "reconcile-fast-forward");
   assert.equal(release.buildReleasePlan({ ...base, classification: "diverged" }).action, "reconcile-merge");
   assert.equal(release.buildReleasePlan({ ...base, classification: "missing-dev" }).action, "owner-required");
   assert.equal(
@@ -217,25 +226,49 @@ test("generated-only merge conflicts queue a reviewed mechanical repair without 
   assert.equal(created.labels.includes("df:ready"), false);
 });
 
-test("main-ahead reconciliation fails closed on the explicit owner contract", async () => {
+test("main-ahead reconciliation uses one reviewed PR and never writes dev directly", async () => {
+  const branch = `reconcile/${SHA.main.slice(0, 8)}-${SHA.dev.slice(0, 8)}`;
+  const refs = new Map([["main", SHA.main], ["dev", SHA.dev]]);
   const writes: Array<{ method: string; path: string; body?: any }> = [];
+  let pull: any = null;
   const gh = {
     request: async (method: string, path: string, body?: any) => {
-      if (method === "GET" && path.includes("/issues?state=open")) return [];
-      if (method === "POST" && path.endsWith("/issues")) {
-        writes.push({ method, path, body });
-        return { user: { login: "darkfactory-agent[bot]", type: "Bot" }, number: 8, html_url: "https://github.com/marius-patrik/example/issues/8" };
+      if (method === "GET" && path.includes("/git/ref/heads/")) {
+        const name = decodeURIComponent(path.split("/git/ref/heads/")[1]);
+        const sha = refs.get(name);
+        if (!sha) throw Object.assign(new Error("missing"), { status: 404 });
+        return { object: { sha } };
       }
+      if (method === "GET" && path.endsWith("/protection")) return protectedBranch();
+      if (method === "POST" && path.endsWith("/git/refs")) {
+        refs.set(String(body.ref).replace("refs/heads/", ""), body.sha);
+        writes.push({ method, path, body });
+        return { ref: body.ref, object: { sha: body.sha } };
+      }
+      if (method === "GET" && path.includes("/pulls?state=open&base=dev")) return pull ? [pull] : [];
+      if (method === "POST" && path.endsWith("/pulls")) {
+        pull = trustedPull({ number: 8, branch: body.head, base: body.base, headSha: SHA.main, title: body.title, body: body.body });
+        writes.push({ method, path, body });
+        return pull;
+      }
+      if (method === "GET" && path.endsWith("/pulls/8")) return pull;
+      if (method === "GET" && path.includes("/check-runs")) return checkRuns("success", 15368);
+      if (method === "GET" && path.endsWith("/status")) return { statuses: [] };
       throw new Error(`unexpected mocked request: ${method} ${path}`);
-    }
+    },
+    graphql: async () => ({ enablePullRequestAutoMerge: { pullRequest: { url: pull.html_url } } })
   };
   release.configureReleaseRuntime({ gh, controlRepo: { owner: "marius-patrik", repo: "DarkFactory" } });
   const observation = releaseObservation("main-ahead");
   const result = await release.reconcile(repo(), observation, release.buildReleasePlan(observation));
-  assert.equal(result.status, "owner-required");
-  assert.equal(writes.length, 1);
-  assert.ok(writes.every((write) => write.body.labels.includes("df:ask-owner")));
-  assert.ok(writes.every((write) => !String(write.path).includes("git/refs/heads/dev")));
+  assert.equal(result.status, "automerge-armed");
+  assert.equal(pull.head.ref, branch);
+  assert.equal(pull.base.ref, "dev");
+  assert.deepEqual(writes.map((write) => `${write.method} ${write.path.split("/repos/marius-patrik/example")[1]}`), [
+    "POST /git/refs",
+    "POST /pulls"
+  ]);
+  assert.ok(writes.every((write) => write.body?.ref !== "refs/heads/dev"));
 });
 
 test("deleted dev recovery fails closed on the same explicit owner contract", async () => {
@@ -394,6 +427,7 @@ test("green release verification proves the trusted PR and atomic cleanup eviden
       if (method === "GET" && path.includes("/pulls?state=closed")) return [pull];
       if (method === "GET" && path.endsWith("/pulls/12")) return pull;
       if (method === "GET" && path.includes("/compare/")) return { status: "ahead", ahead_by: 1, behind_by: 0 };
+      if (method === "GET" && path.endsWith(`/git/commits/${SHA.dev}`)) return { tree: { sha: TREE.converged } };
       if (method === "GET" && path.includes("/issues?state=open")) return [];
       throw new Error(`unexpected mocked request: ${method} ${path}`);
     }
@@ -402,8 +436,18 @@ test("green release verification proves the trusted PR and atomic cleanup eviden
   const observation = releaseObservation("identical", { devSha: SHA.main });
   const result = await release.verifyRelease(repo(), observation, release.buildReleasePlan(observation));
   assert.equal(result.verified, true);
+  assert.equal(result.release.kind, "release");
   assert.equal(result.release.pull_request, pull.html_url);
   assert.deepEqual(result.verified_absent_automation_branches, [releaseBranch]);
+});
+
+test("release verification rejects unequal trees even when a caller labels state converged", async () => {
+  release.configureReleaseRuntime({ gh: { request: async () => { throw new Error("must not read"); } }, controlRepo: { owner: "marius-patrik", repo: "DarkFactory" } });
+  const observation = releaseObservation("tree-identical", { devTreeSha: TREE.different });
+  await assert.rejects(
+    release.verifyRelease(repo(), observation, release.buildReleasePlan(observation)),
+    /requires exact commit or tree identity/
+  );
 });
 
 test("tagged publication resolves an annotated tag to the exact released main", async () => {
@@ -480,6 +524,8 @@ function releaseObservation(classification: string, overrides: Record<string, un
     policy: releasePolicy(),
     mainSha: SHA.main,
     devSha: SHA.dev,
+    mainTreeSha: TREE.converged,
+    devTreeSha: TREE.converged,
     classification,
     protections: {
       main: { configured: true, safe: true },
