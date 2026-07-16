@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "bin": {
-    "darkfactory": "./dist/cli.js"
+    "darkfactory": "./dist/cli.js",
+    "df": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -13,6 +14,7 @@
     "check:templates": "bun run --cwd templates ci",
     "dev": "tsx watch src/cli.ts serve",
     "install:url": "tsx src/cli.ts install-url",
+    "prompts:sync": "tsx scripts/sync-prompt-library.ts",
     "sync:managed": "tsx src/cli.ts sync-managed",
     "test": "node --experimental-test-module-mocks --import tsx --test tests/index.ts",
     "start": "node dist/cli.js serve",

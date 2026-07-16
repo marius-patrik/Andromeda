@@ -71,7 +71,7 @@ export async function main(options = {}) {
         } : null,
         actions: result.actions,
         token_usage: {
-          codex_calls: 0,
+          model_calls: 0,
           input_tokens: 0,
           output_tokens: 0,
           note: "Worker claim verification is deterministic and uses no model calls"
@@ -207,7 +207,11 @@ async function markWorkerVerified(gh, repository, issueNumber, claim, pullReques
         `- Claimed PR: ${pullRequest.html_url || `#${pullRequest.number}`}`,
         `- Branch: \`${claim.branch}\``,
         `- Base: \`${pullRequest.base?.ref || claim.baseBranch || "unknown"}\``,
-        `- Provider: \`${claim.provider}\` (${claim.model})`,
+        `- Requested tier / effort: \`${claim.requestedModelTier}\` / \`${claim.requestedEffort}\``,
+        `- Resolved route: \`${claim.provider}\` / \`${claim.model}\` / \`${claim.agentPreset}\``,
+        `- Provider version: \`${claim.providerVersion}\``,
+        `- Attempts: \`${claim.attempts}\``,
+        `- Usage: \`${claim.usage.inputTokens}\` input / \`${claim.usage.outputTokens}\` output tokens`,
         "",
         "The issue is marked `df:done` and follow-through may merge the verified PR."
       ].join("\n")
@@ -251,7 +255,7 @@ async function upsertVerificationBlockerIssue(gh, controlRepo, targetRepo, issue
     "## Acceptance Criteria",
     "",
     "- Resolve the mismatch between the worker claim and GitHub reality.",
-    "- Remove `df:blocked` from the original worker issue and reapply `df:ready` if a new worker run is needed.",
+    "- Resolve the recorded blocker; the system re-evaluates readiness automatically if a new worker run is needed.",
     "",
     "## Token Use",
     "",

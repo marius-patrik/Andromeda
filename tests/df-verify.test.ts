@@ -11,6 +11,35 @@ function base64Json(value: unknown) {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64");
 }
 
+function workerLedger(provider: string, model: string) {
+  const modelTier = provider === "codex" ? "high" : "medium";
+  const effort = "medium";
+  return {
+    issue: "marius-patrik/example#42",
+    branch: "df/42-slug",
+    base_branch: "dev",
+    status: "success",
+    pull_request_number: 99,
+    model_request: { schemaVersion: 1, modelTier, effort },
+    agent_os: {
+      receipt: {
+        schemaVersion: 2,
+        requested: { modelTier, effort },
+        routing: {
+          policyVersion: "fixture-route-policy-v1",
+          primary: { provider: "fixture-primary", model: "fixture/primary-model", agentPreset: "Fixture-Primary", providerVersion: "1.0.0" },
+          skipped: []
+        },
+        resolved: { provider, model, agentPreset: provider === "codex" ? "Sol" : "Kimi", providerVersion: "1.2.3" },
+        attempts: [{ number: 1, outcome: "success", reason: null }],
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        outcome: "success",
+        blockReason: null
+      }
+    }
+  };
+}
+
 test("readVerificationTarget accepts a valid workflow artifact", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-verify-target-"));
   try {
@@ -39,7 +68,7 @@ test("readVerificationTarget rejects malformed or incomplete artifacts", async (
   }
 });
 
-test("verifyWorkerRun marks issue df:done when claim matches GitHub reality", async () => {
+test("verifyWorkerRun marks issue df:done for an exact App-created worker PR", async () => {
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];
   const gh = {
     request: async (method: string, path: string, body?: unknown) => {
@@ -52,14 +81,7 @@ test("verifyWorkerRun marks issue df:done when claim matches GitHub reality", as
         return {
           type: "file",
           encoding: "base64",
-          content: base64Json({
-            issue: "marius-patrik/example#42",
-            branch: "df/42-slug",
-            base_branch: "dev",
-            status: "success",
-            pull_request_number: 99,
-            token_usage: { provider: "codex", model: "gpt-5.5" }
-          })
+          content: base64Json(workerLedger("codex", "gpt-5.5"))
         };
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/42") {
@@ -72,7 +94,7 @@ test("verifyWorkerRun marks issue df:done when claim matches GitHub reality", as
           html_url: "https://github.com/marius-patrik/example/pull/99",
           head: { ref: "df/42-slug", repo: { owner: { login: "marius-patrik" }, name: "example", full_name: "marius-patrik/example" } },
           base: { ref: "dev" },
-          user: { login: "mp-agents[bot]" },
+          user: { login: "darkfactory-agent[bot]", type: "Bot" },
           body: "<!-- dark-factory:worker-pr issue=42 -->\n\nCloses #42"
         };
       }
@@ -119,14 +141,7 @@ test("verifyWorkerRun blocks issue and files blocker issue when PR is on wrong b
         return {
           type: "file",
           encoding: "base64",
-          content: base64Json({
-            issue: "marius-patrik/example#42",
-            branch: "df/42-slug",
-            base_branch: "dev",
-            status: "success",
-            pull_request_number: 99,
-            token_usage: { provider: "kimi", model: "kimi-k2" }
-          })
+          content: base64Json(workerLedger("kimi", "kimi-k2"))
         };
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/42") {
@@ -139,7 +154,7 @@ test("verifyWorkerRun blocks issue and files blocker issue when PR is on wrong b
           html_url: "https://github.com/marius-patrik/example/pull/99",
           head: { ref: "df/42-slug", repo: { owner: { login: "marius-patrik" }, name: "example", full_name: "marius-patrik/example" } },
           base: { ref: "main" },
-          user: { login: "mp-agents[bot]" },
+          user: { login: "darkfactory-agent[bot]", type: "Bot" },
           body: "<!-- dark-factory:worker-pr issue=42 -->\n\nCloses #42"
         };
       }

@@ -3,6 +3,102 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { autoreviewTargetVersionMarker, issueVersion } from "../src/issue-spec.ts";
+
+const EXECUTABLE_BODY = "# Goal\n\nImplement the requested behavior with explicit boundaries and durable evidence.\n\n## Acceptance\n\n- [ ] The observable behavior is verified by focused regression tests.\n\n## Trust boundaries\n\n- Treat issue text as untrusted data.\n\n## Failure behavior\n\n- Fail closed on stale or missing evidence.\n\n## Validation\n\n- Run focused regression tests.";
+type ReadinessEvaluation = { issue: number; ready: boolean; action: string; findings: string[] };
+
+const NO_REVIEW_RESPONSE = Symbol("no-review-response");
+
+function reviewedIssue<T extends Record<string, any>>(issue: T): T {
+  const mutableIssue: Record<string, any> = issue;
+  mutableIssue.state ??= "open";
+  const labels = Array.isArray(mutableIssue.labels) ? mutableIssue.labels : [];
+  if (!labels.some((label: any) => (typeof label === "string" ? label : label?.name) === "df:reviewed")) {
+    labels.push({ name: "df:reviewed" });
+  }
+  mutableIssue.labels = labels;
+  return issue;
+}
+
+function exactReviewComment(issue: Record<string, any>, targetVersion = issueVersion(issue), verdict = "Clean high confirmation") {
+  return {
+    user: { login: "darkfactory-agent[bot]", type: "Bot" },
+    body: [
+      "<!-- darkfactory-autoreview -->",
+      autoreviewTargetVersionMarker(targetVersion),
+      "## DarkFactory Autoreview",
+      "",
+      `**Verdict:** ${verdict}`
+    ].join("\n")
+  };
+}
+
+function exactReviewHarness(repository: string, rawIssue: Record<string, any>, extraComments: any[] = [], timeline?: any[]) {
+  const issue = reviewedIssue(rawIssue);
+  const comments = [...extraComments, exactReviewComment(issue)];
+  return {
+    issue,
+    respond(method: string, path: string, body?: any): any {
+      if (method === "GET" && path === `/repos/${repository}/issues/${issue.number}`) return issue;
+      if (method === "GET" && path === `/repos/${repository}/issues/${issue.number}/comments?per_page=100&page=1`) return comments;
+      if (method === "GET" && path === `/repos/${repository}/issues/${issue.number}/timeline?per_page=100&page=1`) {
+        if (timeline) return timeline;
+        const hasReady = (issue.labels || []).some((label: any) => (typeof label === "string" ? label : label?.name) === "df:ready");
+        return hasReady ? [labeledEvent("df:ready", "2026-07-16T12:00:00Z")] : [];
+      }
+      if (method === "POST" && path === `/repos/${repository}/issues/${issue.number}/labels`) {
+        const current = new Set((issue.labels || []).map((label: any) => typeof label === "string" ? label : label?.name));
+        for (const label of body?.labels || []) current.add(label);
+        issue.labels = [...current].map((name) => ({ name }));
+        return {};
+      }
+      const prefix = `/repos/${repository}/issues/${issue.number}/labels/`;
+      if (method === "DELETE" && path.startsWith(prefix)) {
+        const removed = decodeURIComponent(path.slice(prefix.length));
+        issue.labels = (issue.labels || []).filter((label: any) => (typeof label === "string" ? label : label?.name) !== removed);
+        return {};
+      }
+      return NO_REVIEW_RESPONSE;
+    }
+  };
+}
+
+function healthyReadiness() {
+  return new Map([
+    ["marius-patrik/example", { observable: true, doctorPerfect: true, gatesHealthy: true }],
+    ["marius-patrik/other", { observable: true, doctorPerfect: true, gatesHealthy: true }]
+  ]);
+}
+
+function healthyManagedProtection() {
+  return {
+    required_status_checks: {
+      strict: true,
+      checks: [
+        { context: "Validate", app_id: 15368 },
+        { context: "DarkFactory Autoreview", app_id: 15368 }
+      ]
+    },
+    enforce_admins: { enabled: true },
+    allow_force_pushes: { enabled: false },
+    allow_deletions: { enabled: false }
+  };
+}
+
+function healthyPolicy() {
+  return {
+    schemaVersion: 1,
+    concurrency: { global: 10, perRepository: 10, perStream: 10 },
+    waves: [{ name: "features", streams: ["default"] }],
+    dashboard: { enabled: false, issueTitle: "Dashboard" }
+  };
+}
+
+const HEALTHY_EVALUATION = {
+  repositoryState: { observable: true, doctorPerfect: true, gatesHealthy: true },
+  capacityAvailable: true
+};
 
 function blockedComment(createdAt: string) {
   return {
@@ -11,12 +107,18 @@ function blockedComment(createdAt: string) {
   };
 }
 
-function labeledEvent(label: string, createdAt: string) {
+function labeledEvent(label: string, createdAt: string, actor: Record<string, unknown> = { login: "darkfactory-agent[bot]", type: "Bot" }) {
   return {
     event: "labeled",
     label: { name: label },
-    created_at: createdAt
+    created_at: createdAt,
+    actor
   };
+}
+
+function restoreEnvironment(name: string, value: string | undefined) {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
 }
 
 test("orchestration policy loading fails closed and accepts only the canonical schema", async () => {
@@ -45,11 +147,70 @@ test("orchestration policy loading fails closed and accepts only the canonical s
   }
 });
 
+test("targeted issue readiness uses the full shared fleet, capacity, and exact Autoreview evaluator without mutation", async () => {
+  // @ts-ignore Native ESM workflow helper is exercised directly.
+  const { evaluateTargetIssueReadiness } = await import("../.github/scripts/df-orchestrate.mjs?unit=targeted-readiness-test");
+  const repository = "marius-patrik/example";
+  const review = exactReviewHarness(repository, {
+    number: 42,
+    title: "Implement exact targeted readiness",
+    body: EXECUTABLE_BODY,
+    labels: []
+  });
+  const calls: Array<{ method: string; path: string }> = [];
+  const gh = {
+    async request(method: string, path: string, body?: unknown) {
+      calls.push({ method, path });
+      const response = review.respond(method, path, body);
+      if (response !== NO_REVIEW_RESPONSE) return response;
+      if (method === "GET" && path === `/repos/${repository}/issues?state=open&per_page=100&page=1`) return [review.issue];
+      throw new Error(`unexpected ${method} ${path}`);
+    }
+  };
+  const version = issueVersion(review.issue);
+  const options = {
+    registry: { schemaVersion: 1, repositories: { [repository]: { state: "active" } } },
+    repositories: [{ full_name: repository, archived: false, disabled: false }],
+    readinessByRepository: healthyReadiness(),
+    policy: healthyPolicy(),
+    expectedVersion: version
+  };
+  const result = await evaluateTargetIssueReadiness(
+    gh,
+    { owner: "marius-patrik", repo: "DarkFactory" },
+    { owner: "marius-patrik", repo: "example" },
+    42,
+    options
+  );
+  assert.equal(result.ready, true);
+  assert.equal(result.targetVersion, version);
+  assert.equal(result.issueReview.ready, true);
+  assert.equal(result.capacityAvailable, true);
+  assert.equal(calls.some((call) => call.method !== "GET"), false);
+
+  await assert.rejects(
+    evaluateTargetIssueReadiness(
+      gh,
+      { owner: "marius-patrik", repo: "DarkFactory" },
+      { owner: "marius-patrik", repo: "example" },
+      42,
+      { ...options, expectedVersion: "f".repeat(64) }
+    ),
+    /stale issue version/
+  );
+});
+
 test("orchestrator dispatches open df:ready issues in active managed repos", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-test");
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];
   const notFound = Object.assign(new Error("not found"), { status: 404 });
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 42,
+    title: "Directly queued implementation",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }]
+  });
 
   const gh = {
     async graphql() {
@@ -64,15 +225,11 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
     },
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
 
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
-        return [
-          {
-            number: 42,
-            body: "Directly queued issue without a PRD marker.",
-            labels: [{ name: "df:ready" }]
-          }
-        ];
+        return [review.issue];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") {
         return [];
@@ -84,7 +241,7 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
         throw notFound;
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") {
-        throw notFound;
+        return healthyManagedProtection();
       }
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/42/labels") {
         return {};
@@ -103,6 +260,7 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     writeLedger: false,
@@ -123,10 +281,67 @@ test("orchestrator dispatches open df:ready issues in active managed repos", asy
   );
 });
 
+test("programmatic orchestration ignores ambient workflow dispatch scope", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-hermetic-dispatch-test");
+  const previous = {
+    repo: process.env.DF_TARGET_REPO,
+    issue: process.env.DF_TARGET_ISSUE_NUMBER,
+    source: process.env.DF_SOURCE_EVENT,
+    payload: process.env.GITHUB_EVENT_PAYLOAD
+  };
+  process.env.DF_TARGET_REPO = "marius-patrik/example";
+  process.env.DF_TARGET_ISSUE_NUMBER = "42";
+  process.env.DF_SOURCE_EVENT = "workflow_dispatch";
+  delete process.env.GITHUB_EVENT_PAYLOAD;
+  const inspected: string[] = [];
+
+  try {
+    const result = await orchestrate({
+      gh: {
+        async request(method: string, path: string) {
+          if (method === "GET" && /\/repos\/marius-patrik\/(example|other)\/issues\?state=open&per_page=100&page=1/.test(path)) {
+            inspected.push(path);
+            return [];
+          }
+          throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+        }
+      },
+      controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+      trigger: "schedule",
+      readinessByRepository: healthyReadiness(),
+      registry: { repositories: { "marius-patrik/example": { state: "active" }, "marius-patrik/other": { state: "active" } } },
+      repositories: [
+        { full_name: "marius-patrik/example", archived: false, disabled: false },
+        { full_name: "marius-patrik/other", archived: false, disabled: false }
+      ],
+      writeLedger: false,
+      updateDashboard: false,
+      warn: () => {},
+      log: () => {}
+    });
+
+    assert.equal(inspected.some((path) => path.includes("/marius-patrik/example/")), true);
+    assert.equal(inspected.some((path) => path.includes("/marius-patrik/other/")), true);
+    assert.deepEqual(result.dispatched, []);
+  } finally {
+    restoreEnvironment("DF_TARGET_REPO", previous.repo);
+    restoreEnvironment("DF_TARGET_ISSUE_NUMBER", previous.issue);
+    restoreEnvironment("DF_SOURCE_EVENT", previous.source);
+    restoreEnvironment("GITHUB_EVENT_PAYLOAD", previous.payload);
+  }
+});
+
 test("orchestrator does not dispatch issues that already have an open worker PR", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-existing-pr-test");
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 8,
+    title: "Existing worker PR",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }]
+  });
 
   const gh = {
     async graphql() {
@@ -144,7 +359,7 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
                 headRefName: "df/8-worker",
                 baseRefName: "main",
                 headRepository: { owner: { login: "marius-patrik" }, name: "example" },
-                author: { login: "mp-agents[bot]" }
+                author: { __typename: "Bot", login: "darkfactory-agent" }
               }
             ]
           }
@@ -153,9 +368,11 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
     },
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
 
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
-        return [{ number: 8, labels: [{ name: "df:ready" }] }];
+        return [review.issue];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") {
         return [];
@@ -170,6 +387,7 @@ test("orchestrator does not dispatch issues that already have an open worker PR"
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     writeLedger: false,
@@ -257,6 +475,248 @@ test("orchestrator selects ready issues by priority and blocked-by state", async
   );
 });
 
+test("readiness evaluator accepts a bounded executable issue contract", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadiness } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-readiness-positive-test");
+  const result = evaluateIssueReadiness({
+    number: 40,
+    title: "Implement bounded readiness",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "P1" }]
+  }, { currentRepoOpenIssueNumbers: new Set(), ...HEALTHY_EVALUATION });
+
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.findings, []);
+});
+
+test("issue Autoreview admission accepts exact clean or auditable override and rejects stale, malformed, or untrusted evidence", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueAutoreviewEvidence } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-issue-review-evidence-triplet-test");
+  const issue = reviewedIssue({ number: 401, title: "Reviewed issue", body: EXECUTABLE_BODY, labels: [] });
+  const clean = evaluateIssueAutoreviewEvidence(issue, [exactReviewComment(issue)], { dependencies: [] });
+  const override = evaluateIssueAutoreviewEvidence(issue, [exactReviewComment(issue, issueVersion(issue), "Auditable owner override")], { dependencies: [] });
+  const stale = evaluateIssueAutoreviewEvidence(issue, [exactReviewComment(issue, "0".repeat(64))], { dependencies: [] });
+  const untrusted = evaluateIssueAutoreviewEvidence(issue, [{ ...exactReviewComment(issue), user: { login: "marius-patrik", type: "User" } }], { dependencies: [] });
+  const malformed = evaluateIssueAutoreviewEvidence(issue, [{
+    user: { login: "darkfactory-agent[bot]", type: "Bot" },
+    body: "<!-- darkfactory:issue-autofix schema=1 target=bad -->"
+  }], { dependencies: [] });
+
+  assert.equal(clean.ready, true);
+  assert.equal(override.ready, true);
+  assert.equal(stale.ready, false);
+  assert.ok(stale.findings.some((finding: { id: string }) => finding.id === "clean-review-evidence"));
+  assert.equal(untrusted.ready, false);
+  assert.ok(untrusted.findings.some((finding: { id: string }) => finding.id === "clean-review-evidence"));
+  assert.equal(malformed.ready, false);
+  assert.ok(malformed.findings.some((finding: { id: string }) => finding.id === "issue-review-evidence-invalid"));
+});
+
+test("dispatch-time admission revokes a cached ready label when the reviewed issue version changes", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-dispatch-review-race-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const queued = reviewedIssue({
+    number: 402,
+    title: "Queued reviewed issue",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }]
+  });
+  const reviewComment = exactReviewComment(queued);
+  const live = reviewedIssue({
+    ...queued,
+    body: `${EXECUTABLE_BODY}\n\nOwner edit after queue evaluation.`,
+    labels: [{ name: "df:ready" }, { name: "df:reviewed" }]
+  });
+  const gh = {
+    async graphql() {
+      return { repository: { pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } };
+    },
+    async request(method: string, path: string, body?: any) {
+      calls.push({ method, path, body });
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") return [queued];
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/402") return live;
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/402/comments?per_page=100&page=1") return [reviewComment];
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/402/timeline?per_page=100&page=1") return [labeledEvent("df:ready", "2026-07-16T10:00:00Z")];
+      if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/402/labels/df%3Aready") return {};
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
+    registry: { repositories: { "marius-patrik/example": { state: "active" } } },
+    repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
+    writeLedger: false,
+    updateDashboard: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.dispatched, []);
+  assert.ok(calls.some((call) => call.method === "GET" && call.path === "/repos/marius-patrik/example/issues/402"));
+  assert.ok(calls.some((call) => call.method === "DELETE" && call.path.endsWith("/labels/df%3Aready")));
+  assert.equal(calls.some((call) => call.path.endsWith("/actions/workflows/df-work.yml/dispatches")), false);
+});
+
+test("dispatch-time admission requires the exact referenced dependency to be a closed issue", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { revalidateDispatchAdmission } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-dispatch-dependency-identity-test");
+  const issue = reviewedIssue({
+    number: 403,
+    title: "Dependency-bound reviewed issue",
+    body: `${EXECUTABLE_BODY}\n\n## Sequencing\n\nBlocked-by: #9`,
+    labels: [{ name: "df:ready" }]
+  });
+  const calls: Array<{ method: string; path: string }> = [];
+  const gh = {
+    async request(method: string, path: string) {
+      calls.push({ method, path });
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/403") return issue;
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/403/comments?per_page=100&page=1") return [exactReviewComment(issue)];
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/9") {
+        return { number: 10, state: "closed" };
+      }
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+
+  const evaluation = await revalidateDispatchAdmission(gh, { owner: "marius-patrik", repo: "example" }, 403, {
+    repositoryState: HEALTHY_EVALUATION.repositoryState,
+    knownRepositories: new Set(["marius-patrik/example"])
+  });
+
+  assert.equal(evaluation.ready, false);
+  assert.ok(evaluation.findings.some((finding: { id: string }) => finding.id === "blocked-by-open"));
+  assert.ok(calls.some((call) => call.path === "/repos/marius-patrik/example/issues/9"));
+});
+
+test("readiness fails closed on doctor, gate, capacity, and missing snapshot disagreement", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadiness } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-readiness-state-triplet-test");
+  const issue = { number: 400, title: "Implement bounded readiness", body: EXECUTABLE_BODY, labels: [] };
+  const doctor = evaluateIssueReadiness(issue, { currentRepoOpenIssueNumbers: new Set(), repositoryState: { observable: true, doctorPerfect: false, gatesHealthy: true }, capacityAvailable: true });
+  const gates = evaluateIssueReadiness(issue, { currentRepoOpenIssueNumbers: new Set(), repositoryState: { observable: true, doctorPerfect: true, gatesHealthy: false }, capacityAvailable: true });
+  const missing = evaluateIssueReadiness(issue, { currentRepoOpenIssueNumbers: new Set(), capacityAvailable: true });
+  const capacity = evaluateIssueReadiness(issue, { currentRepoOpenIssueNumbers: new Set(), repositoryState: HEALTHY_EVALUATION.repositoryState, capacityAvailable: false });
+  assert.ok(doctor.findings.some((finding: { id: string }) => finding.id === "doctor-not-perfect"));
+  assert.ok(gates.findings.some((finding: { id: string }) => finding.id === "gates-unhealthy"));
+  assert.ok(missing.findings.some((finding: { id: string }) => finding.id === "repository-state-unobservable"));
+  assert.ok(capacity.findings.some((finding: { id: string }) => finding.id === "capacity-exhausted"));
+});
+
+test("readiness evaluator rejects and explains a contentless issue contract", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadiness } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-readiness-negative-test");
+  const result = evaluateIssueReadiness({
+    number: 41,
+    title: "Alignment",
+    body: "## Goal\n\nKeep implementation aligned.",
+    labels: [{ name: "df:ready" }]
+  }, { currentRepoOpenIssueNumbers: new Set() });
+
+  assert.equal(result.ready, false);
+  assert.ok(result.findings.some((finding: { id: string }) => finding.id === "acceptance-missing"));
+  assert.ok(result.findings.some((finding: { id: string }) => finding.id === "contentless-boilerplate"));
+});
+
+test("readiness evaluator treats df:no-dispatch as categorical even for a valid contract", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadiness, selectDispatchableIssues, shouldAutoReadySequencedIssue } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-readiness-edge-test");
+  const issue = {
+    number: 42,
+    title: "Owner-executed contract",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }, { name: "df:no-dispatch" }]
+  };
+
+  assert.equal(evaluateIssueReadiness(issue, { currentRepoOpenIssueNumbers: new Set() }).ready, false);
+  assert.deepEqual(selectDispatchableIssues([issue], { enforceContract: true }), []);
+  assert.equal(shouldAutoReadySequencedIssue({ ...issue, body: `${EXECUTABLE_BODY}\n\nBlocked-by: #1`, labels: [{ name: "df:no-dispatch" }] }, { currentRepoOpenIssueNumbers: new Set() }), false);
+});
+
+test("readiness revokes a human or near-miss ready label before any full-predicate reapplication", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { currentReadyLabelOwnership, evaluateIssueReadinessLabels } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-ready-label-reconciliation-test");
+  async function run(repositoryState: Record<string, unknown>, actor: Record<string, unknown>) {
+    const issue = reviewedIssue({ number: 71, title: "Trust the ready owner", body: EXECUTABLE_BODY, state: "open", labels: [{ name: "df:ready" }] });
+    const timeline = [labeledEvent("df:ready", "2026-07-16T10:00:00Z", actor)];
+    const calls: Array<{ method: string; path: string }> = [];
+    const gh = {
+      async request(method: string, path: string, body?: any) {
+        calls.push({ method, path });
+        if (method === "GET" && path.endsWith("/issues/71/timeline?per_page=100&page=1")) return timeline;
+        if (method === "GET" && path.endsWith("/issues/71/comments?per_page=100&page=1")) return [exactReviewComment(issue)];
+        if (method === "DELETE" && path.endsWith("/issues/71/labels/df%3Aready")) {
+          issue.labels = issue.labels.filter((label: any) => label.name !== "df:ready");
+          timeline.push({ ...labeledEvent("df:ready", "2026-07-16T10:01:00Z"), event: "unlabeled" });
+          return {};
+        }
+        if (method === "POST" && path.endsWith("/labels") && !path.includes("/issues/")) return {};
+        if (method === "POST" && path.endsWith("/issues/71/labels")) {
+          issue.labels.push({ name: "df:ready" });
+          timeline.push(labeledEvent("df:ready", "2026-07-16T10:02:00Z"));
+          return {};
+        }
+        throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+      }
+    };
+    const evaluations = await evaluateIssueReadinessLabels(gh, [{
+      repository: { owner: "marius-patrik", repo: "example" },
+      openIssues: [issue]
+    }], () => {}, {
+      policy: healthyPolicy(),
+      readinessByRepository: new Map([["marius-patrik/example", repositoryState]])
+    });
+    return { issue, timeline, calls, evaluation: evaluations[0], currentReadyLabelOwnership };
+  }
+
+  const healthy = await run({ observable: true, doctorPerfect: true, gatesHealthy: true }, { login: "marius-patrik", type: "User" });
+  assert.equal(healthy.evaluation.action, "replaced-untrusted-ready");
+  assert.equal(healthy.currentReadyLabelOwnership(healthy.timeline).trusted, true);
+  const removal = healthy.calls.findIndex((call) => call.method === "DELETE" && call.path.endsWith("df%3Aready"));
+  const reapply = healthy.calls.findIndex((call) => call.method === "POST" && call.path.endsWith("/issues/71/labels"));
+  assert.ok(removal >= 0 && reapply > removal);
+
+  const degraded = await run({ observable: true, doctorPerfect: false, gatesHealthy: true }, { login: "darkfactory-agent", type: "Bot" });
+  assert.equal(degraded.evaluation.action, "revoked-untrusted-ready");
+  assert.equal(degraded.issue.labels.some((label: any) => label.name === "df:ready"), false);
+  assert.equal(degraded.calls.some((call) => call.method === "POST" && call.path.endsWith("/issues/71/labels")), false);
+});
+
+test("dispatch admission accepts current App ownership and rejects human or stale ready events", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { revalidateDispatchAdmission } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-ready-label-dispatch-admission-test");
+  async function admit(timeline: any[]) {
+    const issue = reviewedIssue({ number: 72, title: "Dispatch only trusted ready", body: EXECUTABLE_BODY, state: "open", labels: [{ name: "df:ready" }] });
+    const gh = {
+      async request(method: string, path: string) {
+        if (method === "GET" && path.endsWith("/issues/72")) return issue;
+        if (method === "GET" && path.endsWith("/issues/72/comments?per_page=100&page=1")) return [exactReviewComment(issue)];
+        if (method === "GET" && path.endsWith("/issues/72/timeline?per_page=100&page=1")) return timeline;
+        throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+      }
+    };
+    return await revalidateDispatchAdmission(gh, { owner: "marius-patrik", repo: "example" }, 72, {
+      repositoryState: { observable: true, doctorPerfect: true, gatesHealthy: true },
+      knownRepositories: new Set(["marius-patrik/example"])
+    });
+  }
+
+  assert.equal((await admit([labeledEvent("df:ready", "2026-07-16T10:00:00Z")])).ready, true);
+  const human = await admit([labeledEvent("df:ready", "2026-07-16T10:00:00Z", { login: "marius-patrik", type: "User" })]);
+  assert.equal(human.ready, false);
+  assert.ok(human.findings.some((finding: any) => finding.id === "ready-label-untrusted"));
+  const stale = await admit([
+    labeledEvent("df:ready", "2026-07-16T10:00:00Z"),
+    { ...labeledEvent("df:ready", "2026-07-16T10:01:00Z"), event: "unlabeled" }
+  ]);
+  assert.equal(stale.ready, false);
+  assert.ok(stale.findings.some((finding: any) => finding.id === "ready-label-untrusted"));
+});
+
 test("orchestrator holds and escalates unknown cross-repo Blocked-by references", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { selectDispatchableIssues, ownerDecisionEscalation } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-cross-repo-test");
@@ -341,11 +801,17 @@ test("sequencing pass auto-readies scoped issues only when blockers are resolved
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { autoReadySequencedIssues } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-auto-ready-test");
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 20,
+    title: "Sequenced",
+    body: `${EXECUTABLE_BODY}\n\n## Sequencing\n\nBlocked-by: #19`,
+    labels: [{ name: "P0" }]
+  });
   const snapshots = [
     {
       repository: { owner: "marius-patrik", repo: "example" },
       openIssues: [
-        { number: 20, title: "Sequenced", body: "Blocked-by: #19", labels: [{ name: "P0" }] },
+        review.issue,
         { number: 21, title: "Backlog", body: "Plain backlog issue.", labels: [{ name: "P1" }] },
         { number: 22, title: "Still blocked", body: "Blocked-by: #23", labels: [{ name: "P0" }] },
         { number: 23, title: "Open predecessor", body: "", labels: [{ name: "df:running" }] },
@@ -359,15 +825,19 @@ test("sequencing pass auto-readies scoped issues only when blockers are resolved
   const gh = {
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
 
-      if (method === "GET" && path === "/repos/marius-patrik/example/issues/20/comments?per_page=100&page=1") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/20/timeline?per_page=100&page=1") return [];
-      if (method === "POST" && path === "/repos/marius-patrik/example/issues/20/labels") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
       throw new Error(`Unexpected GitHub request: ${method} ${path}`);
     }
   };
 
-  const autoReadied = await autoReadySequencedIssues(gh, snapshots, () => {});
+  const autoReadied = await autoReadySequencedIssues(gh, snapshots, () => {}, {
+    policy: healthyPolicy(),
+    readinessByRepository: healthyReadiness()
+  });
 
   assert.deepEqual(autoReadied, [{ repo: "marius-patrik/example", issue: 20 }]);
   assert.ok(snapshots[0].openIssues[0].labels.some((label: { name: string }) => label.name === "df:ready"));
@@ -405,7 +875,9 @@ test("targeted sequencing runs resolve blockers against the full snapshot", asyn
   // snapshot, so #30 must NOT be auto-readied even though the run only
   // considers #30 as a candidate.
   const autoReadied = await autoReadySequencedIssues(gh, snapshots, () => {}, {
-    targetIssue: { repository: { owner: "marius-patrik", repo: "example" }, issueNumber: 30 }
+    targetIssue: { repository: { owner: "marius-patrik", repo: "example" }, issueNumber: 30 },
+    policy: healthyPolicy(),
+    readinessByRepository: healthyReadiness()
   });
 
   assert.deepEqual(autoReadied, []);
@@ -443,11 +915,46 @@ test("sequencing pass does not create an owner-reset ready label over repeated f
     }
   };
 
-  const autoReadied = await autoReadySequencedIssues(gh, snapshots, () => {});
+  const autoReadied = await autoReadySequencedIssues(gh, snapshots, () => {}, {
+    policy: healthyPolicy(),
+    readinessByRepository: healthyReadiness()
+  });
 
   assert.deepEqual(autoReadied, []);
   assert.equal(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/31/labels"), false);
   assert.equal(snapshots[0].openIssues[0].labels.some((label: { name: string }) => label.name === "df:ready"), false);
+});
+
+test("sequencing pass refuses a stale issue Autoreview even after every blocker closes", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { autoReadySequencedIssues } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-auto-ready-stale-review-test");
+  const issue = reviewedIssue({
+    number: 32,
+    title: "Stale reviewed successor",
+    body: `${EXECUTABLE_BODY}\n\n## Sequencing\n\nBlocked-by: #31`,
+    labels: [{ name: "P0" }]
+  });
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const gh = {
+    async request(method: string, path: string, body?: any) {
+      calls.push({ method, path, body });
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/32/comments?per_page=100&page=1") {
+        return [exactReviewComment(issue, "0".repeat(64))];
+      }
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues/32/timeline?per_page=100&page=1") return [];
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+  const autoReadied = await autoReadySequencedIssues(gh, [{
+    repository: { owner: "marius-patrik", repo: "example" },
+    openIssues: [issue]
+  }], () => {}, {
+    policy: healthyPolicy(),
+    readinessByRepository: healthyReadiness()
+  });
+
+  assert.deepEqual(autoReadied, []);
+  assert.equal(calls.some((call) => call.method === "POST" && call.path.endsWith("/issues/32/labels")), false);
 });
 
 test("orchestration plan applies wave gates and cross-repo concurrency caps", async () => {
@@ -675,6 +1182,12 @@ test("orchestrator updates the L6 dashboard issue after dispatch", async () => {
   const { DASHBOARD_MARKER, orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-dashboard-test");
   const calls: Array<{ method: string; path: string; body?: any }> = [];
   const notFound = Object.assign(new Error("not found"), { status: 404 });
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 7,
+    title: "Feature",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }, { name: "stream:features" }]
+  });
 
   const gh = {
     async graphql() {
@@ -689,14 +1202,16 @@ test("orchestrator updates the L6 dashboard issue after dispatch", async () => {
     },
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
 
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
-        return [{ number: 7, title: "Feature", body: "", labels: [{ name: "df:ready" }, { name: "stream:features" }] }];
+        return [review.issue];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
       if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") throw notFound;
-      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") throw notFound;
+      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") return healthyManagedProtection();
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/7/labels") return {};
       if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/7/labels/df%3Aready") return {};
       if (method === "POST" && path === "/repos/marius-patrik/DarkFactory/actions/workflows/df-work.yml/dispatches") return {};
@@ -713,6 +1228,7 @@ test("orchestrator updates the L6 dashboard issue after dispatch", async () => {
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     policy: {
@@ -721,6 +1237,7 @@ test("orchestrator updates the L6 dashboard issue after dispatch", async () => {
       waves: [{ name: "features", streams: ["features", "default"] }],
       dashboard: { enabled: true, issueTitle: "Dashboard" }
     },
+    loopEvidence: {},
     writeLedger: false,
     warn: () => {},
     log: () => {}
@@ -733,6 +1250,7 @@ test("orchestrator updates the L6 dashboard issue after dispatch", async () => {
   assert.equal(dashboardUpdate?.body.title, "Dashboard");
   assert.match(dashboardUpdate?.body.body, new RegExp(DASHBOARD_MARKER));
   assert.match(dashboardUpdate?.body.body, /marius-patrik\/example#7/);
+  assert.match(dashboardUpdate?.body.body, /Submodule Pointer Convergence/);
   assert.match(dashboardUpdate?.body.body, /AI tokens: 0/);
 });
 
@@ -783,6 +1301,7 @@ test("orchestrator escalates ambiguous sequencing to df:ask-owner without dispat
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     writeLedger: false,
@@ -898,6 +1417,16 @@ test("orchestrator dispatches owner-reset issues instead of re-escalating stale 
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-reset-dispatch-test");
   const calls: Array<{ method: string; path: string; body?: unknown }> = [];
   const notFound = Object.assign(new Error("not found"), { status: 404 });
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 30,
+    title: "Reset lane",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }]
+  }, [
+    blockedComment("2026-07-06T10:00:00Z"),
+    blockedComment("2026-07-06T10:10:00Z"),
+    blockedComment("2026-07-06T10:20:00Z")
+  ]);
 
   const gh = {
     async graphql() {
@@ -912,26 +1441,20 @@ test("orchestrator dispatches owner-reset issues instead of re-escalating stale 
     },
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
 
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
-        return [{ number: 30, title: "Reset lane", body: "", labels: [{ name: "df:ready" }] }];
+        return [review.issue];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
-      if (method === "GET" && path === "/repos/marius-patrik/example/issues/30/comments?per_page=100&page=1") {
-        return [
-          blockedComment("2026-07-06T10:00:00Z"),
-          blockedComment("2026-07-06T10:10:00Z"),
-          blockedComment("2026-07-06T10:20:00Z")
-        ];
-      }
-      if (method === "GET" && path === "/repos/marius-patrik/example/issues/30/comments?per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/30/timeline?per_page=100&page=1") {
         return [labeledEvent("df:ready", "2026-07-06T10:30:00Z")];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/30/timeline?per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
       if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") throw notFound;
-      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") throw notFound;
+      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") return healthyManagedProtection();
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/30/labels") return {};
       if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/30/labels/df%3Aready") return {};
       if (method === "POST" && path === "/repos/marius-patrik/DarkFactory/actions/workflows/df-work.yml/dispatches") return {};
@@ -943,6 +1466,7 @@ test("orchestrator dispatches owner-reset issues instead of re-escalating stale 
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     writeLedger: false,
@@ -961,6 +1485,12 @@ test("orchestrator turns trusted /df run comments into df:ready before dispatch"
   const calls: Array<{ method: string; path: string; body?: any }> = [];
   const notFound = Object.assign(new Error("not found"), { status: 404 });
   const previousPayload = process.env.GITHUB_EVENT_PAYLOAD;
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 12,
+    title: "Run me",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }]
+  });
 
   process.env.GITHUB_EVENT_PAYLOAD = JSON.stringify({
     repository: { full_name: "marius-patrik/example" },
@@ -981,6 +1511,8 @@ test("orchestrator turns trusted /df run comments into df:ready before dispatch"
     },
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
 
       if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
       if (method === "PATCH" && path === "/repos/marius-patrik/example/labels/df%3Aready") return {};
@@ -992,14 +1524,14 @@ test("orchestrator turns trusted /df run comments into df:ready before dispatch"
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/12/comments") return {};
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
         return [
-          { number: 12, title: "Run me", body: "", labels: [{ name: "df:ready" }] },
-          { number: 99, title: "Do not run me", body: "", labels: [{ name: "df:ready" }] }
+          review.issue,
+          { number: 99, title: "Do not run me", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] }
         ];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
       if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") throw notFound;
-      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") throw notFound;
+      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") return healthyManagedProtection();
       if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/12/labels/df%3Aready") return {};
       if (method === "POST" && path === "/repos/marius-patrik/DarkFactory/actions/workflows/df-work.yml/dispatches") return {};
 
@@ -1011,6 +1543,7 @@ test("orchestrator turns trusted /df run comments into df:ready before dispatch"
     const result = await orchestrate({
       gh,
       controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+      readinessByRepository: healthyReadiness(),
       registry: { repositories: { "marius-patrik/example": { state: "active" }, "marius-patrik/other": { state: "active" } } },
       repositories: [
         { full_name: "marius-patrik/example", archived: false, disabled: false },
@@ -1025,7 +1558,8 @@ test("orchestrator turns trusted /df run comments into df:ready before dispatch"
 
     assert.deepEqual(result.dispatched, [{ repo: "marius-patrik/example", issue: 12, wave: "features", streams: ["default"] }]);
     assert.equal(calls.some((call) => call.path.includes("/issues/99/")), false);
-    assert.equal(calls.some((call) => call.path.startsWith("/repos/marius-patrik/other/")), false);
+    assert.equal(calls.some((call) => call.method === "GET" && call.path.startsWith("/repos/marius-patrik/other/")), true);
+    assert.equal(calls.some((call) => call.method !== "GET" && call.path.startsWith("/repos/marius-patrik/other/")), false);
     assert.ok(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/12/comments"));
   } finally {
     if (previousPayload === undefined) delete process.env.GITHUB_EVENT_PAYLOAD;
@@ -1046,22 +1580,73 @@ test("parseEventRequest ignores untrusted /df run comments", async () => {
   assert.equal(request, null);
 });
 
-test("parseEventRequest accepts df:ready label events for one issue", async () => {
+test("parseEventRequest accepts only the exact current App ready actor as dispatch-capable", async () => {
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { parseEventRequest } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-label-event-parse-test");
 
   const request = parseEventRequest(JSON.stringify({
+    action: "labeled",
     repository: { full_name: "marius-patrik/example" },
     issue: { number: 44 },
-    label: { name: "df:ready" }
+    label: { name: "df:ready" },
+    sender: { login: "darkfactory-agent[bot]", type: "Bot" }
   }), "issues", () => {});
 
   assert.deepEqual(request, {
     repository: { owner: "marius-patrik", repo: "example" },
     issueNumber: 44,
     slashRun: false,
-    readyLabel: true
+    readyLabel: true,
+    readyLabelActorTrusted: true,
+    evaluationOnly: false
   });
+});
+
+test("parseEventRequest scopes human and near-miss ready labels to evaluation-only cleanup", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { parseEventRequest } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-untrusted-label-event-test");
+  for (const sender of [
+    { login: "marius-patrik", type: "User" },
+    { login: "darkfactory-agent", type: "Bot" },
+    { login: "evil-darkfactory-agent[bot]", type: "Bot" },
+    { login: "darkfactory-agent[bot]", type: "User" }
+  ]) {
+    const request = parseEventRequest(JSON.stringify({
+      action: "labeled",
+      repository: { full_name: "marius-patrik/example" },
+      issue: { number: 44 },
+      label: { name: "df:ready" },
+      sender
+    }), "issues", () => {});
+    assert.equal(request?.readyLabelActorTrusted, false, JSON.stringify(sender));
+    assert.equal(request?.evaluationOnly, true, JSON.stringify(sender));
+  }
+  assert.equal(parseEventRequest(JSON.stringify({
+    action: "unlabeled",
+    repository: { full_name: "marius-patrik/example" },
+    issue: { number: 44 },
+    label: { name: "df:ready" },
+    sender: { login: "darkfactory-agent[bot]", type: "Bot" }
+  }), "issues", () => {}), null);
+});
+
+test("current ready ownership follows the latest current event and rejects stale or near-miss actors", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { currentReadyLabelOwnership } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-ready-event-ownership-test");
+  const trusted = labeledEvent("df:ready", "2026-07-16T10:00:00Z");
+  assert.equal(currentReadyLabelOwnership([trusted]).trusted, true);
+  assert.equal(currentReadyLabelOwnership([
+    trusted,
+    labeledEvent("df:ready", "2026-07-16T10:01:00Z", { login: "marius-patrik", type: "User" })
+  ]).trusted, false);
+  assert.equal(currentReadyLabelOwnership([
+    trusted,
+    labeledEvent("df:ready", "2026-07-16T10:02:00Z", { login: "darkfactory-agent", type: "Bot" })
+  ]).trusted, false);
+  assert.equal(currentReadyLabelOwnership([
+    trusted,
+    { ...labeledEvent("df:ready", "2026-07-16T10:03:00Z"), event: "unlabeled" }
+  ]).reason, "latest-ready-event-is-unlabeled");
 });
 
 test("parseWorkflowDispatchRequest scopes source events", async () => {
@@ -1080,7 +1665,194 @@ test("parseWorkflowDispatchRequest scopes source events", async () => {
     slashRun: true,
     readyLabel: false
   });
+  assert.deepEqual(parseWorkflowDispatchRequest("marius-patrik/example", "", "df-setup", () => {}), {
+    repository: { owner: "marius-patrik", repo: "example" },
+    issueNumber: null,
+    slashRun: false,
+    readyLabel: false,
+    evaluationOnly: true
+  });
+  assert.equal(parseWorkflowDispatchRequest("marius-patrik/example", "", "workflow_dispatch", () => {}), null);
   assert.equal(parseWorkflowDispatchRequest("", "", "", () => {}), null);
+});
+
+test("setup readiness evaluation is repository-scoped and never dispatches worker or fleet mutations", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-setup-evaluation-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 12,
+    title: "Evaluate me",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:planned" }]
+  });
+  const gh = {
+    async request(method: string, path: string, body?: unknown) {
+      calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
+      if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
+        return [review.issue];
+      }
+      if (method === "GET" && path === "/repos/marius-patrik/other/issues?state=open&per_page=100&page=1") {
+        return [{ number: 99, title: "Do not touch", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] }];
+      }
+      if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/12/labels") return {};
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+
+  const result = await orchestrate({
+    gh,
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
+    registry: { repositories: { "marius-patrik/example": { state: "active" }, "marius-patrik/other": { state: "active" } } },
+    repositories: [
+      { full_name: "marius-patrik/example", archived: false, disabled: false },
+      { full_name: "marius-patrik/other", archived: false, disabled: false }
+    ],
+    trigger: "workflow_dispatch",
+    dispatchRequest: { repo: "marius-patrik/example", issue_number: "", source_event: "df-setup" },
+    writeLedger: false,
+    updateDashboard: false,
+    warn: () => {},
+    log: () => {}
+  });
+
+  assert.deepEqual(result.dispatched, []);
+  assert.deepEqual(result.autoReadied, [{ repo: "marius-patrik/example", issue: 12 }]);
+  assert.equal(result.ledger.evaluation_only, true);
+  assert.equal(calls.some((call) => call.path.includes("/actions/workflows/df-work.yml/dispatches")), false);
+  assert.equal(calls.some((call) => call.method !== "GET" && call.path.startsWith("/repos/marius-patrik/other/")), false);
+});
+
+test("readiness clears only an exact healthy machine-owned merge-policy brake", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadinessLabels } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-stale-brake-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const machineBrakeComment = { body: "<!-- dark-factory:orchestrator-ask-owner issue=1 reason=merge-policy-blocked -->" };
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 1,
+    title: "Machine brake",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:blocked" }, { name: "df:ask-owner" }]
+  }, [machineBrakeComment]);
+  const issues = [
+    review.issue,
+    { number: 2, title: "Owner brake", body: EXECUTABLE_BODY, labels: [{ name: "df:blocked" }, { name: "df:ask-owner" }] }
+  ];
+  const degraded = { number: 3, title: "Unhealthy brake", body: EXECUTABLE_BODY, labels: [{ name: "df:blocked" }, { name: "df:ask-owner" }] };
+  const gh = {
+    async request(method: string, path: string, body?: unknown) {
+      calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
+      if (method === "GET" && path.includes("/issues/2/comments")) return [{ body: "Owner explicitly held this issue." }];
+      if (method === "DELETE" && path.includes("/issues/1/labels/")) return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/1/comments") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/1/labels") return {};
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+  const readiness = new Map([
+    ["marius-patrik/example", { observable: true, doctorPerfect: true, gatesHealthy: true }],
+    ["marius-patrik/other", { observable: true, doctorPerfect: false, gatesHealthy: true }]
+  ]);
+  const policy = {
+    schemaVersion: 1,
+    concurrency: { global: 10, perRepository: 10, perStream: 10 },
+    waves: [{ name: "features", streams: ["default"] }],
+    dashboard: { enabled: false, issueTitle: "Dashboard" }
+  };
+
+  const evaluations: ReadinessEvaluation[] = await evaluateIssueReadinessLabels(gh, [
+    { repository: { owner: "marius-patrik", repo: "example" }, openIssues: issues },
+    { repository: { owner: "marius-patrik", repo: "other" }, openIssues: [degraded] }
+  ], () => {}, { readinessByRepository: readiness, policy });
+
+  assert.equal(evaluations.find((entry) => entry.issue === 1)?.ready, true);
+  assert.equal(evaluations.find((entry) => entry.issue === 1)?.action, "labeled-ready");
+  assert.equal(evaluations.find((entry) => entry.issue === 2)?.ready, false);
+  assert.equal(evaluations.find((entry) => entry.issue === 3)?.ready, false);
+  assert.equal(calls.some((call) => call.method === "DELETE" && call.path.includes("/issues/1/labels/df%3Ablocked")), true);
+  assert.equal(calls.some((call) => call.method === "DELETE" && call.path.includes("/issues/2/labels/")), false);
+  assert.equal(calls.some((call) => call.path.includes("/marius-patrik/other/issues/3/comments")), false);
+});
+
+test("readiness reserves bounded capacity in deterministic priority order", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { evaluateIssueReadinessLabels } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-readiness-capacity-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 2,
+    title: "Higher priority",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "P0" }]
+  });
+  const gh = {
+    async request(method: string, path: string, body?: unknown) {
+      calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
+      if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/2/labels") return {};
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+  const policy = {
+    schemaVersion: 1,
+    concurrency: { global: 1, perRepository: 1, perStream: 1 },
+    waves: [{ name: "features", streams: ["default"] }],
+    dashboard: { enabled: false, issueTitle: "Dashboard" }
+  };
+  const evaluations: ReadinessEvaluation[] = await evaluateIssueReadinessLabels(gh, [{
+    repository: { owner: "marius-patrik", repo: "example" },
+    openIssues: [
+      { number: 1, title: "Lower priority", body: EXECUTABLE_BODY, labels: [{ name: "P1" }] },
+      review.issue
+    ]
+  }], () => {}, {
+    readinessByRepository: new Map([["marius-patrik/example", { observable: true, doctorPerfect: true, gatesHealthy: true }]]),
+    policy
+  });
+
+  assert.deepEqual(evaluations.map((entry) => [entry.issue, entry.ready, entry.action]), [
+    [2, true, "labeled-ready"],
+    [1, false, "no-op"]
+  ]);
+  assert.ok(evaluations.find((entry) => entry.issue === 1)?.findings.includes("capacity-exhausted"));
+  assert.equal(calls.some((call) => call.path.includes("/issues/1/labels")), false);
+});
+
+test("machine readiness accepts only a fresh identity-bound self-hosted doctor receipt", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { machineReadinessFromDoctorLedger } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-machine-receipt-test");
+  const now = "2026-07-15T12:00:00.000Z";
+  const receipt = {
+    kind: "repo-doctor",
+    phase: "completion",
+    target_repo: "marius-patrik/DarkFactory",
+    machine_evidence_schema: 1,
+    created_at: "2026-07-15T11:00:00.000Z",
+    source_refs: { main: "control-head" },
+    findings: [{ id: "unrelated", category: "PRD drift" }]
+  };
+
+  assert.deepEqual(machineReadinessFromDoctorLedger(receipt, now), {
+    observable: true,
+    healthy: true,
+    ageMs: 60 * 60 * 1000,
+    findingIds: []
+  });
+  assert.deepEqual(machineReadinessFromDoctorLedger({ ...receipt, target_repo: "marius-patrik/other" }, now).findingIds, ["machine-readiness-proof-missing"]);
+  assert.deepEqual(machineReadinessFromDoctorLedger(receipt, now, "marius-patrik/DarkFactory", "different-head").findingIds, ["machine-readiness-proof-missing"]);
+  assert.deepEqual(machineReadinessFromDoctorLedger({ ...receipt, created_at: "2026-07-13T00:00:00.000Z" }, now).findingIds, ["machine-readiness-proof-stale"]);
+  const unhealthy = machineReadinessFromDoctorLedger({ ...receipt, findings: [{ id: "df-local-runner-offline", category: "runner health" }] }, now);
+  assert.equal(unhealthy.observable, true);
+  assert.equal(unhealthy.healthy, false);
+  assert.deepEqual(unhealthy.findingIds, ["df-local-runner-offline"]);
 });
 
 test("orchestrator turns scoped /df run dispatches into df:ready before dispatch", async () => {
@@ -1088,6 +1860,12 @@ test("orchestrator turns scoped /df run dispatches into df:ready before dispatch
   const { orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-forwarded-slash-run-test");
   const calls: Array<{ method: string; path: string; body?: any }> = [];
   const notFound = Object.assign(new Error("not found"), { status: 404 });
+  const review = exactReviewHarness("marius-patrik/example", {
+    number: 12,
+    title: "Run me",
+    body: EXECUTABLE_BODY,
+    labels: [{ name: "df:ready" }]
+  });
 
   const gh = {
     async graphql() {
@@ -1102,6 +1880,8 @@ test("orchestrator turns scoped /df run dispatches into df:ready before dispatch
     },
     async request(method: string, path: string, body?: unknown) {
       calls.push({ method, path, body });
+      const reviewResponse = review.respond(method, path, body);
+      if (reviewResponse !== NO_REVIEW_RESPONSE) return reviewResponse;
 
       if (method === "POST" && path === "/repos/marius-patrik/example/labels") return {};
       if (method === "PATCH" && path === "/repos/marius-patrik/example/labels/df%3Aready") return {};
@@ -1113,14 +1893,14 @@ test("orchestrator turns scoped /df run dispatches into df:ready before dispatch
       if (method === "POST" && path === "/repos/marius-patrik/example/issues/12/comments") return {};
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=1") {
         return [
-          { number: 12, title: "Run me", body: "", labels: [{ name: "df:ready" }] },
-          { number: 99, title: "Do not run me", body: "", labels: [{ name: "df:ready" }] }
+          review.issue,
+          { number: 99, title: "Do not run me", body: EXECUTABLE_BODY, labels: [{ name: "df:ready" }] }
         ];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues?state=open&per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
       if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") throw notFound;
-      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") throw notFound;
+      if (method === "GET" && path === "/repos/marius-patrik/example/branches/main/protection") return healthyManagedProtection();
       if (method === "DELETE" && path === "/repos/marius-patrik/example/issues/12/labels/df%3Aready") return {};
       if (method === "POST" && path === "/repos/marius-patrik/DarkFactory/actions/workflows/df-work.yml/dispatches") return {};
 
@@ -1131,6 +1911,7 @@ test("orchestrator turns scoped /df run dispatches into df:ready before dispatch
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" }, "marius-patrik/other": { state: "active" } } },
     repositories: [
       { full_name: "marius-patrik/example", archived: false, disabled: false },
@@ -1146,7 +1927,8 @@ test("orchestrator turns scoped /df run dispatches into df:ready before dispatch
 
   assert.deepEqual(result.dispatched, [{ repo: "marius-patrik/example", issue: 12, wave: "features", streams: ["default"] }]);
   assert.equal(calls.some((call) => call.path.includes("/issues/99/")), false);
-  assert.equal(calls.some((call) => call.path.startsWith("/repos/marius-patrik/other/")), false);
+  assert.equal(calls.some((call) => call.method === "GET" && call.path.startsWith("/repos/marius-patrik/other/")), true);
+  assert.equal(calls.some((call) => call.method !== "GET" && call.path.startsWith("/repos/marius-patrik/other/")), false);
   assert.ok(calls.some((call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/12/comments"));
 });
 
@@ -1168,8 +1950,9 @@ test("orchestrator treats untrusted /df run comments as no-op events", async () 
           throw new Error("untrusted event must not inspect or dispatch global work");
         }
       },
-      controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
-      registry: { repositories: { "marius-patrik/example": { state: "active" } } },
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
+    registry: { repositories: { "marius-patrik/example": { state: "active" } } },
       repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
       trigger: "issue_comment",
       writeLedger: false,
@@ -1205,6 +1988,7 @@ test("orchestrator ignores event runs for inactive managed repositories", async 
         }
       },
       controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+      readinessByRepository: healthyReadiness(),
       registry: { repositories: { "marius-patrik/example": { state: "parked" } } },
       repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
       trigger: "issue_comment",
@@ -1243,7 +2027,7 @@ test("orchestrator resumes interrupted run against existing open worker PR", asy
                 headRefName: "df/8-worker",
                 baseRefName: "main",
                 headRepository: { owner: { login: "marius-patrik" }, name: "example" },
-                author: { login: "mp-agents[bot]" }
+                author: { __typename: "Bot", login: "darkfactory-agent" }
               }
             ]
           }
@@ -1273,6 +2057,7 @@ test("orchestrator resumes interrupted run against existing open worker PR", asy
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     policy: {
@@ -1301,7 +2086,8 @@ test("orchestrator resumes interrupted run against existing open worker PR", asy
       issue_number: "8",
       base_ref: "main",
       resume_pr: "21",
-      resume_branch: ""
+      resume_branch: "",
+      resume_head: ""
     }
   });
   const comment = calls.find(
@@ -1315,6 +2101,7 @@ test("orchestrator resumes interrupted run from pushed branch when no PR exists"
   const { RESUME_MARKER, orchestrate } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-resume-branch-test");
   const calls: Array<{ method: string; path: string; body?: any }> = [];
   const notFound = Object.assign(new Error("not found"), { status: 404 });
+  const resumeHead = "9".repeat(40);
 
   const gh = {
     async graphql() {
@@ -1338,7 +2125,7 @@ test("orchestrator resumes interrupted run from pushed branch when no PR exists"
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/9/comments?per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example/git/matching-refs/heads/df%2F9-") {
-        return [{ ref: "refs/heads/df/9-resume-test" }];
+        return [{ ref: "refs/heads/df/9-resume-test", object: { sha: resumeHead } }];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") throw notFound;
       if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
@@ -1352,6 +2139,7 @@ test("orchestrator resumes interrupted run from pushed branch when no PR exists"
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     policy: {
@@ -1367,18 +2155,53 @@ test("orchestrator resumes interrupted run from pushed branch when no PR exists"
   });
 
   assert.deepEqual(result.recoveries, [
-    { repo: "marius-patrik/example", issue: 9, type: "branch", action: "resume-branch", reason: "", branch: "df/9-resume-test" }
+    { repo: "marius-patrik/example", issue: 9, type: "branch", action: "resume-branch", reason: "", branch: "df/9-resume-test", head: resumeHead }
   ]);
   const dispatch = calls.find(
     (call) => call.method === "POST" && call.path === "/repos/marius-patrik/DarkFactory/actions/workflows/df-work.yml/dispatches"
   )?.body;
   assert.equal(dispatch.inputs.resume_branch, "df/9-resume-test");
+  assert.equal(dispatch.inputs.resume_head, resumeHead);
   assert.equal(dispatch.inputs.base_ref, "main");
   assert.equal(dispatch.inputs.resume_pr, "");
   const comment = calls.find(
     (call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/9/comments"
   )?.body;
   assert.ok(String(comment?.body).includes(RESUME_MARKER));
+});
+
+test("interrupted recovery escalates multiple pushed branches without dispatching either", async () => {
+  // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
+  const { classifyResumeTarget, resumeInterruptedWorker } = await import("../.github/scripts/df-orchestrate.mjs?unit=df-orchestrate-resume-ambiguous-test");
+  const calls: Array<{ method: string; path: string; body?: any }> = [];
+  const gh = {
+    async graphql() {
+      return { repository: { pullRequests: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } };
+    },
+    async request(method: string, path: string, body?: any) {
+      calls.push({ method, path, body });
+      if (method === "GET" && path.endsWith("/git/matching-refs/heads/df%2F77-")) {
+        return [
+          { ref: "refs/heads/df/77-first", object: { sha: "1".repeat(40) } },
+          { ref: "refs/heads/df/77-second", object: { sha: "2".repeat(40) } }
+        ];
+      }
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/77/labels") return {};
+      if (method === "DELETE" && path.startsWith("/repos/marius-patrik/example/issues/77/labels/")) return {};
+      if (method === "POST" && path === "/repos/marius-patrik/example/issues/77/comments") return {};
+      throw new Error(`Unexpected GitHub request: ${method} ${path}`);
+    }
+  };
+  const repository = { owner: "marius-patrik", repo: "example" };
+  const issue = { number: 77 };
+  const classification = await classifyResumeTarget(gh, repository, issue);
+  assert.equal(classification.type, "ambiguous");
+  assert.deepEqual(classification.candidates.map((candidate: { branch: string }) => candidate.branch), ["df/77-first", "df/77-second"]);
+
+  const recovery = await resumeInterruptedWorker(gh, { owner: "marius-patrik", repo: "DarkFactory" }, repository, issue, classification);
+  assert.equal(recovery.action, "ask-owner");
+  assert.equal(recovery.reason, "ambiguous-worker-branches");
+  assert.equal(calls.some((call) => call.path.endsWith("/actions/workflows/df-work.yml/dispatches")), false);
 });
 
 test("orchestrator requeues interrupted run with no usable branch", async () => {
@@ -1421,6 +2244,7 @@ test("orchestrator requeues interrupted run with no usable branch", async () => 
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     policy: {
@@ -1436,12 +2260,12 @@ test("orchestrator requeues interrupted run with no usable branch", async () => 
   });
 
   assert.deepEqual(result.recoveries, [
-    { repo: "marius-patrik/example", issue: 10, type: "none", action: "requeue", reason: "no-usable-branch" }
+    { repo: "marius-patrik/example", issue: 10, type: "none", action: "request-evaluation", reason: "no-usable-branch" }
   ]);
   const labelUpdate = calls.find(
     (call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/10/labels"
   )?.body;
-  assert.deepEqual(labelUpdate, { labels: ["df:ready"] });
+  assert.equal(labelUpdate, undefined);
   const comment = calls.find(
     (call) => call.method === "POST" && call.path === "/repos/marius-patrik/example/issues/10/comments"
   )?.body;
@@ -1485,6 +2309,7 @@ test("orchestrator does not resume running issue with terminal comment", async (
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     policy: {
@@ -1532,7 +2357,7 @@ test("orchestrator surfaces recovery decisions in ledger and dashboard", async (
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/issues/12/comments?per_page=100&page=2") return [];
       if (method === "GET" && path === "/repos/marius-patrik/example/git/matching-refs/heads/df%2F12-") {
-        return [{ ref: "refs/heads/df/12-resume-test" }];
+        return [{ ref: "refs/heads/df/12-resume-test", object: { sha: "1".repeat(40) } }];
       }
       if (method === "GET" && path === "/repos/marius-patrik/example/git/ref/heads/dev") throw notFound;
       if (method === "GET" && path === "/repos/marius-patrik/example") return { default_branch: "main", allow_auto_merge: true };
@@ -1551,6 +2376,7 @@ test("orchestrator surfaces recovery decisions in ledger and dashboard", async (
   const result = await orchestrate({
     gh,
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    readinessByRepository: healthyReadiness(),
     registry: { repositories: { "marius-patrik/example": { state: "active" } } },
     repositories: [{ full_name: "marius-patrik/example", archived: false, disabled: false }],
     policy: {
@@ -1566,11 +2392,12 @@ test("orchestrator surfaces recovery decisions in ledger and dashboard", async (
   });
 
   assert.deepEqual(result.ledger.recovery, [
-    { repo: "marius-patrik/example", issue: 12, type: "branch", action: "resume-branch", reason: "", branch: "df/12-resume-test" }
+    { repo: "marius-patrik/example", issue: 12, type: "branch", action: "resume-branch", reason: "", branch: "df/12-resume-test", head: "1".repeat(40) }
   ]);
   const dashboardUpdate = calls.find(
     (call) => call.method === "PATCH" && call.path === "/repos/marius-patrik/DarkFactory/issues/99"
   );
   assert.ok(String(dashboardUpdate?.body.body).includes("## Worker Recoveries"));
+  assert.ok(String(dashboardUpdate?.body.body).includes("## Automation Loop Health"));
   assert.ok(String(dashboardUpdate?.body.body).includes("marius-patrik/example#12"));
 });
