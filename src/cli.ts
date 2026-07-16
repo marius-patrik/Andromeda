@@ -806,7 +806,7 @@ export function submoduleGithubPermissions(mode: SubmoduleCliOptions["mode"]): R
 
 function submoduleWatchSettled(result: Record<string, unknown>): boolean {
   const status = typeof result.status === "string" ? result.status : "";
-  if (["blocked", "current", "released", "automerge-armed", "failed", "skipped"].includes(status)) return true;
+  if (["blocked", "current", "released", "verified", "automerge-armed", "failed", "skipped"].includes(status)) return true;
   const plan = isRecord(result.plan) ? result.plan : null;
   return result.mode === "status" && plan !== null && ["block", "current", "released"].includes(String(plan.action || ""));
 }

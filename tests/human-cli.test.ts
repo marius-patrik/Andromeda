@@ -121,10 +121,13 @@ test("submodule CLI preserves status/update/verify parity with the shared engine
   ]);
 
   const verified = await executeSubmoduleEngine(
-    parseSubmoduleCliArgs(["verify", "marius-patrik/DarkFactory"]),
-    { async run(input) { calls.push(input); return { schemaVersion: 1, mode: input.mode, status: "current", plan: { action: "current" } }; } }
+    parseSubmoduleCliArgs(["verify", "marius-patrik/DarkFactory", "--watch"]),
+    { async run(input) { calls.push(input); return { schemaVersion: 1, mode: input.mode, status: "verified", plan: { action: "current" } }; } },
+    { maxPasses: 3, wait: async () => { waits += 1; } }
   );
   assert.equal(verified.mode, "verify");
+  assert.equal(verified.status, "verified");
+  assert.equal(waits, 1);
   assert.equal(calls.at(-1)?.mode, "verify");
   assert.deepEqual(submoduleJsonResult(
     parseSubmoduleCliArgs(["verify", "--json"]),
