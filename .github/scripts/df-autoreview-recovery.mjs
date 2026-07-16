@@ -23,6 +23,8 @@ const REPOSITORY = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const PENDING_MAX_AGE_MS = 3 * 60 * 60 * 1_000;
 const WORKFLOW_RERUN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 const FAILED_GATE_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "action_required", "startup_failure", "stale"]);
+const CHECK_RUN_STATUSES = new Set(["queued", "in_progress", "completed"]);
+const PENDING_WORKFLOW_RUN_STATUSES = new Set(["queued", "in_progress", "pending", "requested", "waiting"]);
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DATA_POLICY_PATH = path.join(CONTROL_ROOT, ".darkfactory", "data-repository-policy.json");
 const PENDING_MARKER = "<!-- darkfactory:clean-autoreview";
@@ -178,7 +180,7 @@ async function observePullRecoveryCandidate(repository, pull, admittedCommentId 
     "GET",
     `/repos/${repoName(repository)}/commits/${headSha}/check-runs?check_name=${encodeURIComponent("DarkFactory Autoreview")}&filter=latest&per_page=100`
   );
-  const gate = currentTrustedPullGate(checks, headSha);
+  const gate = await currentTrustedPullGate(repository, pull, checks);
   if (gate.state === "pending") return null;
   if (gate.state === "green" && isSuccessfulCompletion(completion)) return null;
 
@@ -188,7 +190,8 @@ async function observePullRecoveryCandidate(repository, pull, admittedCommentId 
     number: pull.number,
     version,
     completion,
-    gate: gate.evidence
+    gate: gate.evidence,
+    workflowRun: gate.workflowRun
   };
   if (gate.state !== "red") {
     return {
@@ -196,17 +199,7 @@ async function observePullRecoveryCandidate(repository, pull, admittedCommentId 
       recoveryAction: "owner-required",
       recoveryReason: gate.state === "green"
         ? "green-gate-without-exact-successful-comment"
-        : `trusted-current-gate-${gate.state}`
-    };
-  }
-
-  const run = await resolveExactPullRequestTargetRun(repository, pull, gate.checkRun);
-  if (run.status !== "rerunnable") {
-    return {
-      ...base,
-      recoveryAction: "owner-required",
-      recoveryReason: run.reason,
-      workflowRun: run.evidence
+        : gate.reason || `trusted-current-gate-${gate.state}`
     };
   }
   return {
@@ -214,41 +207,134 @@ async function observePullRecoveryCandidate(repository, pull, admittedCommentId 
     recoveryAction: "rerun-pull-request-target",
     recoveryReason: completion === "clean" || completion === "owner_override"
       ? "successful-comment-with-red-gate"
-      : completion === "blocked" ? "blocked-result" : "missing-or-stale-result",
-    workflowRun: run.evidence
+      : completion === "blocked" ? "blocked-result" : "missing-or-stale-result"
   };
 }
 
-function currentTrustedPullGate(payload, headSha) {
+async function currentTrustedPullGate(repository, pull, payload) {
+  const headSha = String(pull?.head?.sha || "");
   if (!isRecord(payload) || !Array.isArray(payload.check_runs)) {
-    return { state: "unobservable", evidence: { state: "unobservable" }, checkRun: null };
+    return { state: "unobservable", reason: "trusted-current-gate-unobservable", evidence: { state: "unobservable" }, workflowRun: null };
+  }
+  if (!Number.isSafeInteger(payload.total_count) || payload.total_count !== payload.check_runs.length) {
+    return {
+      state: "unobservable",
+      reason: "trusted-current-gate-inventory-truncated-or-malformed",
+      evidence: { state: "unobservable", totalCount: payload.total_count, observedCount: payload.check_runs.length },
+      workflowRun: null
+    };
   }
   const candidates = payload.check_runs.filter((check) => isRecord(check)
     && check.name === "DarkFactory Autoreview"
-    && check.app?.id === TRUSTED_GATE_APP_ID
-    && check.head_sha === headSha);
-  if (candidates.length === 0) return { state: "missing", evidence: { state: "missing" }, checkRun: null };
-  if (candidates.some((check) => !Number.isSafeInteger(check.id) || check.id < 1)) {
-    return { state: "ambiguous", evidence: { state: "ambiguous", count: candidates.length }, checkRun: null };
+    && check.app?.id === TRUSTED_GATE_APP_ID);
+  if (candidates.length === 0) {
+    return { state: "missing", reason: "trusted-current-gate-missing", evidence: { state: "missing" }, workflowRun: null };
   }
-  candidates.sort((left, right) => right.id - left.id);
-  if (candidates.length > 1 && candidates[0].id === candidates[1].id) {
-    return { state: "ambiguous", evidence: { state: "ambiguous", count: candidates.length }, checkRun: null };
+
+  const bound = [];
+  const rejected = [];
+  for (const checkRun of candidates) {
+    const check = pullGateCheckEvidence(checkRun, headSha);
+    if (checkRun.head_sha !== headSha
+      || !Number.isSafeInteger(checkRun.id)
+      || checkRun.id < 1
+      || !Number.isSafeInteger(checkRun.check_suite?.id)
+      || checkRun.check_suite.id < 1
+      || !CHECK_RUN_STATUSES.has(checkRun.status)
+      || (checkRun.status === "completed" && typeof checkRun.conclusion !== "string")
+      || (checkRun.status !== "completed" && checkRun.conclusion !== null)) {
+      rejected.push({ check, reason: "current-gate-check-identity-invalid", workflowRun: null });
+      continue;
+    }
+    const binding = await resolveExactPullRequestTargetRun(repository, pull, checkRun);
+    if (binding.status !== "bound") {
+      rejected.push({ check, reason: binding.reason, workflowRun: binding.evidence });
+      continue;
+    }
+    bound.push({ checkRun, check, run: binding.run, workflowRun: binding.evidence });
   }
-  const checkRun = candidates[0];
+
+  if (rejected.length > 0) {
+    const collision = candidates.length > 1 || bound.length > 0;
+    return {
+      state: collision ? "collision" : "unbound",
+      reason: collision ? "trusted-current-gate-collision" : rejected[0].reason,
+      evidence: {
+        state: collision ? "collision" : "unbound",
+        checkCount: candidates.length,
+        bound: bound.map((entry) => ({ check: entry.check, workflowRun: entry.workflowRun })),
+        rejected
+      },
+      workflowRun: collision ? null : rejected[0].workflowRun
+    };
+  }
+  if (bound.length !== 1) {
+    return {
+      state: "ambiguous",
+      reason: "exact-current-gate-ambiguous",
+      evidence: {
+        state: "ambiguous",
+        checkCount: candidates.length,
+        bound: bound.map((entry) => ({ check: entry.check, workflowRun: entry.workflowRun }))
+      },
+      workflowRun: null
+    };
+  }
+
+  const [{ checkRun, check, run, workflowRun }] = bound;
   const evidence = {
-    state: checkRun.status !== "completed" ? "pending" : checkRun.conclusion === "success" ? "green" : "red",
-    id: checkRun.id,
-    headSha: checkRun.head_sha,
-    status: checkRun.status,
-    conclusion: checkRun.conclusion ?? null,
-    checkSuiteId: Number.isSafeInteger(checkRun.check_suite?.id) ? checkRun.check_suite.id : null,
-    url: typeof checkRun.html_url === "string" ? checkRun.html_url : null
+    ...check,
+    workflowRunId: workflowRun.id
   };
-  if (checkRun.status !== "completed") return { state: "pending", evidence, checkRun };
-  if (checkRun.conclusion === "success") return { state: "green", evidence, checkRun };
-  if (!FAILED_GATE_CONCLUSIONS.has(checkRun.conclusion)) return { state: "unrerunnable", evidence, checkRun };
-  return { state: "red", evidence, checkRun };
+  if (checkRun.status !== "completed") {
+    if (!PENDING_WORKFLOW_RUN_STATUSES.has(run.status) || run.conclusion !== null) {
+      return {
+        state: "inconsistent",
+        reason: "exact-current-gate-run-state-inconsistent",
+        evidence: { ...evidence, state: "inconsistent" },
+        workflowRun
+      };
+    }
+    return { state: "pending", reason: null, evidence: { ...evidence, state: "pending" }, workflowRun };
+  }
+  if (checkRun.conclusion === "success") {
+    if (run.status !== "completed" || run.conclusion !== "success") {
+      return {
+        state: "inconsistent",
+        reason: "exact-current-gate-run-state-inconsistent",
+        evidence: { ...evidence, state: "inconsistent" },
+        workflowRun
+      };
+    }
+    return { state: "green", reason: null, evidence: { ...evidence, state: "green" }, workflowRun };
+  }
+  if (!FAILED_GATE_CONCLUSIONS.has(checkRun.conclusion)) {
+    return {
+      state: "unrerunnable",
+      reason: "exact-current-gate-conclusion-not-rerunnable",
+      evidence: { ...evidence, state: "unrerunnable" },
+      workflowRun
+    };
+  }
+
+  const createdAt = Date.parse(run.created_at || "");
+  const age = Number(runtimeOptions.now || Date.now()) - createdAt;
+  const rerunSuffix = `/repos/${repoName(repository)}/actions/runs/${run.id}/rerun`;
+  if (run.status !== "completed"
+    || !FAILED_GATE_CONCLUSIONS.has(run.conclusion)
+    || typeof run.rerun_url !== "string"
+    || !run.rerun_url.endsWith(rerunSuffix)
+    || !Number.isFinite(createdAt)
+    || age < -300_000
+    || age > WORKFLOW_RERUN_MAX_AGE_MS) {
+    return {
+      state: "unrerunnable",
+      reason: "exact-pull-request-target-run-not-rerunnable",
+      evidence: { ...evidence, state: "unrerunnable" },
+      workflowRun
+    };
+  }
+  return { state: "red", reason: null, evidence: { ...evidence, state: "red" }, workflowRun };
 }
 
 async function resolveExactPullRequestTargetRun(repository, pull, checkRun) {
@@ -257,7 +343,7 @@ async function resolveExactPullRequestTargetRun(repository, pull, checkRun) {
     return { status: "owner-required", reason: "failed-gate-check-suite-missing", evidence: null };
   }
   const runs = await listWorkflowRuns(
-    `/repos/${repoName(repository)}/actions/runs?event=pull_request_target&check_suite_id=${checkSuiteId}&per_page=100`
+    `/repos/${repoName(repository)}/actions/runs?check_suite_id=${checkSuiteId}&per_page=100`
   );
   const exact = runs.filter((run) => exactPullRequestTargetRun(run, pull, checkSuiteId));
   if (exact.length === 0) {
@@ -267,7 +353,10 @@ async function resolveExactPullRequestTargetRun(repository, pull, checkRun) {
       evidence: {
         checkSuiteId,
         observedRunCount: runs.length,
-        observedRunIds: runs.filter((run) => Number.isSafeInteger(run?.id)).slice(0, 100).map((run) => run.id)
+        observedRunIds: runs.filter((run) => Number.isSafeInteger(run?.id)).slice(0, 100).map((run) => run.id),
+        observedRuns: runs.slice(0, 20).map((run) => isRecord(run)
+          ? workflowRunEvidence(run, checkSuiteId)
+          : { malformed: true })
       }
     };
   }
@@ -275,11 +364,32 @@ async function resolveExactPullRequestTargetRun(repository, pull, checkRun) {
     return {
       status: "owner-required",
       reason: "exact-pull-request-target-run-ambiguous",
-      evidence: { checkSuiteId, count: exact.length, runIds: exact.map((run) => run.id) }
+      evidence: {
+        checkSuiteId,
+        count: exact.length,
+        runIds: exact.map((run) => run.id),
+        runs: exact.slice(0, 20).map((run) => workflowRunEvidence(run, checkSuiteId))
+      }
     };
   }
   const run = exact[0];
-  const evidence = {
+  return { status: "bound", reason: null, run, evidence: workflowRunEvidence(run, checkSuiteId) };
+}
+
+function pullGateCheckEvidence(checkRun, expectedHeadSha) {
+  return {
+    id: Number.isSafeInteger(checkRun?.id) ? checkRun.id : null,
+    headSha: typeof checkRun?.head_sha === "string" ? checkRun.head_sha : null,
+    expectedHeadSha,
+    status: typeof checkRun?.status === "string" ? checkRun.status : null,
+    conclusion: checkRun?.conclusion ?? null,
+    checkSuiteId: Number.isSafeInteger(checkRun?.check_suite?.id) ? checkRun.check_suite.id : null,
+    url: typeof checkRun?.html_url === "string" ? checkRun.html_url : null
+  };
+}
+
+function workflowRunEvidence(run, checkSuiteId) {
+  return {
     id: run.id,
     checkSuiteId,
     runAttempt: run.run_attempt,
@@ -293,19 +403,6 @@ async function resolveExactPullRequestTargetRun(repository, pull, checkRun) {
     rerunUrl: typeof run.rerun_url === "string" ? run.rerun_url : null,
     createdAt: run.created_at
   };
-  const createdAt = Date.parse(run.created_at || "");
-  const age = Number(runtimeOptions.now || Date.now()) - createdAt;
-  const rerunSuffix = `/repos/${repoName(repository)}/actions/runs/${run.id}/rerun`;
-  if (run.status !== "completed"
-    || !FAILED_GATE_CONCLUSIONS.has(run.conclusion)
-    || typeof run.rerun_url !== "string"
-    || !run.rerun_url.endsWith(rerunSuffix)
-    || !Number.isFinite(createdAt)
-    || age < -300_000
-    || age > WORKFLOW_RERUN_MAX_AGE_MS) {
-    return { status: "owner-required", reason: "exact-pull-request-target-run-not-rerunnable", evidence };
-  }
-  return { status: "rerunnable", reason: null, evidence };
 }
 
 function exactPullRequestTargetRun(run, pull, checkSuiteId) {
@@ -594,15 +691,24 @@ async function listAll(requestPath) {
 
 async function listWorkflowRuns(requestPath) {
   const output = [];
+  let expectedTotal = null;
   for (let page = 1; page <= 100; page += 1) {
     const separator = requestPath.includes("?") ? "&" : "?";
     const pagePath = /(?:^|[?&])page=/.test(requestPath) ? requestPath : `${requestPath}${separator}page=${page}`;
     const payload = await gh.request("GET", pagePath);
-    if (!isRecord(payload) || !Array.isArray(payload.workflow_runs)) {
+    if (!isRecord(payload)
+      || !Array.isArray(payload.workflow_runs)
+      || !Number.isSafeInteger(payload.total_count)
+      || payload.total_count < 0
+      || (expectedTotal !== null && payload.total_count !== expectedTotal)) {
       throw new Error(`GitHub returned a malformed workflow-run response for ${requestPath}`);
     }
+    expectedTotal ??= payload.total_count;
     output.push(...payload.workflow_runs);
-    if (payload.workflow_runs.length < 100) return output;
+    if (payload.workflow_runs.length < 100) {
+      if (output.length !== expectedTotal) throw new Error(`GitHub returned a truncated workflow-run response for ${requestPath}`);
+      return output;
+    }
   }
   throw new Error(`GitHub workflow-run pagination exceeded its bounded inventory for ${requestPath}`);
 }

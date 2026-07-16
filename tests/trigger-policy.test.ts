@@ -236,8 +236,8 @@ test("Autoreview recovery lifecycle-filters code repositories, reruns the exact 
       if (method === "GET" && requestPath.includes("/repos/marius-patrik/DarkFactory/issues?")) return [];
       if (method === "GET" && requestPath.includes("/repos/marius-patrik/Andromeda/issues?")) return [issue];
       if (method === "GET" && /\/issues\/(?:7|9)\/comments\?/.test(requestPath)) return [];
-      if (method === "GET" && requestPath.includes(`/commits/${SHA_B}/check-runs?check_name=DarkFactory%20Autoreview`)) return { check_runs: [failedCheck] };
-      if (method === "GET" && requestPath.includes("/actions/runs?event=pull_request_target&check_suite_id=9001")) return { workflow_runs: [failedRun] };
+      if (method === "GET" && requestPath.includes(`/commits/${SHA_B}/check-runs?check_name=DarkFactory%20Autoreview`)) return { total_count: 1, check_runs: [failedCheck] };
+      if (method === "GET" && requestPath.includes("/actions/runs?check_suite_id=9001")) return { total_count: 1, workflow_runs: [failedRun] };
       if (method === "GET" && requestPath === "/repos/marius-patrik/DarkFactory/pulls/7") return pull;
       if (method === "GET" && requestPath === "/repos/marius-patrik/Andromeda/issues/9") return issue;
       if (method === "POST" && /\/issues\/(?:7|9)\/comments$/.test(requestPath)) return { id: commentId++, html_url: `https://github.com/comment/${commentId}` };
@@ -302,7 +302,7 @@ test("Autoreview recovery suppresses only an exact successful result with a curr
         created_at: "2026-07-16T11:59:00Z",
         body: `<!-- darkfactory:clean-autoreview schema=1 kind=pull-request number=4 version=${version} status=pending -->\nadmitted`
       }];
-      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return { check_runs: [{
+      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return { total_count: 1, check_runs: [{
         id: 801,
         name: "DarkFactory Autoreview",
         app: { id: 15368 },
@@ -310,6 +310,21 @@ test("Autoreview recovery suppresses only an exact successful result with a curr
         status: "completed",
         conclusion: "success",
         check_suite: { id: 9101 }
+      }] };
+      if (method === "GET" && requestPath.includes("/actions/runs?check_suite_id=9101")) return { total_count: 1, workflow_runs: [{
+        id: 5_101,
+        check_suite_id: 9_101,
+        event: "pull_request_target",
+        head_sha: head,
+        head_branch: "feature/clean",
+        path: ".github/workflows/darkfactory-autoreview.yml",
+        pull_requests: [{ number: 3, head: { sha: head, ref: "feature/clean" }, base: { sha: base, ref: "main" } }],
+        status: "completed",
+        conclusion: "success",
+        run_attempt: 1,
+        created_at: "2026-07-16T11:00:00Z",
+        html_url: "https://github.com/marius-patrik/DarkFactory/actions/runs/5101",
+        rerun_url: "https://api.github.com/repos/marius-patrik/DarkFactory/actions/runs/5101/rerun"
       }] };
       if (method === "GET" && requestPath.includes("/issues?")) return [];
       throw new Error(`unexpected ${method} ${requestPath}`);
@@ -329,6 +344,117 @@ test("Autoreview recovery suppresses only an exact successful result with a curr
   const result = await recoveryModule.recoverAutoreviews({ kind: "all", maxDispatches: 2, trigger: "test" });
   assert.equal(result.candidates, 0);
   assert.deepEqual(result.dispatched, []);
+});
+
+test("Autoreview recovery rejects a colliding PR-controlled Actions check even beside an exact green base-trusted gate", async () => {
+  const base = "c".repeat(40);
+  const head = "d".repeat(40);
+  const version = `${base}:${head}`;
+  const pull = {
+    number: 19,
+    state: "open",
+    draft: false,
+    base: { sha: base, ref: "dev" },
+    head: { sha: head, ref: "feature/colliding-gate", repo: { full_name: "marius-patrik/DarkFactory" } }
+  };
+  const exactPull = [{
+    number: 19,
+    head: { sha: head, ref: "feature/colliding-gate" },
+    base: { sha: base, ref: "dev" }
+  }];
+  const comments = [{
+    id: 190,
+    user: { login: "darkfactory-agent[bot]", type: "Bot" },
+    created_at: "2026-07-16T11:00:00Z",
+    body: [
+      "<!-- darkfactory-autoreview -->",
+      `<!-- darkfactory-autoreview-target version=${version} -->`,
+      "## DarkFactory Autoreview",
+      "",
+      "**Verdict:** Clean high confirmation"
+    ].join("\n")
+  }];
+  const mutations: string[] = [];
+  const gh = {
+    async request(method: string, requestPath: string) {
+      if (method === "GET" && requestPath.includes("/pulls?")) return [pull];
+      if (method === "GET" && requestPath.includes("/issues/19/comments?")) return comments;
+      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return {
+        total_count: 2,
+        check_runs: [{
+          id: 919,
+          name: "DarkFactory Autoreview",
+          app: { id: 15368 },
+          head_sha: head,
+          status: "completed",
+          conclusion: "success",
+          check_suite: { id: 9_201 }
+        }, {
+          id: 920,
+          name: "DarkFactory Autoreview",
+          app: { id: 15368 },
+          head_sha: head,
+          status: "completed",
+          conclusion: "success",
+          check_suite: { id: 9_202 }
+        }]
+      };
+      if (method === "GET" && requestPath.includes("/actions/runs?check_suite_id=9201")) return { total_count: 1, workflow_runs: [{
+        id: 5_201,
+        check_suite_id: 9_201,
+        event: "pull_request_target",
+        head_sha: head,
+        head_branch: "feature/colliding-gate",
+        path: ".github/workflows/darkfactory-autoreview.yml",
+        pull_requests: exactPull,
+        status: "completed",
+        conclusion: "success",
+        run_attempt: 1,
+        created_at: "2026-07-16T11:00:00Z",
+        html_url: "https://github.com/marius-patrik/DarkFactory/actions/runs/5201",
+        rerun_url: "https://api.github.com/repos/marius-patrik/DarkFactory/actions/runs/5201/rerun"
+      }] };
+      if (method === "GET" && requestPath.includes("/actions/runs?check_suite_id=9202")) return { total_count: 1, workflow_runs: [{
+        id: 5_202,
+        check_suite_id: 9_202,
+        event: "pull_request",
+        head_sha: head,
+        head_branch: "feature/colliding-gate",
+        path: ".github/workflows/pr-controlled-collision.yml",
+        pull_requests: exactPull,
+        status: "completed",
+        conclusion: "success",
+        run_attempt: 1,
+        created_at: "2026-07-16T11:00:00Z",
+        html_url: "https://github.com/marius-patrik/DarkFactory/actions/runs/5202",
+        rerun_url: "https://api.github.com/repos/marius-patrik/DarkFactory/actions/runs/5202/rerun"
+      }] };
+      if (method === "GET" && requestPath === "/repos/marius-patrik/DarkFactory/pulls/19") return pull;
+      mutations.push(`${method} ${requestPath}`);
+      throw new Error(`unexpected ${method} ${requestPath}`);
+    }
+  };
+  recoveryModule.configureAutoreviewRecoveryRuntime({
+    gh,
+    ledgerGh: gh,
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    controlRevision: "e".repeat(40),
+    controlMetadata: { archived: false, disabled: false },
+    activeRepositories: [],
+    dataRepositories: [],
+    now: Date.parse("2026-07-16T12:00:00Z"),
+    async writeLedger() {}
+  });
+
+  const result = await recoveryModule.recoverAutoreviews({ kind: "pull_request", maxDispatches: 2, trigger: "test" });
+  assert.equal(result.status, "owner-required");
+  assert.equal(result.candidates, 1);
+  assert.equal(result.dispatched[0].recoveryReason, "trusted-current-gate-collision");
+  assert.equal(result.dispatched[0].gate.state, "collision");
+  assert.equal(result.dispatched[0].gate.bound[0].workflowRun.event, "pull_request_target");
+  assert.equal(result.dispatched[0].gate.rejected[0].workflowRun.observedRuns[0].event, "pull_request");
+  assert.equal(result.dispatched[0].gate.rejected[0].workflowRun.observedRuns[0].path, ".github/workflows/pr-controlled-collision.yml");
+  assert.deepEqual(mutations, []);
 });
 
 test("Autoreview recovery reruns an exact failed PR gate even when its exact trusted result comment is clean", async () => {
@@ -360,7 +486,7 @@ test("Autoreview recovery reruns an exact failed PR gate even when its exact tru
       if (method === "GET" && requestPath.includes("/pulls?")) return [pull];
       if (method === "GET" && requestPath.includes("/issues/12/comments?")) return comments;
       if (method === "GET" && requestPath.includes("/issues?")) return [];
-      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return { check_runs: [{
+      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return { total_count: 1, check_runs: [{
         id: 812,
         name: "DarkFactory Autoreview",
         app: { id: 15368 },
@@ -369,7 +495,7 @@ test("Autoreview recovery reruns an exact failed PR gate even when its exact tru
         conclusion: "failure",
         check_suite: { id: 9_112 }
       }] };
-      if (method === "GET" && requestPath.includes("/actions/runs?event=pull_request_target&check_suite_id=9112")) return { workflow_runs: [{
+      if (method === "GET" && requestPath.includes("/actions/runs?check_suite_id=9112")) return { total_count: 1, workflow_runs: [{
         id: 5_012,
         check_suite_id: 9_112,
         event: "pull_request_target",
@@ -435,7 +561,7 @@ test("Autoreview recovery suppresses a trusted pending PR gate without rerunning
     async request(method: string, requestPath: string) {
       if (method === "GET" && requestPath.includes("/pulls?")) return [pull];
       if (method === "GET" && requestPath.includes("/issues/15/comments?")) return [];
-      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return { check_runs: [{
+      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return { total_count: 1, check_runs: [{
         id: 815,
         name: "DarkFactory Autoreview",
         app: { id: 15368 },
@@ -443,6 +569,21 @@ test("Autoreview recovery suppresses a trusted pending PR gate without rerunning
         status: "in_progress",
         conclusion: null,
         check_suite: { id: 9_115 }
+      }] };
+      if (method === "GET" && requestPath.includes("/actions/runs?check_suite_id=9115")) return { total_count: 1, workflow_runs: [{
+        id: 5_115,
+        check_suite_id: 9_115,
+        event: "pull_request_target",
+        head_sha: head,
+        head_branch: "feature/pending",
+        path: ".github/workflows/darkfactory-autoreview.yml",
+        pull_requests: [{ number: 15, head: { sha: head, ref: "feature/pending" }, base: { sha: base, ref: "main" } }],
+        status: "in_progress",
+        conclusion: null,
+        run_attempt: 1,
+        created_at: "2026-07-16T11:00:00Z",
+        html_url: "https://github.com/marius-patrik/DarkFactory/actions/runs/5115",
+        rerun_url: "https://api.github.com/repos/marius-patrik/DarkFactory/actions/runs/5115/rerun"
       }] };
       if (method === "GET" && requestPath.includes("/issues?")) return [];
       mutations.push(`${method} ${requestPath}`);
@@ -463,6 +604,57 @@ test("Autoreview recovery suppresses a trusted pending PR gate without rerunning
 
   const result = await recoveryModule.recoverAutoreviews({ kind: "pull_request", maxDispatches: 2, trigger: "test" });
   assert.equal(result.candidates, 0);
+  assert.deepEqual(mutations, []);
+});
+
+test("Autoreview recovery fails closed before suppression when GitHub truncates the named check inventory", async () => {
+  const base = "7".repeat(40);
+  const head = "8".repeat(40);
+  const pull = {
+    number: 20,
+    state: "open",
+    draft: false,
+    base: { sha: base, ref: "main" },
+    head: { sha: head, ref: "feature/truncated-checks", repo: { full_name: "marius-patrik/DarkFactory" } }
+  };
+  const mutations: string[] = [];
+  const gh = {
+    async request(method: string, requestPath: string) {
+      if (method === "GET" && requestPath.includes("/pulls?")) return [pull];
+      if (method === "GET" && requestPath.includes("/issues/20/comments?")) return [];
+      if (method === "GET" && requestPath.includes(`/commits/${head}/check-runs?check_name=DarkFactory%20Autoreview`)) return {
+        total_count: 2,
+        check_runs: [{
+          id: 820,
+          name: "DarkFactory Autoreview",
+          app: { id: 15368 },
+          head_sha: head,
+          status: "completed",
+          conclusion: "failure",
+          check_suite: { id: 9_220 }
+        }]
+      };
+      if (method === "GET" && requestPath === "/repos/marius-patrik/DarkFactory/pulls/20") return pull;
+      mutations.push(`${method} ${requestPath}`);
+      throw new Error(`unexpected ${method} ${requestPath}`);
+    }
+  };
+  recoveryModule.configureAutoreviewRecoveryRuntime({
+    gh,
+    ledgerGh: gh,
+    controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
+    controlRevision: "9".repeat(40),
+    controlMetadata: { archived: false, disabled: false },
+    activeRepositories: [],
+    dataRepositories: [],
+    now: Date.parse("2026-07-16T12:00:00Z"),
+    async writeLedger() {}
+  });
+
+  const result = await recoveryModule.recoverAutoreviews({ kind: "pull_request", maxDispatches: 2, trigger: "test" });
+  assert.equal(result.status, "owner-required");
+  assert.equal(result.dispatched[0].recoveryReason, "trusted-current-gate-inventory-truncated-or-malformed");
+  assert.deepEqual(result.dispatched[0].gate, { state: "unobservable", totalCount: 2, observedCount: 1 });
   assert.deepEqual(mutations, []);
 });
 
@@ -501,7 +693,7 @@ test("Autoreview recovery fails closed with owner evidence for missing, ambiguou
       if (method === "GET" && checkMatch) {
         const pull = pulls.find((entry) => entry.head.sha === checkMatch[1]);
         if (!pull) throw new Error(`unknown check head ${checkMatch[1]}`);
-        return { check_runs: [{
+        return { total_count: 1, check_runs: [{
           id: 800 + pull.number,
           name: "DarkFactory Autoreview",
           app: { id: 15368 },
@@ -515,15 +707,15 @@ test("Autoreview recovery fails closed with owner evidence for missing, ambiguou
       if (method === "GET" && runMatch) {
         const suite = Number(runMatch[1]);
         const pull = pulls.find((entry) => 9_100 + entry.number === suite)!;
-        if (pull.number === 16) return { workflow_runs: [exactRun(pull, 5_016, suite, {
+        if (pull.number === 16) return { total_count: 1, workflow_runs: [exactRun(pull, 5_016, suite, {
           pull_requests: [{
             number: pull.number,
             head: { sha: pull.head.sha, ref: pull.head.ref },
             base: { sha: "0".repeat(40), ref: pull.base.ref }
           }]
         })] };
-        if (pull.number === 17) return { workflow_runs: [exactRun(pull, 5_017, suite), exactRun(pull, 6_017, suite)] };
-        return { workflow_runs: [exactRun(pull, 5_018, suite, { rerun_url: null })] };
+        if (pull.number === 17) return { total_count: 2, workflow_runs: [exactRun(pull, 5_017, suite), exactRun(pull, 6_017, suite)] };
+        return { total_count: 1, workflow_runs: [exactRun(pull, 5_018, suite, { rerun_url: null })] };
       }
       const pullMatch = /\/pulls\/(16|17|18)$/.exec(requestPath);
       if (method === "GET" && pullMatch) return pulls.find((entry) => entry.number === Number(pullMatch[1]));
