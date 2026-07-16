@@ -1083,7 +1083,9 @@ test("label taxonomy audit accepts exact state and reports missing or drifted la
     if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
     if (requestPath.includes("/labels?")) return [
       { name: "df:ready", color: "0e8a16", description: "Machine-evaluated" },
-      { name: "df:no-dispatch", color: "6E7781", description: "Categorical hold" }
+      { name: "df:no-dispatch", color: "6E7781", description: "Categorical hold" },
+      { name: "bug", color: "d73a4a", description: "Human-owned" },
+      { name: "DF:near-miss", color: "ffffff", description: "Not the exact managed namespace" }
     ];
     throw new Error(`unexpected ${requestPath}`);
   });
@@ -1097,6 +1099,72 @@ test("label taxonomy audit accepts exact state and reports missing or drifted la
   const ids = new Set((await doctor.auditLabelTaxonomy(drift.gh, repo, repo, controlRevision)).map((finding: { id: string }) => finding.id));
   assert.ok(ids.has("label-df-ready-drift"));
   assert.ok(ids.has("label-df-no-dispatch-missing"));
+});
+
+test("label taxonomy surfaces only exact orphan df namespace labels as reviewed cleanup candidates", async () => {
+  const policy = JSON.stringify({ schemaVersion: 1, labels: [
+    { name: "df:ready", color: "0E8A16", description: "Machine-evaluated" }
+  ] });
+  const { gh } = mockGh((_method, requestPath) => {
+    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/labels?")) return [
+      { name: "df:ready", color: "0E8A16", description: "Machine-evaluated" },
+      { name: "df:retired", color: "111111", description: "Old managed state" },
+      { name: "feature", color: "222222", description: "Human-owned" },
+      { name: "DF:retired-near-miss", color: "333333", description: "Ambiguous owner" }
+    ];
+    throw new Error(`unexpected ${requestPath}`);
+  });
+
+  const findings = await doctor.auditLabelTaxonomy(gh, repo, repo, controlRevision);
+  assert.deepEqual(findings.map((finding: { id: string }) => finding.id), ["label-df-retired-orphan"]);
+  assert.equal(findings[0]?.category, "repository hygiene");
+  assert.equal(findings[0]?.repair_class, "pr");
+  assert.equal(findings[0]?.message, "Managed label `df:retired` is absent from the canonical taxonomy.");
+});
+
+test("label taxonomy denies orphan cleanup when current or canonical label identity is ambiguous", async () => {
+  const policy = JSON.stringify({ schemaVersion: 1, labels: [
+    { name: "df:ready", color: "0E8A16", description: "Machine-evaluated" }
+  ] });
+  const duplicateCurrent = mockGh((_method, requestPath) => {
+    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/labels?")) return [
+      { name: "df:orphan", color: "111111", description: "one" },
+      { name: "DF:ORPHAN", color: "222222", description: "two" }
+    ];
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  const currentFindings = await doctor.auditLabelTaxonomy(duplicateCurrent.gh, repo, repo, controlRevision);
+  assert.deepEqual(currentFindings.map((finding: { id: string }) => finding.id), ["label-taxonomy-state-ambiguous"]);
+  assert.equal(currentFindings[0]?.repair_class, "blocked");
+
+  const duplicatePolicy = JSON.stringify({ schemaVersion: 1, labels: [
+    { name: "df:ready", color: "0E8A16", description: "one" },
+    { name: "DF:READY", color: "0E8A16", description: "two" }
+  ] });
+  const ambiguousPolicy = mockGh((_method, requestPath) => {
+    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(duplicatePolicy);
+    throw new Error(`current labels must not be read after ambiguous source policy: ${requestPath}`);
+  });
+  const policyFindings = await doctor.auditLabelTaxonomy(ambiguousPolicy.gh, repo, repo, controlRevision);
+  assert.deepEqual(policyFindings.map((finding: { id: string }) => finding.id), ["label-taxonomy-source-invalid"]);
+  assert.equal(policyFindings[0]?.repair_class, "blocked");
+
+  const cappedLabels = Array.from({ length: 100 }, (_, index) => ({
+    name: `df:capped-${index}`,
+    color: "123456",
+    description: "bounded page"
+  }));
+  const cappedCurrent = mockGh((_method, requestPath) => {
+    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/labels?")) return cappedLabels;
+    throw new Error(`unexpected ${requestPath}`);
+  });
+  await assert.rejects(
+    () => doctor.auditLabelTaxonomy(cappedCurrent.gh, repo, repo, controlRevision),
+    /cannot prove complete label enumeration/
+  );
 });
 
 test("repository tree permits root policy authority but rejects nested copies", async () => {
@@ -1623,6 +1691,118 @@ test("local checkout audit detects root dirt, recursive submodule pointer drift,
 
     const missing = doctor.auditLocalCheckout(path.join(temp, "private-missing"), repo);
     assert.doesNotMatch(JSON.stringify(missing), /private-missing|df-doctor-local/i);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("local checkout inventory observes every clean linked worktree and ref without mutation", async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), "df-doctor-local-clean-"));
+  const root = path.join(temp, "root");
+  const linked = path.join(temp, "linked");
+  const runGit = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+  try {
+    await mkdir(root, { recursive: true });
+    runGit(root, ["init", "-b", "main"]);
+    runGit(root, ["remote", "add", "origin", "https://github.com/marius-patrik/DarkFactory.git"]);
+    await writeFile(path.join(root, "README.md"), "root\n");
+    runGit(root, ["add", "README.md"]);
+    runGit(root, ["-c", "user.name=Doctor Test", "-c", "user.email=doctor@example.test", "commit", "-m", "root"]);
+    const head = runGit(root, ["rev-parse", "HEAD"]).trim();
+    runGit(root, ["worktree", "add", "-b", "topic-clean", linked, head]);
+    runGit(root, ["tag", "inventory-tag", head]);
+    const refsBefore = runGit(root, ["show-ref"]);
+    const worktreesBefore = runGit(root, ["worktree", "list", "--porcelain"]);
+
+    const result = doctor.auditLocalCheckout(root, repo, { remoteBranches: [{ name: "main", head }] });
+
+    assert.deepEqual(result.findings, []);
+    assert.ok(result.observations.some((item: string) => /inspected 2 linked worktree\(s\), 2 local branch ref\(s\), and 1 non-branch ref\(s\)/.test(item)));
+    assert.ok(result.observations.filter((item: string) => /Linked worktree `wt-/.test(item)).length >= 2);
+    assert.equal(runGit(root, ["show-ref"]), refsBefore);
+    assert.equal(runGit(root, ["worktree", "list", "--porcelain"]), worktreesBefore);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("local checkout inventory preserves dirty, unpublished, detached, and orphan-ref work", async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), "df-doctor-local-preserve-"));
+  const root = path.join(temp, "root");
+  const linked = path.join(temp, "linked");
+  const detached = path.join(temp, "detached");
+  const orphanWorktree = path.join(temp, "orphan-source");
+  const runGit = (cwd: string, args: string[], input?: string) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe", input });
+  try {
+    await mkdir(root, { recursive: true });
+    runGit(root, ["init", "-b", "main"]);
+    runGit(root, ["remote", "add", "origin", "https://github.com/marius-patrik/DarkFactory.git"]);
+    await writeFile(path.join(root, "README.md"), "base\n");
+    runGit(root, ["add", "README.md"]);
+    runGit(root, ["-c", "user.name=Doctor Test", "-c", "user.email=doctor@example.test", "commit", "-m", "base"]);
+    const remoteHead = runGit(root, ["rev-parse", "HEAD"]).trim();
+
+    runGit(root, ["worktree", "add", "-b", "topic-unpublished", linked, remoteHead]);
+    await writeFile(path.join(linked, "topic.txt"), "unique\n");
+    runGit(linked, ["add", "topic.txt"]);
+    runGit(linked, ["-c", "user.name=Doctor Test", "-c", "user.email=doctor@example.test", "commit", "-m", "topic"]);
+    await writeFile(path.join(linked, "untracked.txt"), "dirty\n");
+
+    runGit(root, ["worktree", "add", "-b", "detached-source", detached, remoteHead]);
+    await writeFile(path.join(detached, "detached.txt"), "unique\n");
+    runGit(detached, ["add", "detached.txt"]);
+    runGit(detached, ["-c", "user.name=Doctor Test", "-c", "user.email=doctor@example.test", "commit", "-m", "detached"]);
+    runGit(detached, ["switch", "--detach"]);
+    runGit(root, ["branch", "-D", "detached-source"]);
+
+    runGit(root, ["worktree", "add", "-b", "orphan-source", orphanWorktree, remoteHead]);
+    await writeFile(path.join(orphanWorktree, "orphan.txt"), "unique\n");
+    runGit(orphanWorktree, ["add", "orphan.txt"]);
+    runGit(orphanWorktree, ["-c", "user.name=Doctor Test", "-c", "user.email=doctor@example.test", "commit", "-m", "orphan ref"]);
+    const orphan = runGit(orphanWorktree, ["rev-parse", "HEAD"]).trim();
+    runGit(root, ["worktree", "remove", orphanWorktree]);
+    runGit(root, ["branch", "-D", "orphan-source"]);
+    runGit(root, ["update-ref", "refs/df/unique", orphan]);
+    const refsBefore = runGit(root, ["show-ref"]);
+    const worktreesBefore = runGit(root, ["worktree", "list", "--porcelain"]);
+
+    const result = doctor.auditLocalCheckout(root, repo, { remoteBranches: [{ name: "main", head: remoteHead }] });
+    const ids = result.findings.map((finding: { id: string }) => finding.id);
+
+    assert.ok(ids.some((id: string) => /^local-worktree-wt-[0-9a-f]+-dirty$/.test(id)));
+    assert.ok(ids.some((id: string) => /^local-branch-topic-unpublished-[0-9a-f]+-unpublished$/.test(id)), ids.join("\n"));
+    assert.ok(ids.some((id: string) => /^local-worktree-wt-[0-9a-f]+-detached-unique$/.test(id)));
+    assert.ok(ids.some((id: string) => /^local-orphan-ref-[0-9a-f]+-unique$/.test(id)));
+    assert.doesNotMatch(JSON.stringify(result), new RegExp(temp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    assert.equal(runGit(root, ["show-ref"]), refsBefore);
+    assert.equal(runGit(root, ["worktree", "list", "--porcelain"]), worktreesBefore);
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("local checkout inventory fails closed when linked-worktree or live-object evidence is inaccessible", async () => {
+  const temp = await mkdtemp(path.join(tmpdir(), "df-doctor-local-denied-"));
+  const root = path.join(temp, "root");
+  const missingLinked = path.join(temp, "missing-linked");
+  const runGit = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+  try {
+    await mkdir(root, { recursive: true });
+    runGit(root, ["init", "-b", "main"]);
+    runGit(root, ["remote", "add", "origin", "https://github.com/marius-patrik/DarkFactory.git"]);
+    await writeFile(path.join(root, "README.md"), "root\n");
+    runGit(root, ["add", "README.md"]);
+    runGit(root, ["-c", "user.name=Doctor Test", "-c", "user.email=doctor@example.test", "commit", "-m", "root"]);
+    runGit(root, ["worktree", "add", "-b", "inaccessible", missingLinked]);
+    await rm(missingLinked, { recursive: true, force: true });
+
+    const result = doctor.auditLocalCheckout(root, repo, { remoteBranches: [{ name: "main", head: "f".repeat(40) }] });
+    const ids = result.findings.map((finding: { id: string }) => finding.id);
+
+    assert.ok(ids.some((id: string) => /^local-worktree-wt-[0-9a-f]+-status-unobservable$/.test(id)));
+    assert.ok(ids.some((id: string) => /^local-branch-main-[0-9a-f]+-preservation-unobservable$/.test(id)));
+    assert.equal(result.findings.filter((finding: { id: string }) => finding.id.includes("preservation-unobservable")).every((finding: { repair_class: string }) => finding.repair_class === "blocked"), true);
+    assert.doesNotMatch(JSON.stringify(result), /missing-linked|df-doctor-local-denied/i);
   } finally {
     await rm(temp, { recursive: true, force: true });
   }

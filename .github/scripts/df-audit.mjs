@@ -21,6 +21,7 @@ import {
 } from "./df-lib.mjs";
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -461,7 +462,12 @@ async function auditTargetRepository(github, repository, metadata, options) {
   }
 
   if (options.localPath) {
-    const local = auditLocalCheckout(options.localPath, repository);
+    const local = auditLocalCheckout(options.localPath, repository, {
+      remoteBranches: branches.map((branch) => ({
+        name: branch.name,
+        head: assertExactCommit(branch.commit?.sha, `target ${branch.name} branch`)
+      }))
+    });
     findings.push(...local.findings);
     observations.push(...local.observations);
   } else {
@@ -1395,14 +1401,25 @@ export async function auditLabelTaxonomy(github, repository, controlRepo = CONTR
 
   const desired = new Map();
   for (const label of policy.labels) {
-    if (typeof label?.name !== "string" || !/^[0-9a-f]{6}$/i.test(label?.color || "") || typeof label?.description !== "string") {
+    if (typeof label?.name !== "string" || !label.name.trim() || !/^[0-9a-f]{6}$/i.test(label?.color || "") || typeof label?.description !== "string") {
       return [doctorFinding("label-taxonomy-source-invalid", "configuration prerequisites", "Canonical label taxonomy contains a malformed definition.", { severity: "critical" })];
     }
-    desired.set(label.name.toLowerCase(), label);
+    const key = label.name.toLowerCase();
+    if (desired.has(key)) {
+      return [doctorFinding("label-taxonomy-source-invalid", "configuration prerequisites", "Canonical label taxonomy contains an ambiguous duplicate label definition.", { severity: "critical" })];
+    }
+    desired.set(key, label);
   }
 
   const findings = [];
-  const actual = new Map((await listRepositoryLabels(github, repository)).map((label) => [label.name.toLowerCase(), label]));
+  const actual = new Map();
+  for (const label of await listRepositoryLabels(github, repository)) {
+    const key = label.name.toLowerCase();
+    if (actual.has(key)) {
+      return [doctorFinding("label-taxonomy-state-ambiguous", "configuration prerequisites", "Current repository label state contains ambiguous duplicate names, so managed-label cleanup is not admissible.", { severity: "critical" })];
+    }
+    actual.set(key, label);
+  }
   for (const [key, label] of desired) {
     const observed = actual.get(key);
     if (!observed) {
@@ -1410,6 +1427,21 @@ export async function auditLabelTaxonomy(github, repository, controlRepo = CONTR
     } else if (observed.color.toLowerCase() !== label.color.toLowerCase() || observed.description !== label.description) {
       findings.push(doctorFinding(`label-${slug(label.name)}-drift`, "configuration prerequisites", `Label \`${label.name}\` differs from the canonical color or description.`, { severity: "warning" }));
     }
+  }
+  for (const [key, label] of actual) {
+    // The exact lowercase df: namespace is policy-owned. Other labels and
+    // near-miss prefixes remain human/repository state and are never cleanup
+    // candidates merely because canonical policy does not name them.
+    if (!label.name.startsWith("df:") || desired.has(key)) continue;
+    findings.push(doctorFinding(
+      `label-${slug(label.name)}-orphan`,
+      "repository hygiene",
+      `Managed label \`${label.name}\` is absent from the canonical taxonomy.`,
+      {
+        severity: "warning",
+        repair: ["Re-fetch the exact canonical taxonomy and current label name/color/description, then remove only through the separately reviewed clean lane if both snapshots still agree."]
+      }
+    ));
   }
   return findings;
 }
@@ -2203,7 +2235,14 @@ function describeSubmoduleUrl(url) {
   return "unrecognized repository URL";
 }
 
-export function auditLocalCheckout(localPath, repository) {
+/**
+ * Inventory invariant: every worktree and ref attached to the explicitly
+ * supplied repository is either proven preserved by the immutable remote
+ * branch snapshot or reported as owner-preserved/unobservable evidence.
+ * This path intentionally runs no fetch, prune, reset, update-ref, or worktree
+ * mutation; diagnosis must never destroy the state it is trying to explain.
+ */
+export function auditLocalCheckout(localPath, repository, options = {}) {
   const findings = [];
   const observations = [];
   const resolved = path.resolve(localPath);
@@ -2215,32 +2254,370 @@ export function auditLocalCheckout(localPath, repository) {
   if (!origin.ok || !remote || normalizedName(remote) !== normalizedName(repository)) {
     return { findings: [doctorFinding("local-checkout-origin-mismatch", "local checkout", `Local checkout origin does not match ${repoName(repository)}.`, { severity: "critical" })], observations };
   }
-  const status = git(resolved, ["status", "--porcelain=v2", "--untracked-files=all"]);
-  if (!status.ok) {
-    findings.push(doctorFinding("local-status-failed", "local checkout", "Local git status failed, so checkout state is unobservable.", { severity: "critical" }));
-  } else if (status.stdout.trim()) {
-    findings.push(doctorFinding("local-checkout-dirty", "local checkout", "Explicit local checkout has modified or untracked state.", {
-      severity: "error", repair: ["Preserve user changes; reconcile intentionally before any automated repair."]
-    }));
-  }
-  const submodules = git(resolved, ["submodule", "status", "--recursive"]);
-  if (submodules.ok) {
-    for (const line of submodules.stdout.split(/\r?\n/).filter(Boolean)) {
-      const match = line.match(/^(.)([0-9a-f]{40})\s+(.+?)(?:\s+\(.+\))?$/i);
-      if (!match) continue;
-      const [_, prefix, _sha, subPath] = match;
-      if (prefix === "-") findings.push(doctorFinding(`local-submodule-${slug(subPath)}-uninitialized`, "local checkout", `Submodule \`${subPath}\` is uninitialized.`, { severity: "error" }));
-      if (prefix === "+") findings.push(doctorFinding(`local-submodule-${slug(subPath)}-pointer`, "local checkout", `Submodule \`${subPath}\` is checked out at a different commit than the parent gitlink.`, { severity: "error" }));
-      if (prefix === "U") findings.push(doctorFinding(`local-submodule-${slug(subPath)}-conflict`, "local checkout", `Submodule \`${subPath}\` has a merge conflict.`, { severity: "critical" }));
-      const nestedPath = path.resolve(resolved, subPath);
-      if (existsSync(nestedPath) && prefix !== "-") {
-        const nested = git(nestedPath, ["status", "--porcelain", "--untracked-files=all"]);
-        if (nested.ok && nested.stdout.trim()) findings.push(doctorFinding(`local-submodule-${slug(subPath)}-dirty`, "local checkout", `Submodule \`${subPath}\` has local modified/untracked state.`, { severity: "error" }));
+
+  const remoteSnapshot = normalizeRemoteBranchSnapshot(options.remoteBranches);
+  if (!remoteSnapshot.observable) {
+    findings.push(doctorFinding(
+      "local-remote-branch-snapshot-unobservable",
+      "local checkout",
+      "The immutable live remote branch snapshot is unobservable, so local branch and ref preservation cannot be proven.",
+      {
+        severity: "critical",
+        repair: ["Preserve every local worktree and ref; rerun doctor with the complete immutable GitHub branch snapshot before authorizing cleanup."]
       }
+    ));
+  }
+
+  const worktreeResult = inventoryLocalWorktrees(resolved);
+  findings.push(...worktreeResult.findings);
+  observations.push(...worktreeResult.observations);
+  const refResult = inventoryLocalRefs(resolved);
+  findings.push(...refResult.findings);
+  observations.push(...refResult.observations);
+
+  const branchRefs = refResult.refs.filter((entry) => entry.ref.startsWith("refs/heads/") && !entry.symref);
+  const nonBranchRefs = refResult.refs.filter((entry) => !entry.ref.startsWith("refs/heads/") && !entry.symref);
+  const localPreservationRefs = refResult.refs.filter((entry) => !entry.symref && entry.commitObservable);
+
+  for (const entry of branchRefs) {
+    const name = entry.ref.slice("refs/heads/".length);
+    const preservation = observeRemotePreservation(resolved, entry.head, remoteSnapshot);
+    const refId = localEvidenceId(entry.ref);
+    if (preservation.state === "preserved") {
+      observations.push(`Local branch \`${name}\` at \`${shortHead(entry.head)}\` is preserved by ${formatPreservers(preservation.by)}.`);
+      continue;
+    }
+    if (preservation.state === "unobservable") {
+      findings.push(doctorFinding(
+        `local-branch-${slug(name)}-${refId}-preservation-unobservable`,
+        "local checkout",
+        `Remote preservation of local branch \`${name}\` at \`${shortHead(entry.head)}\` is unobservable.`,
+        {
+          severity: "critical",
+          repair: ["Preserve the branch and its commits; restore complete local object/live branch evidence before deciding whether it is redundant."]
+        }
+      ));
+      continue;
+    }
+    const unpublished = countCommitsOutsideRemoteBranches(resolved, entry.head, remoteSnapshot.heads);
+    findings.push(doctorFinding(
+      `local-branch-${slug(name)}-${refId}-unpublished`,
+      "local checkout",
+      `Local branch \`${name}\` contains ${unpublished === null ? "work" : `${unpublished} commit(s)`} not reachable from any live remote branch.`,
+      {
+        severity: "error",
+        repair: ["Preserve and review this exact local branch before any branch or worktree cleanup; publish or deliberately fold its unique work through the normal reviewed lane."]
+      }
+    ));
+  }
+
+  for (const entry of nonBranchRefs) {
+    const preservation = observeRemotePreservation(resolved, entry.head, remoteSnapshot);
+    const localPreservers = findLocalPreservers(resolved, entry.head, localPreservationRefs, entry.ref);
+    const refId = localEvidenceId(entry.ref);
+    if (!entry.commitObservable) {
+      findings.push(doctorFinding(
+        `local-orphan-ref-${refId}-commit-unobservable`,
+        "local checkout",
+        `Non-branch ref \`${entry.ref}\` does not resolve to observable commit evidence.`,
+        {
+          severity: "critical",
+          repair: ["Preserve the ref; restore its object evidence before any cleanup decision."]
+        }
+      ));
+    } else if (preservation.state === "preserved") {
+      observations.push(`Non-branch ref \`${entry.ref}\` at \`${shortHead(entry.head)}\` is preserved by ${formatPreservers(preservation.by)}.`);
+    } else if (localPreservers.length > 0) {
+      observations.push(`Non-branch ref \`${entry.ref}\` at \`${shortHead(entry.head)}\` is also preserved by ${formatPreservers(localPreservers)}; the ref itself remains untouched.`);
+    } else if (preservation.state === "unobservable") {
+      findings.push(doctorFinding(
+        `local-orphan-ref-${refId}-preservation-unobservable`,
+        "local checkout",
+        `Remote preservation of non-branch ref \`${entry.ref}\` at \`${shortHead(entry.head)}\` is unobservable.`,
+        {
+          severity: "critical",
+          repair: ["Preserve the ref and its objects; restore complete live branch evidence before authorizing any ref cleanup."]
+        }
+      ));
+    } else {
+      findings.push(doctorFinding(
+        `local-orphan-ref-${refId}-unique`,
+        "local checkout",
+        `Non-branch ref \`${entry.ref}\` preserves work at \`${shortHead(entry.head)}\` that is not reachable from any live remote branch or other local ref.`,
+        {
+          severity: "error",
+          repair: ["Preserve this exact ref and inspect its unique work before any ref cleanup or garbage collection."]
+        }
+      ));
     }
   }
-  observations.push("The explicitly supplied local checkout origin and recursive submodule state were inspected read-only.");
+
+  for (const worktree of worktreeResult.worktrees.filter((entry) => entry.detached && entry.head)) {
+    const preservation = observeRemotePreservation(resolved, worktree.head, remoteSnapshot);
+    const localPreservers = findLocalPreservers(resolved, worktree.head, localPreservationRefs);
+    observations.push(`Linked worktree \`${worktree.id}\` is detached at \`${shortHead(worktree.head)}\` and remains untouched.`);
+    if (preservation.state === "preserved" || localPreservers.length > 0) continue;
+    findings.push(doctorFinding(
+      preservation.state === "unobservable"
+        ? `local-worktree-${worktree.id}-detached-preservation-unobservable`
+        : `local-worktree-${worktree.id}-detached-unique`,
+      "local checkout",
+      preservation.state === "unobservable"
+        ? `Preservation of detached worktree \`${worktree.id}\` at \`${shortHead(worktree.head)}\` is unobservable.`
+        : `Detached worktree \`${worktree.id}\` preserves unique work at \`${shortHead(worktree.head)}\`.`,
+      {
+        severity: preservation.state === "unobservable" ? "critical" : "error",
+        repair: ["Preserve the detached worktree and create an intentional named/reviewed preservation lane before considering removal."]
+      }
+    ));
+  }
+
+  observations.push(`Read-only local inventory inspected ${worktreeResult.worktrees.length} linked worktree(s), ${branchRefs.length} local branch ref(s), and ${nonBranchRefs.length} non-branch ref(s).`);
+  return { findings: dedupeFindings(findings), observations: [...new Set(observations)].sort() };
+}
+
+function normalizeRemoteBranchSnapshot(value) {
+  if (!Array.isArray(value)) return { observable: false, heads: new Map() };
+  const heads = new Map();
+  for (const entry of value) {
+    const name = typeof entry?.name === "string" ? entry.name.trim() : "";
+    const head = typeof entry?.head === "string" ? entry.head.toLowerCase() : "";
+    if (!name || !EXACT_COMMIT_PATTERN.test(head) || (heads.has(name) && heads.get(name) !== head)) {
+      return { observable: false, heads: new Map() };
+    }
+    heads.set(name, head);
+  }
+  return { observable: true, heads };
+}
+
+function inventoryLocalWorktrees(root) {
+  const findings = [];
+  const observations = [];
+  const worktrees = [];
+  const listed = git(root, ["worktree", "list", "--porcelain"]);
+  if (!listed.ok) {
+    return {
+      findings: [doctorFinding("local-worktree-inventory-unobservable", "local checkout", "Linked worktree inventory is unobservable.", {
+        severity: "critical",
+        repair: ["Preserve the repository and restore read access to its common Git directory before any cleanup."]
+      })],
+      observations,
+      worktrees
+    };
+  }
+  const records = listed.stdout.split(/\r?\n\r?\n/).map((block) => block.trim()).filter(Boolean);
+  let rootObserved = false;
+  for (const record of records) {
+    const fields = new Map();
+    for (const line of record.split(/\r?\n/)) {
+      const separator = line.indexOf(" ");
+      fields.set(separator === -1 ? line : line.slice(0, separator), separator === -1 ? "" : line.slice(separator + 1));
+    }
+    const rawPath = fields.get("worktree") || "";
+    const head = (fields.get("HEAD") || "").toLowerCase();
+    if (!rawPath || !EXACT_COMMIT_PATTERN.test(head)) {
+      findings.push(doctorFinding("local-worktree-inventory-malformed", "local checkout", "Linked worktree inventory returned a malformed or incomplete record.", { severity: "critical" }));
+      continue;
+    }
+    const worktreePath = path.resolve(rawPath);
+    const id = `wt-${localEvidenceId(worktreePath.toLowerCase())}`;
+    const branchRef = fields.get("branch") || "";
+    const branch = branchRef.startsWith("refs/heads/") ? branchRef.slice("refs/heads/".length) : "";
+    const detached = fields.has("detached") || !branch;
+    const rootCheckout = worktreePath.toLowerCase() === root.toLowerCase();
+    rootObserved ||= rootCheckout;
+    const status = git(worktreePath, ["status", "--porcelain=v2", "--untracked-files=all", "--ignore-submodules=none"]);
+    const lines = status.ok ? status.stdout.split(/\r?\n/).filter(Boolean) : [];
+    const dirty = status.ok && lines.length > 0;
+    const worktree = { id, rawPath: worktreePath, head, branch, detached, rootCheckout, dirty };
+    worktrees.push(worktree);
+
+    if (!status.ok) {
+      findings.push(doctorFinding(
+        rootCheckout ? "local-status-failed" : `local-worktree-${id}-status-unobservable`,
+        "local checkout",
+        rootCheckout ? "Local git status failed, so checkout state is unobservable." : `Git status for linked worktree \`${id}\` is unobservable.`,
+        {
+          severity: "critical",
+          repair: ["Preserve the worktree; restore read access before any cleanup decision."]
+        }
+      ));
+    } else if (dirty) {
+      findings.push(doctorFinding(
+        rootCheckout ? "local-checkout-dirty" : `local-worktree-${id}-dirty`,
+        "local checkout",
+        rootCheckout ? "Explicit local checkout has modified or untracked state." : `Linked worktree \`${id}\` has modified, untracked, or submodule state.`,
+        {
+          severity: "error",
+          repair: ["Preserve user changes; reconcile intentionally before any automated repair."]
+        }
+      ));
+    } else {
+      observations.push(`Linked worktree \`${id}\` (${rootCheckout ? "explicit checkout" : detached ? "detached" : `branch ${branch}`}) is clean at \`${shortHead(head)}\`.`);
+    }
+    if (fields.has("prunable")) {
+      findings.push(doctorFinding(`local-worktree-${id}-prunable`, "local checkout", `Linked worktree \`${id}\` is recorded as prunable but remains preservation evidence.`, {
+        severity: "error",
+        repair: ["Preserve and inspect the worktree record; do not prune it until its head and working state are independently preserved."]
+      }));
+    }
+    if (fields.has("locked")) observations.push(`Linked worktree \`${id}\` is locked and was inspected without changing its lock.`);
+    const submodules = auditLocalWorktreeSubmodules(worktreePath, id, rootCheckout);
+    findings.push(...submodules.findings);
+    observations.push(...submodules.observations);
+  }
+  if (!rootObserved) {
+    findings.push(doctorFinding("local-explicit-worktree-unobservable", "local checkout", "The explicitly supplied checkout is absent from its common Git worktree inventory.", { severity: "critical" }));
+  }
+  return { findings, observations, worktrees };
+}
+
+function auditLocalWorktreeSubmodules(worktreePath, worktreeId, rootCheckout) {
+  const findings = [];
+  const observations = [];
+  const submodules = git(worktreePath, ["submodule", "status", "--recursive"]);
+  if (!submodules.ok) {
+    findings.push(doctorFinding(
+      rootCheckout ? "local-submodule-inventory-unobservable" : `local-worktree-${worktreeId}-submodule-inventory-unobservable`,
+      "local checkout",
+      rootCheckout ? "Recursive submodule state for the explicit checkout is unobservable." : `Recursive submodule state for linked worktree \`${worktreeId}\` is unobservable.`,
+      { severity: "critical", repair: ["Preserve the worktree and restore complete recursive submodule evidence before cleanup."] }
+    ));
+    return { findings, observations };
+  }
+  let inspected = 0;
+  for (const line of submodules.stdout.split(/\r?\n/).filter(Boolean)) {
+    const match = line.match(/^(.)([0-9a-f]{40})\s+(.+?)(?:\s+\(.+\))?$/i);
+    if (!match) {
+      findings.push(doctorFinding(
+        rootCheckout ? "local-submodule-inventory-malformed" : `local-worktree-${worktreeId}-submodule-inventory-malformed`,
+        "local checkout",
+        rootCheckout ? "Recursive submodule inventory returned a malformed record." : `Recursive submodule inventory for linked worktree \`${worktreeId}\` returned a malformed record.`,
+        { severity: "critical" }
+      ));
+      continue;
+    }
+    inspected += 1;
+    const [, prefix, , subPath] = match;
+    const nestedPath = path.resolve(worktreePath, subPath);
+    const relative = path.relative(worktreePath, nestedPath);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      findings.push(doctorFinding(`local-worktree-${worktreeId}-submodule-path-invalid`, "local checkout", `Linked worktree \`${worktreeId}\` contains an invalid recursive submodule path.`, { severity: "critical" }));
+      continue;
+    }
+    const idPrefix = rootCheckout ? `local-submodule-${slug(subPath)}` : `local-worktree-${worktreeId}-submodule-${slug(subPath)}`;
+    if (prefix === "-") findings.push(doctorFinding(`${idPrefix}-uninitialized`, "local checkout", `Submodule \`${subPath}\` is uninitialized.`, { severity: "error" }));
+    if (prefix === "+") findings.push(doctorFinding(`${idPrefix}-pointer`, "local checkout", `Submodule \`${subPath}\` is checked out at a different commit than the parent gitlink.`, { severity: "error" }));
+    if (prefix === "U") findings.push(doctorFinding(`${idPrefix}-conflict`, "local checkout", `Submodule \`${subPath}\` has a merge conflict.`, { severity: "critical" }));
+    if (prefix !== "-") {
+      const nested = existsSync(nestedPath)
+        ? git(nestedPath, ["status", "--porcelain=v2", "--untracked-files=all", "--ignore-submodules=none"])
+        : { ok: false, stdout: "" };
+      if (!nested.ok) findings.push(doctorFinding(`${idPrefix}-status-unobservable`, "local checkout", `Submodule \`${subPath}\` status is unobservable.`, { severity: "critical" }));
+      else if (nested.stdout.trim()) findings.push(doctorFinding(`${idPrefix}-dirty`, "local checkout", `Submodule \`${subPath}\` has local modified/untracked state.`, { severity: "error" }));
+    }
+  }
+  if (inspected > 0) observations.push(`Linked worktree \`${worktreeId}\` recursive submodule inventory inspected ${inspected} submodule(s).`);
   return { findings, observations };
+}
+
+function inventoryLocalRefs(root) {
+  const findings = [];
+  const observations = [];
+  const refs = [];
+  const result = git(root, ["for-each-ref", "--format=%(refname)%09%(objectname)%09%(*objectname)%09%(symref)"]);
+  if (!result.ok) {
+    return {
+      findings: [doctorFinding("local-ref-inventory-unobservable", "local checkout", "Complete local ref inventory is unobservable.", {
+        severity: "critical",
+        repair: ["Preserve the repository object database and restore ref read access before cleanup."]
+      })],
+      observations,
+      refs
+    };
+  }
+  for (const line of result.stdout.split(/\r?\n/).filter(Boolean)) {
+    const [ref = "", object = "", peeled = "", symref = ""] = line.split("\t");
+    const head = (peeled || object).toLowerCase();
+    if (!ref.startsWith("refs/") || !/^[0-9a-f]{40,64}$/i.test(head)) {
+      findings.push(doctorFinding("local-ref-inventory-malformed", "local checkout", "Local ref inventory returned a malformed or incomplete record.", { severity: "critical" }));
+      continue;
+    }
+    const commitObservable = git(root, ["cat-file", "-e", `${head}^{commit}`]).ok;
+    refs.push({ ref, head, symref, commitObservable });
+  }
+  const categories = {
+    heads: refs.filter((entry) => entry.ref.startsWith("refs/heads/")).length,
+    remotes: refs.filter((entry) => entry.ref.startsWith("refs/remotes/")).length,
+    tags: refs.filter((entry) => entry.ref.startsWith("refs/tags/")).length,
+    other: refs.filter((entry) => !/^refs\/(?:heads|remotes|tags)\//.test(entry.ref)).length
+  };
+  observations.push(`Complete local ref inventory observed ${categories.heads} head(s), ${categories.remotes} remote-tracking ref(s), ${categories.tags} tag(s), and ${categories.other} other ref(s).`);
+  return { findings, observations, refs };
+}
+
+function observeRemotePreservation(root, head, remoteSnapshot) {
+  if (!remoteSnapshot.observable) return { state: "unobservable", by: [] };
+  const exact = [...remoteSnapshot.heads].filter(([, remoteHead]) => remoteHead === head).map(([name]) => `live branch ${name}`);
+  if (exact.length > 0) return { state: "preserved", by: exact.sort() };
+  if (!git(root, ["cat-file", "-e", `${head}^{commit}`]).ok) return { state: "unobservable", by: [] };
+  const headTree = git(root, ["rev-parse", `${head}^{tree}`]);
+  if (!headTree.ok || !headTree.stdout.trim()) return { state: "unobservable", by: [] };
+  let incomplete = false;
+  const preservedBy = [];
+  for (const [name, remoteHead] of remoteSnapshot.heads) {
+    if (!git(root, ["cat-file", "-e", `${remoteHead}^{commit}`]).ok) {
+      incomplete = true;
+      continue;
+    }
+    const ancestry = git(root, ["merge-base", "--is-ancestor", head, remoteHead]);
+    if (ancestry.ok) {
+      preservedBy.push(`live branch ${name}`);
+      continue;
+    }
+    if (![0, 1].includes(ancestry.status)) {
+      incomplete = true;
+      continue;
+    }
+    const remoteTree = git(root, ["rev-parse", `${remoteHead}^{tree}`]);
+    if (!remoteTree.ok || !remoteTree.stdout.trim()) incomplete = true;
+    else if (remoteTree.stdout.trim() === headTree.stdout.trim()) preservedBy.push(`tree of live branch ${name}`);
+  }
+  if (preservedBy.length > 0) return { state: "preserved", by: preservedBy.sort() };
+  return incomplete ? { state: "unobservable", by: [] } : { state: "unique", by: [] };
+}
+
+function findLocalPreservers(root, head, refs, excludedRef = "") {
+  const preservers = [];
+  for (const entry of refs) {
+    if (entry.ref === excludedRef || entry.head === head) {
+      if (entry.ref !== excludedRef && entry.head === head) preservers.push(entry.ref);
+      continue;
+    }
+    const ancestry = git(root, ["merge-base", "--is-ancestor", head, entry.head]);
+    if (ancestry.ok) preservers.push(entry.ref);
+  }
+  return [...new Set(preservers)].sort();
+}
+
+function countCommitsOutsideRemoteBranches(root, head, remoteHeads) {
+  const heads = [...new Set(remoteHeads.values())];
+  if (!git(root, ["cat-file", "-e", `${head}^{commit}`]).ok || heads.some((remoteHead) => !git(root, ["cat-file", "-e", `${remoteHead}^{commit}`]).ok)) return null;
+  const count = git(root, ["rev-list", "--count", head, "--not", ...heads]);
+  if (!count.ok || !/^\d+$/.test(count.stdout.trim())) return null;
+  return Number(count.stdout.trim());
+}
+
+function localEvidenceId(value) {
+  return createHash("sha256").update(String(value)).digest("hex").slice(0, 16);
+}
+
+function shortHead(value) {
+  return String(value).slice(0, 12);
+}
+
+function formatPreservers(values) {
+  return values.map((value) => `\`${value}\``).join(", ");
 }
 
 export function auditWorkerSessionIsolation(agentsHome, options = {}) {
@@ -2620,9 +2997,9 @@ async function listRepositoryLabels(github, repository) {
       }
       labels.push({ name: label.name, color: label.color, description: typeof label.description === "string" ? label.description : "" });
     }
-    if (batch.length < 100) break;
+    if (batch.length < 100) return labels;
   }
-  return labels;
+  throw new Error(`Repository doctor cannot prove complete label enumeration for ${repoName(repository)} within 10 pages.`);
 }
 
 async function compareBranches(github, repository, base, head) {
@@ -3013,6 +3390,11 @@ function escapeMarkdown(value) {
 }
 
 function git(cwd, args) {
-  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true });
-  return { ok: result.status === 0, stdout: result.stdout || "", stderr: result.stderr || "" };
+  const result = spawnSync("git", ["-C", cwd, ...args], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 30_000,
+    maxBuffer: 16 * 1024 * 1024
+  });
+  return { ok: result.status === 0, status: result.status, stdout: result.stdout || "", stderr: result.stderr || "" };
 }
