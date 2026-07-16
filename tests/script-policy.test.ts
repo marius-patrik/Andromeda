@@ -2490,6 +2490,17 @@ test("df-orchestrate clears a failed claim and requires fresh readiness evaluati
   assert.match(source, /never restore df:ready from a past snapshot/);
 });
 
+test("product truth forbids manual readiness and unprotected direct-merge fallbacks", async () => {
+  const prd = await readFile(new URL("../PRD.md", import.meta.url), "utf8");
+
+  assert.match(prd, /evaluator alone applies or revokes managed-repository `df:ready`/);
+  assert.match(prd, /Humans never apply the readiness label/);
+  assert.match(prd, /`\/df run` is an evaluation request bound to the current issue version/);
+  assert.match(prd, /No no-check allowlist or direct-merge fallback exists/);
+  assert.doesNotMatch(prd, /Label an issue `df:ready`|represented by `df:ready`/);
+  assert.doesNotMatch(prd, /On unprotected branches|no required checks exist|may directly merge a green worker PR/);
+});
+
 test("df-sweep evaluates enforcement rules before merge", async () => {
   const repository = { owner: "marius-patrik", repo: "active" };
   const pull = workerPull({ number: 200, checkConclusion: "SUCCESS", author: "darkfactory-agent" });

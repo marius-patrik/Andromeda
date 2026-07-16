@@ -15,7 +15,7 @@ The manual workflow it absorbs is a human-driven orchestrator fanning out worker
 
 - GitHub App **mp-agents** (App ID 3827239), installed account-wide (`repository_selection: all`). Product workflows retain their required contents/actions/issues/PR write grants; repository doctor additionally requires read-only administration, checks, secrets, and commit-status visibility and downscopes each minted token. Secrets `DARK_FACTORY_APP_ID` / `DARK_FACTORY_PRIVATE_KEY` are configured; provider credentials remain under canonical Agent OS authority.
 - Existing assets: webhook server (`src/bot.ts`, `src/server.ts`), managed-file sync (`src/managed-sync.ts`, `src/managed-files.ts`), provider-agnostic DarkFactory Autoreview, repository doctor, and repository-setup enforcement. Managed sync resolves the sole canonical Andromeda-data authority at `$AGENTS_HOME`; unrelated data registrations may coexist without claiming that repository or path.
-- Runtime strategy: GitHub Actions owns deterministic schedule, dispatch, and control-repository events. Managed repository `df:ready` labels and `/df run` comments are picked up by the orchestrator or webhook path without exposing control-repository secrets. Model-backed workers run only on trusted `df-local` self-hosted runners through the canonical `agents` launcher and Agent OS state.
+- Runtime strategy: GitHub Actions owns deterministic schedule, dispatch, and control-repository events. The evaluator alone applies or revokes managed-repository `df:ready`; `/df run` requests that same evaluation and never writes readiness directly. The orchestrator or webhook path picks up the derived state without exposing control-repository secrets. Model-backed workers run only on trusted `df-local` self-hosted runners through the canonical `agents` launcher and Agent OS state.
 
 ## Product boundary and integration principle
 
@@ -51,7 +51,7 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 
 ## Architecture
 
-- **Control plane**: GitHub — PRD.md (product truth), issues (work units, sequenced via labels + `Blocked-by: #N` body headers), labels (`P0|P1|P2`, `df:ready`, `df:running`, `df:blocked`, `stream:<name>`), PR checks (Validate + DarkFactory Autoreview), comments (slash commands), Actions (execution triggers).
+- **Control plane**: GitHub — PRD.md (product truth), issues (work units, sequenced via labels + `Blocked-by: #N` body headers), labels (`P0|P1|P2`, evaluator-owned `df:ready`, `df:running`, `df:blocked`, `stream:<name>`), PR checks (Validate + DarkFactory Autoreview), comments (slash commands), Actions (execution triggers).
 - **Execution plane**: trusted `df-local` workers invoke `agents run` with independently authorized model tier and effort. One worker = one issue = one branch = one PR. DarkFactory Autoreview uses bounded medium review/fix rounds and an independent high confirmation through the same canonical Agent OS boundary.
 - **State**: GitHub repositories and `.darkfactory/` control metadata plus the single Agent OS state authority under `$AGENTS_HOME`; no DarkFactory-owned database, model state, or memory.
 - **Managed data**: canonical Andromeda-data is checked out at `$AGENTS_HOME`; DarkFactory reads only its `managed-repository` child. No alternate state root or second checkout authority is permitted. Runtime receipts use the separate darkfactory-data ledger authority.
@@ -82,12 +82,12 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 ## User controls (all on GitHub)
 
 - Edit `PRD.md` → L4 replans the backlog (PRD-edit triggers run in the edited repository with the repository token).
-- Label an issue `df:ready` (or let L4 auto-ready sequenced work) → the issue is queued for L3 dispatch on the next scheduled orchestrator tick or workflow-run chain.
+- Resolve issue-contract or environment findings and remove any owner brake; the machine evaluator applies `df:ready` only when the complete current predicate passes, and dispatch recomputes that predicate before claiming work. Humans never apply the readiness label.
 - Comment `/df plan`, `/df doctor`, or `/df pause` on issues/PRs → the request is scoped to that repo/issue where a control-repository bridge exists. CLI/workflow doctor diagnosis is already available; bot command parity is tracked by #39.
 - Run `df help <command>` for the same engines from a human terminal. `df issue
   ready` reports the evaluator verdict and never labels an issue directly;
   `df lane resume` requests re-evaluation and never force-applies readiness.
-- `workflow_dispatch` for manual wave starts; until the webhook server is deployed, `/df run` in managed repositories is represented by `df:ready` and picked up on the next scheduled orchestrator tick, while the control-repository orchestrator dispatches L3 workers across managed repositories via `workflow_dispatch` so app and provider credentials stay out of managed-repo workflows.
+- `workflow_dispatch` can request an immediate evaluation or wave observation. `/df run` is an evaluation request bound to the current issue version; it neither labels nor dispatches directly. The control-repository orchestrator remains the sole L3 dispatcher across managed repositories so app and provider credentials stay out of managed-repo workflows.
 - Merge/close/comment exactly as on any repo — the bot treats human actions as authoritative.
 
 ## Milestones
@@ -110,9 +110,8 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 
 - Worker dispatch is only allowed when the target repository supports GitHub auto-merge; the worker preflight blocks before cloning/running Agent OS if it is disabled.
 - On protected branches, the follow-through sweep arms GitHub auto-merge and lets the branch protection gate complete the merge.
-- On unprotected branches, or when auto-merge cannot be armed because no required checks exist, the sweep may directly merge a green worker PR after verifying that all required status checks (if any) are present and passing and a short settle window has passed.
-- Direct merge on a worker PR with no checks configured is only allowed when the target repository is explicitly listed in the DarkFactory no-check allowlist; otherwise the PR is skipped so a missing CI configuration cannot silently bypass the gate.
-- Direct merge is never used as a bypass: red or missing required checks block the merge, and the worker issue is labeled `df:blocked`.
+- Missing, inaccessible, or unprotected target-branch policy is a fail-closed setup/owner finding. A worker PR may merge only through normal auto-merge after the exact protected branch exposes current App-bound `Validate` and `DarkFactory Autoreview` gates.
+- No no-check allowlist or direct-merge fallback exists. Red, pending, missing, wrong-App, or unobservable required checks block before merge and return the issue to machine evaluation after the cause is resolved.
 
 ## Operating rules for workers
 
