@@ -274,7 +274,7 @@ async function runDoctor(args: string[], commandId = "doctor"): Promise<void> {
   const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
   const { doctor, reports } = await collectDoctorReports(app, options);
 
-  if (options.json) console.log(JSON.stringify(reports, null, 2));
+  if (options.json) console.log(JSON.stringify(humanJsonResult(commandId, "ok", reports), null, 2));
   else console.log(doctor.formatDoctorReports(reports));
 }
 
@@ -328,7 +328,7 @@ export function parseSetupCliArgs(args: string[]): SetupCliOptions {
   return { ...doctor, watch: args.includes("--watch") };
 }
 
-async function runSetup(args: string[]): Promise<void> {
+async function runSetup(args: string[], commandId = "setup"): Promise<void> {
   const options = parseSetupCliArgs(args);
   const credentials = loadAppCredentials();
   const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
@@ -396,7 +396,7 @@ async function runSetup(args: string[]): Promise<void> {
     passes: completedPasses,
     stopReason: converged ? "converged" : stopReason
   };
-  if (options.json) console.log(JSON.stringify(result, null, 2));
+  if (options.json) console.log(JSON.stringify(humanJsonResult(commandId, "ok", result), null, 2));
   else printSetupResult(result);
 }
 
@@ -554,7 +554,7 @@ export function parseReleaseCliArgs(args: string[]): ReleaseCliOptions {
   return options;
 }
 
-async function runRelease(args: string[]): Promise<void> {
+async function runRelease(args: string[], commandId?: string): Promise<void> {
   const options = parseReleaseCliArgs(args);
   const credentials = loadAppCredentials();
   const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
@@ -590,7 +590,7 @@ async function runRelease(args: string[]): Promise<void> {
     if (!options.watch || ["verified", "blocked", "skipped", "failed"].includes(status)) break;
     if (pass < maxPasses) await delay(15_000);
   }
-  if (options.json) console.log(JSON.stringify(result, null, 2));
+  if (options.json) console.log(JSON.stringify(humanJsonResult(commandId ?? `release-${options.mode}`, "ok", result), null, 2));
   else printReleaseResult(result);
 }
 
@@ -747,7 +747,7 @@ export function parseCleanCliArgs(args: string[]): CleanCliOptions {
   return options;
 }
 
-async function runClean(args: string[]): Promise<void> {
+async function runClean(args: string[], commandId?: string): Promise<void> {
   const options = parseCleanCliArgs(args);
   const credentials = loadAppCredentials();
   const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
@@ -772,7 +772,7 @@ async function runClean(args: string[]): Promise<void> {
       local_plan_path_id: stableLocalPathId(path)
     });
     const result = { schemaVersion: 1, mode: "plan", plan, durable: true };
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    if (options.json) console.log(JSON.stringify(humanJsonResult(commandId ?? "clean-plan", "ok", result), null, 2));
     else printCleanPlan(plan);
     return;
   }
@@ -782,7 +782,7 @@ async function runClean(args: string[]): Promise<void> {
     const reviewResidue = plan.entries.filter((entry) => entry.kind === "lane-finding");
     const result = { schemaVersion: 1, mode: "verify", repository: target, clean: actionable.length === 0 && reviewResidue.length === 0, actionable, reviewResidue };
     await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-verify", target, result);
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    if (options.json) console.log(JSON.stringify(humanJsonResult(commandId ?? "clean-verify", "ok", result), null, 2));
     else console.log(result.clean ? `${target}: clean (proven no-op)` : `${target}: ${actionable.length} admitted hygiene actions and ${reviewResidue.length} deterministic review findings remain; run df clean plan.`);
     return;
   }
@@ -840,7 +840,7 @@ async function runClean(args: string[]): Promise<void> {
       if (pass < maxPasses) await delay(15_000);
     }
   }
-  if (options.json) console.log(JSON.stringify({ ...receipt, watchVerification }, null, 2));
+  if (options.json) console.log(JSON.stringify(humanJsonResult(commandId ?? "clean-apply", "ok", { ...receipt, watchVerification }), null, 2));
   else {
     console.log(`${target}: applied ${receipt.actions.filter((action) => action.status === "applied").length} admitted actions; ${receipt.actions.filter((action) => action.status === "skipped").length} entries preserved.`);
     if (watchVerification) console.log(`${target}: watch verification clean=${watchVerification.clean}, stalled=${watchVerification.stalled} after ${watchVerification.passes} pass(es); actions=${watchVerification.actionable}, review findings=${watchVerification.reviewResidue}.`);
@@ -1046,9 +1046,11 @@ async function runHumanCommand(command: ParsedHumanCommand): Promise<boolean> {
       await runSetup([
         ...command.arguments,
         ...(command.options["--all"] === true ? ["--all"] : []),
+        ...(typeof command.options["--local"] === "string" ? ["--local", command.options["--local"] as string] : []),
+        ...(typeof command.options["--agents-home"] === "string" ? ["--agents-home", command.options["--agents-home"] as string] : []),
         ...(command.options["--watch"] === true ? ["--watch"] : []),
         ...(command.options["--json"] === true ? ["--json"] : [])
-      ]);
+      ], command.spec.id);
       return true;
     case "clean-plan":
     case "clean-apply":
@@ -1060,7 +1062,7 @@ async function runHumanCommand(command: ParsedHumanCommand): Promise<boolean> {
         ...(typeof command.options["--local"] === "string" ? ["--local", command.options["--local"] as string] : []),
         ...(command.options["--watch"] === true ? ["--watch"] : []),
         ...(command.options["--json"] === true ? ["--json"] : [])
-      ]);
+      ], command.spec.id);
       return true;
     }
     case "release-status":
@@ -1074,7 +1076,7 @@ async function runHumanCommand(command: ParsedHumanCommand): Promise<boolean> {
         ...command.arguments,
         ...(command.options["--watch"] === true ? ["--watch"] : []),
         ...(command.options["--json"] === true ? ["--json"] : [])
-      ]);
+      ], command.spec.id);
       return true;
     }
     case "submodules-status":
@@ -1893,6 +1895,359 @@ function encodeContentsPath(value: string): string {
   return value.split("/").map(encodeURIComponent).join("/");
 }
 
+type ReceiptRequester = {
+  request(method: string, path: string, body?: unknown): Promise<unknown>;
+};
+
+type ReceiptLedgerSnapshot = Readonly<{
+  headSha: string;
+  rootTreeSha: string;
+}>;
+
+export type ReceiptFileEvidence = Readonly<{
+  name: string;
+  path: string;
+  sha: string;
+  ledgerRevision: string;
+  commitSha: string;
+  actor: Readonly<{ login: string; type: string }>;
+}>;
+
+export type ReceiptVerification = Readonly<{
+  schemaVersion: 1;
+  kind: string;
+  targetRepository: string;
+  immutableRefs: readonly string[];
+  authorizingIntent: unknown;
+  actor: Readonly<{ login: string; type: "Bot"; commitSha: string }>;
+  gates: readonly unknown[];
+  outcome: string;
+  handoff: unknown;
+}>;
+
+type ReceiptKindVerification = Omit<ReceiptVerification, "schemaVersion" | "kind" | "targetRepository" | "actor">;
+
+const RECEIPT_SHA = /^[0-9a-f]{40}$/;
+const RECEIPT_DIGEST = /^[0-9a-f]{64}$/;
+const TRUSTED_RECEIPT_ACTORS = new Set(["darkfactory-agent[bot]", "mp-agents[bot]"]);
+
+function receiptRecord(value: unknown, field: string): Record<string, unknown> {
+  if (!isRecord(value)) throw new Error(`Receipt ${field} must be an object`);
+  return value;
+}
+
+function receiptString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`Receipt ${field} must be a nonblank string`);
+  return value;
+}
+
+function receiptSha(value: unknown, field: string): string {
+  const sha = receiptString(value, field).toLowerCase();
+  if (!RECEIPT_SHA.test(sha)) throw new Error(`Receipt ${field} must be an exact 40-character commit SHA`);
+  return sha;
+}
+
+function receiptVersion(value: unknown, field: string): string {
+  const version = receiptString(value, field).toLowerCase();
+  if (!RECEIPT_DIGEST.test(version) && !/^[0-9a-f]{40}:[0-9a-f]{40}$/.test(version)) {
+    throw new Error(`Receipt ${field} must be an exact issue digest or BASE_SHA:HEAD_SHA`);
+  }
+  return version;
+}
+
+function receiptSchemaVersion(receipt: Record<string, unknown>, required: boolean): void {
+  if ((required || "schemaVersion" in receipt) && receipt.schemaVersion !== 1) {
+    throw new Error("Receipt schemaVersion must be 1 for this kind");
+  }
+}
+
+function greenReceiptChecks(value: unknown, requiredNames: readonly string[], field: string): Record<string, unknown>[] {
+  const summary = receiptRecord(value, field);
+  if (summary.green !== true || !Array.isArray(summary.checks) || summary.checks.length === 0) {
+    throw new Error(`Receipt ${field} must contain a green, non-empty check set`);
+  }
+  const checks = summary.checks.map((entry, index) => {
+    const check = receiptRecord(entry, `${field}.checks[${index}]`);
+    const name = receiptString(check.name, `${field}.checks[${index}].name`);
+    if (check.state !== "green" || check.actualAppId !== TRUSTED_ACTIONS_APP_ID) {
+      throw new Error(`Receipt ${field} check ${name} is not green and App-bound to ${TRUSTED_ACTIONS_APP_ID}`);
+    }
+    return check;
+  });
+  const names = new Set(checks.map((check) => check.name));
+  for (const required of requiredNames) {
+    if (!names.has(required)) throw new Error(`Receipt ${field} is missing required gate ${required}`);
+  }
+  return checks;
+}
+
+function validateWorkVerificationReceipt(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
+  receiptSchemaVersion(receipt, true);
+  const target = receiptString(receipt.target, "target");
+  if (!target.startsWith(`${targetRepository}#`) || !/^.+#[1-9][0-9]*$/.test(target)) throw new Error("Receipt work target does not match the requested repository");
+  const issueVersion = receiptVersion(receipt.issueVersion, "issueVersion");
+  if (receipt.verified !== true) throw new Error("Receipt work verification outcome is not verified");
+  const pull = receiptRecord(receipt.pull, "pull");
+  if (!Number.isSafeInteger(pull.number) || Number(pull.number) < 1 || !/^https:\/\/github\.com\//.test(receiptString(pull.url, "pull.url"))) {
+    throw new Error("Receipt work verification handoff pull request is invalid");
+  }
+  const mergedAt = receiptString(pull.mergedAt, "pull.mergedAt");
+  if (!Number.isFinite(Date.parse(mergedAt))) throw new Error("Receipt work verification merge time is invalid");
+  if (!Array.isArray(receipt.predicates)) throw new Error("Receipt work verification predicates are missing");
+  const predicates = receipt.predicates.map((entry, index) => {
+    const predicate = receiptRecord(entry, `predicates[${index}]`);
+    const id = receiptString(predicate.id, `predicates[${index}].id`);
+    if (predicate.passed !== true || typeof predicate.evidence !== "string" || !predicate.evidence.trim()) {
+      throw new Error(`Receipt work verification predicate ${id} is incomplete or failed`);
+    }
+    return predicate;
+  });
+  const requiredPredicates = ["issue-done", "merged-worker-pr", "gate-validate", "gate-darkfactory-autoreview"];
+  const predicateIds = new Set(predicates.map((predicate) => predicate.id));
+  for (const id of requiredPredicates) if (!predicateIds.has(id)) throw new Error(`Receipt work verification is missing predicate ${id}`);
+  return {
+    immutableRefs: [issueVersion],
+    authorizingIntent: { target, issueVersion },
+    gates: predicates,
+    outcome: "verified",
+    handoff: { pullRequest: pull.number, url: pull.url, mergedAt }
+  };
+}
+
+function validateReleaseReceipt(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
+  receiptSchemaVersion(receipt, false);
+  if (receipt.status !== "verified" || receipt.repository !== targetRepository) throw new Error("Receipt release outcome or repository is invalid");
+  const planId = receiptString(receipt.plan_id, "plan_id");
+  if (!/^release-[0-9a-f]{20}$/.test(planId)) throw new Error("Receipt release authorizing plan ID is invalid");
+  const mainSha = receiptSha(receipt.main_sha, "main_sha");
+  const devSha = receiptSha(receipt.dev_sha, "dev_sha");
+  const mainTreeSha = receipt.main_tree_sha === null ? null : receiptSha(receipt.main_tree_sha, "main_tree_sha");
+  const devTreeSha = receipt.dev_tree_sha === null ? null : receiptSha(receipt.dev_tree_sha, "dev_tree_sha");
+  if (mainSha !== devSha && (!mainTreeSha || mainTreeSha !== devTreeSha)) throw new Error("Receipt release immutable refs are not converged");
+  const policyMode = receiptString(receipt.policy_mode, "policy_mode");
+  if (!new Set(["branch-only", "tagged", "packaged", "artifact", "deployed"]).has(policyMode)) throw new Error("Receipt release policy mode is invalid");
+  const release = receiptRecord(receipt.release, "release");
+  if (release.green !== true || receiptSha(release.head_sha, "release.head_sha") !== mainSha || !/^https:\/\/github\.com\//.test(receiptString(release.pull_request, "release.pull_request"))) {
+    throw new Error("Receipt release pull identity or outcome is invalid");
+  }
+  if (mainTreeSha && receiptSha(release.tree_sha, "release.tree_sha") !== mainTreeSha) throw new Error("Receipt release pull tree does not match the released tree");
+  const gates = greenReceiptChecks(release.checks, ["Validate", "DarkFactory Autoreview"], "release.checks");
+  const publication = receiptRecord(receipt.publication, "publication");
+  if (publication.green !== true || publication.mode !== policyMode) throw new Error("Receipt release publication handoff is incomplete");
+  return {
+    immutableRefs: [mainSha, devSha, ...(mainTreeSha ? [mainTreeSha] : []), ...(devTreeSha ? [devTreeSha] : [])],
+    authorizingIntent: { planId, policyMode },
+    gates,
+    outcome: "verified",
+    handoff: publication
+  };
+}
+
+function validateSubmoduleReceipt(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
+  receiptSchemaVersion(receipt, true);
+  if (receipt.status !== "released") throw new Error("Receipt submodule outcome is not released");
+  const plan = receiptRecord(receipt.plan, "plan");
+  if (plan.schemaVersion !== 1 || !/^submodule-[0-9a-f]{20}$/.test(receiptString(plan.planId, "plan.planId")) || plan.action !== "released") {
+    throw new Error("Receipt submodule authorizing plan is invalid");
+  }
+  if (!Array.isArray(plan.blockers) || plan.blockers.length !== 0) throw new Error("Receipt submodule plan contains blockers");
+  const evidence = receiptRecord(plan.evidence, "plan.evidence");
+  if (evidence.parent !== targetRepository) throw new Error("Receipt submodule parent does not match the requested repository");
+  const childSha = receiptSha(evidence.child_sha, "plan.evidence.child_sha");
+  const parentMain = receiptSha(evidence.parent_main, "plan.evidence.parent_main");
+  const parentDev = receiptSha(evidence.parent_dev, "plan.evidence.parent_dev");
+  const mainPointer = receiptSha(evidence.main_pointer, "plan.evidence.main_pointer");
+  const devPointer = receiptSha(evidence.dev_pointer, "plan.evidence.dev_pointer");
+  if (childSha !== mainPointer || childSha !== devPointer) throw new Error("Receipt submodule pointers do not match the released child SHA");
+  const action = receiptRecord(receipt.action, "action");
+  if (action.status !== "released" || action.verified !== true || receiptSha(action.sha, "action.sha") !== childSha || action.downstream_handoff !== "darkfactory-release-verified") {
+    throw new Error("Receipt submodule outcome or downstream handoff is incomplete");
+  }
+  const observation = receiptRecord(receipt.observation, "observation");
+  const childRelease = receiptRecord(observation.child_release, "observation.child_release");
+  if (receiptSha(childRelease.sha, "observation.child_release.sha") !== childSha || !/^https:\/\/github\.com\//.test(receiptString(childRelease.receipt, "observation.child_release.receipt"))) {
+    throw new Error("Receipt submodule child release authority is invalid");
+  }
+  const gates = greenReceiptChecks(childRelease.main_checks, ["Validate"], "observation.child_release.main_checks");
+  return {
+    immutableRefs: [childSha, parentMain, parentDev, mainPointer, devPointer],
+    authorizingIntent: { planId: plan.planId, child: evidence.child, parent: evidence.parent, path: evidence.path },
+    gates,
+    outcome: "released",
+    handoff: action.downstream_handoff
+  };
+}
+
+function validateAutoreviewReceipt(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
+  receiptSchemaVersion(receipt, false);
+  if (receipt.check !== "DarkFactory Autoreview") throw new Error("Receipt Autoreview check identity is invalid");
+  const target = receiptString(receipt.target, "target");
+  if (!target.startsWith(`${targetRepository}#`) || !/^.+#[1-9][0-9]*$/.test(target)) throw new Error("Receipt Autoreview target does not match the requested repository");
+  const result = receiptRecord(receipt.result, "result");
+  if (result.ok !== true || result.state !== "clean" || result.code !== null) throw new Error("Receipt Autoreview outcome is not a clean confirmation");
+  const targetVersion = receiptVersion(result.targetVersion, "result.targetVersion");
+  if (!Array.isArray(result.rounds)) throw new Error("Receipt Autoreview rounds are missing");
+  const rounds = result.rounds.map((entry, index) => receiptRecord(entry, `result.rounds[${index}]`));
+  const cleanRound = (phase: string, tier: string): Record<string, unknown> => {
+    const round = rounds.find((entry) => entry.phase === phase && entry.outcome === "clean");
+    if (!round) throw new Error(`Receipt Autoreview is missing clean ${phase}`);
+    if (round.targetVersion !== targetVersion) throw new Error(`Receipt Autoreview ${phase} target version is stale`);
+    const requested = receiptRecord(round.requested, `${phase}.requested`);
+    const resolved = receiptRecord(round.resolved, `${phase}.resolved`);
+    const verdict = receiptRecord(round.verdict, `${phase}.verdict`);
+    if (requested.modelTier !== tier || typeof requested.effort !== "string" || !requested.effort
+        || !receiptString(resolved.provider, `${phase}.resolved.provider`)
+        || !receiptString(resolved.model, `${phase}.resolved.model`)
+        || !receiptString(resolved.agentPreset, `${phase}.resolved.agentPreset`)
+        || !receiptString(resolved.providerVersion, `${phase}.resolved.providerVersion`)
+        || verdict.approved !== true || verdict.findingsComplete !== true
+        || !Array.isArray(verdict.blockingFindings) || verdict.blockingFindings.length !== 0) {
+      throw new Error(`Receipt Autoreview ${phase} route or verdict is incomplete`);
+    }
+    return round;
+  };
+  const medium = cleanRound("medium_review", "medium");
+  const high = cleanRound("high_review", "high");
+  return {
+    immutableRefs: [targetVersion],
+    authorizingIntent: { target, targetVersion },
+    gates: [medium, high],
+    outcome: "clean",
+    handoff: { targetVersion, state: result.state }
+  };
+}
+
+function validateReceiptKind(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
+  switch (receipt.kind) {
+    case "cli-work-verify": return validateWorkVerificationReceipt(receipt, targetRepository);
+    case "df-release": return validateReleaseReceipt(receipt, targetRepository);
+    case "df-submodule-update": return validateSubmoduleReceipt(receipt, targetRepository);
+    case "autoreview-result": return validateAutoreviewReceipt(receipt, targetRepository);
+    default: throw new Error(`Receipt kind ${String(receipt.kind || "missing")} has no explicit verifier`);
+  }
+}
+
+function receiptFileTimestamp(name: string, kind: string): number {
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z-([a-z][a-z0-9-]*)\.json$/.exec(name);
+  if (!match || match[6] !== kind) throw new Error("Receipt filename does not bind the declared kind");
+  return Date.parse(`${match[1]}T${match[2]}:${match[3]}:${match[4]}.${match[5]}Z`);
+}
+
+export function validateReceiptDocument(value: unknown, targetRepository: string, evidence: ReceiptFileEvidence): ReceiptVerification {
+  const target = validateRepository(targetRepository);
+  const receipt = receiptRecord(value, "document");
+  const kind = receiptString(receipt.kind, "kind");
+  if (!/^[a-z][a-z0-9-]*$/.test(kind)) throw new Error("Receipt kind is invalid");
+  if (receipt.target_repo !== target) throw new Error("Receipt target repository does not match the requested ledger");
+  const createdAt = receiptString(receipt.created_at, "created_at");
+  const createdTime = Date.parse(createdAt);
+  if (!Number.isFinite(createdTime) || new Date(createdTime).toISOString() !== createdAt) throw new Error("Receipt created_at must be a canonical ISO timestamp");
+  if (!RECEIPT_SHA.test(evidence.sha) || !RECEIPT_SHA.test(evidence.ledgerRevision) || !RECEIPT_SHA.test(evidence.commitSha)) {
+    throw new Error("Receipt file, ledger revision, or commit identity is invalid");
+  }
+  if (evidence.path !== `runs/${target}/${evidence.name}`) throw new Error("Receipt file path is outside the bounded target ledger");
+  const fileTime = receiptFileTimestamp(evidence.name, kind);
+  if (!Number.isFinite(fileTime) || Math.abs(fileTime - createdTime) > 5_000) throw new Error("Receipt filename timestamp does not match created_at; stale or replayed evidence refused");
+  if (evidence.actor.type !== "Bot" || !TRUSTED_RECEIPT_ACTORS.has(evidence.actor.login)) throw new Error("Receipt ledger commit actor is not an exact trusted DarkFactory App identity");
+  assertNoReceiptSecrets(receipt);
+  const verified = validateReceiptKind(receipt, target);
+  return Object.freeze({
+    schemaVersion: 1,
+    kind,
+    targetRepository: target,
+    ...verified,
+    actor: Object.freeze({ login: evidence.actor.login, type: "Bot" as const, commitSha: evidence.commitSha })
+  });
+}
+
+async function readReceiptLedgerSnapshot(data: ReceiptRequester): Promise<ReceiptLedgerSnapshot> {
+  const ref = await data.request("GET", "/repos/marius-patrik/darkfactory-data/git/ref/heads/main");
+  if (!isRecord(ref) || !isRecord(ref.object)) throw new Error("DarkFactory receipt ledger main ref is malformed");
+  const headSha = receiptSha(ref.object.sha, "ledger main ref");
+  const commit = await data.request("GET", `/repos/marius-patrik/darkfactory-data/git/commits/${headSha}`);
+  if (!isRecord(commit) || !isRecord(commit.tree)) throw new Error("DarkFactory receipt ledger main commit is malformed");
+  return Object.freeze({ headSha, rootTreeSha: receiptSha(commit.tree.sha, "ledger main tree") });
+}
+
+export async function listReceiptFilesFromTree(
+  data: ReceiptRequester,
+  targetRepository: string,
+  snapshot: ReceiptLedgerSnapshot
+): Promise<Array<{ name: string; path: string; sha: string; url: unknown }>> {
+  const target = validateRepository(targetRepository);
+  const directory = `runs/${target}`;
+  let treeSha = snapshot.rootTreeSha;
+  for (const segment of directory.split("/")) {
+    const tree = await data.request("GET", `/repos/marius-patrik/darkfactory-data/git/trees/${treeSha}`);
+    if (!isRecord(tree) || tree.truncated === true || !Array.isArray(tree.tree)) throw new Error(`DarkFactory receipt tree evidence is truncated or malformed at ${segment}`);
+    const child = tree.tree.find((entry) => isRecord(entry) && entry.type === "tree" && entry.path === segment);
+    if (!child || !isRecord(child)) return [];
+    treeSha = receiptSha(child.sha, `ledger tree ${segment}`);
+  }
+  const directoryTree = await data.request("GET", `/repos/marius-patrik/darkfactory-data/git/trees/${treeSha}`);
+  if (!isRecord(directoryTree) || directoryTree.truncated === true || !Array.isArray(directoryTree.tree)) throw new Error("DarkFactory receipt directory tree evidence is truncated or malformed");
+  return directoryTree.tree
+    .filter((entry) => isRecord(entry) && entry.type === "blob" && typeof entry.path === "string" && entry.path.endsWith(".json"))
+    .map((entry) => ({
+      name: entry.path as string,
+      path: `${directory}/${String(entry.path)}`,
+      sha: receiptSha(entry.sha, `ledger blob ${String(entry.path)}`),
+      url: entry.url ?? null
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function receiptHttpStatus(error: unknown): number | null {
+  return isRecord(error) && Number.isInteger(error.status) ? Number(error.status) : null;
+}
+
+function decodeReceiptFile(value: unknown, expectedPath: string): { name: string; path: string; sha: string; content: string } {
+  if (!isRecord(value) || value.type !== "file" || value.path !== expectedPath || typeof value.name !== "string") {
+    throw new Error("GitHub returned invalid exact receipt file evidence");
+  }
+  return { name: value.name, path: expectedPath, sha: receiptSha(value.sha, "file blob"), content: decodeGithubContent(value) };
+}
+
+export async function readExactReceiptFile(
+  data: ReceiptRequester,
+  targetRepository: string,
+  receiptName: string,
+  snapshot: ReceiptLedgerSnapshot
+): Promise<{ name: string; path: string; sha: string; content: string }> {
+  const target = validateRepository(targetRepository);
+  const candidates = receiptName.endsWith(".json") ? [receiptName] : [receiptName, `${receiptName}.json`];
+  for (const name of candidates) {
+    const filePath = `runs/${target}/${name}`;
+    try {
+      const value = await data.request("GET", `/repos/marius-patrik/darkfactory-data/contents/${encodeContentsPath(filePath)}?ref=${snapshot.headSha}`);
+      return decodeReceiptFile(value, filePath);
+    } catch (error) {
+      if (receiptHttpStatus(error) !== 404) throw error;
+    }
+  }
+  throw new Error(`Receipt ${receiptName} was not found in the bounded target ledger`);
+}
+
+async function readReceiptCommitEvidence(
+  data: ReceiptRequester,
+  file: { name: string; path: string; sha: string },
+  snapshot: ReceiptLedgerSnapshot
+): Promise<ReceiptFileEvidence> {
+  const commits = await data.request("GET", `/repos/marius-patrik/darkfactory-data/commits?path=${encodeURIComponent(file.path)}&sha=${snapshot.headSha}&per_page=1`);
+  if (!Array.isArray(commits) || commits.length !== 1 || !isRecord(commits[0]) || !isRecord(commits[0].author)) {
+    throw new Error("DarkFactory receipt commit provenance is missing or ambiguous");
+  }
+  const actor = commits[0].author;
+  return Object.freeze({
+    name: file.name,
+    path: file.path,
+    sha: file.sha,
+    ledgerRevision: snapshot.headSha,
+    commitSha: receiptSha(commits[0].sha, "file commit"),
+    actor: Object.freeze({ login: receiptString(actor.login, "commit actor login"), type: receiptString(actor.type, "commit actor type") })
+  });
+}
+
 function decodeGithubContent(value: unknown): string {
   if (!isRecord(value) || value.type !== "file" || value.encoding !== "base64" || typeof value.content !== "string") throw new Error("GitHub returned invalid receipt content");
   return Buffer.from(value.content.replace(/\s/g, ""), "base64").toString("utf8");
@@ -1920,27 +2275,36 @@ function assertNoReceiptSecrets(value: unknown, pathPrefix = "receipt"): void {
 async function runReceiptsCommand(command: ParsedHumanCommand): Promise<void> {
   const target = receiptTarget(command.arguments[0], command.spec.id !== "receipts-list");
   const data = createDoctorRequester(await createRepositoryOctokit("marius-patrik/darkfactory-data", { contents: "read" }));
-  const directory = `runs/${target.repository}`;
-  const listing = await data.request("GET", `/repos/marius-patrik/darkfactory-data/contents/${encodeContentsPath(directory)}`);
-  if (!Array.isArray(listing)) throw new Error("DarkFactory receipt directory is unavailable");
-  const files = listing.filter((entry) => isRecord(entry) && entry.type === "file" && typeof entry.name === "string" && entry.name.endsWith(".json"));
+  const snapshot = await readReceiptLedgerSnapshot(data);
   if (command.spec.id === "receipts-list") {
-    const result = files.map((entry) => ({ name: entry.name, sha: entry.sha, url: entry.html_url ?? entry.download_url ?? null }));
+    const files = await listReceiptFilesFromTree(data, target.repository, snapshot);
+    const result = files.map((entry) => ({ name: entry.name, sha: entry.sha, url: entry.url, ledgerRevision: snapshot.headSha }));
     if (command.options["--json"] === true) console.log(JSON.stringify(humanJsonResult("receipts-list", "ok", result), null, 2));
-    else for (const entry of result) console.log(`${entry.name} ${entry.sha || ""}`.trim());
+    else for (const entry of result) console.log(`${entry.name} ${entry.sha}`);
     return;
   }
-  const match = files.find((entry) => entry.name === target.receipt || entry.name === `${target.receipt}.json` || entry.sha === target.receipt);
-  if (!match || typeof match.name !== "string") throw new Error(`Receipt ${target.receipt} was not found in the bounded target ledger`);
-  const content = await data.request("GET", `/repos/marius-patrik/darkfactory-data/contents/${encodeContentsPath(`${directory}/${match.name}`)}`);
-  const receipt: unknown = JSON.parse(decodeGithubContent(content));
-  if (command.spec.id === "receipts-verify") {
-    if (!isRecord(receipt) || typeof receipt.kind !== "string" || receipt.target_repo !== target.repository || typeof receipt.created_at !== "string" || !Number.isFinite(new Date(receipt.created_at).getTime())) {
-      throw new Error("Receipt core provenance is invalid");
-    }
-    assertNoReceiptSecrets(receipt);
+  let file: { name: string; path: string; sha: string; content: string };
+  if (RECEIPT_SHA.test(target.receipt.toLowerCase())) {
+    const files = await listReceiptFilesFromTree(data, target.repository, snapshot);
+    const matches = files.filter((entry) => entry.sha === target.receipt.toLowerCase());
+    if (matches.length !== 1) throw new Error(`Receipt SHA ${target.receipt} was not found exactly once in the bounded target ledger`);
+    const match = matches[0];
+    const content = await data.request("GET", `/repos/marius-patrik/darkfactory-data/contents/${encodeContentsPath(match.path)}?ref=${snapshot.headSha}`);
+    file = decodeReceiptFile(content, match.path);
+  } else {
+    file = await readExactReceiptFile(data, target.repository, target.receipt, snapshot);
   }
-  const result = { file: match.name, sha: match.sha, receipt, verified: command.spec.id === "receipts-verify" ? true : null };
+  let receipt: unknown;
+  try {
+    receipt = JSON.parse(file.content);
+  } catch (error) {
+    throw new Error(`Receipt JSON is invalid: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let verification: ReceiptVerification | null = null;
+  if (command.spec.id === "receipts-verify") {
+    verification = validateReceiptDocument(receipt, target.repository, await readReceiptCommitEvidence(data, file, snapshot));
+  }
+  const result = { file: file.name, sha: file.sha, ledgerRevision: snapshot.headSha, receipt, verified: command.spec.id === "receipts-verify" ? true : null, verification };
   if (command.options["--json"] === true) console.log(JSON.stringify(humanJsonResult(command.spec.id, "ok", result), null, 2));
   else console.log(JSON.stringify(result, null, 2));
 }
