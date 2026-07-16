@@ -200,14 +200,12 @@ Format: JSON
 Emit exactly one JSON object and no prose. Required keys:
 
 - `schemaVersion`: integer `1`.
-- `status`: `fixed`, `conflict`, or `blocked`.
-- `target`: object with `repository`, `issue`, `expectedVersion`, and `observedVersion`.
-- `findingsAddressed`: sorted array of stable finding identifiers.
-- `preservedOwnerText`: boolean.
-- `changes`: array of objects with `section`, `before`, `after`, and `reason`.
-- `proposedVersion`: string or null.
-- `changeSummary`: string suitable for the durable issue history.
-- `evidence`: array of objects with `kind`, `ref`, and `summary`.
-- `blockers`: array of concrete blockers.
+- `title`: complete proposed issue title.
+- `body`: complete proposed owner-editable issue body, excluding the protected
+  owner-history section supplied in verified context.
+- `summary`: bounded explanation suitable for the durable issue change record.
 
-Unknown keys are forbidden. `fixed` requires matching versions and preserved owner text.
+Unknown keys are forbidden. This is a proposal only: the trusted Autoreview
+runtime revalidates the issue version, rejects replacement of the protected
+owner-history marker, appends the preserved owner history, and verifies the
+exact mutation before recording it.

@@ -11,7 +11,16 @@
   registrations may coexist but cannot claim that repository or path.
 - Local worker execution uses the canonical `agents` launcher and its configured
   defaults. DarkFactory carries no provider registry, failover list, or model pin.
-- The Codex pull-request reviewer remains an isolated CI-only execution path and
-  relies on the Codex CLI default model.
+- DarkFactory Autoreview uses logical model tiers through the canonical `agents`
+  launcher for both issue and pull-request review. It is provider-agnostic and
+  does not rely on a repository-pinned model.
 - Managed setup is reviewable through pull requests and never bypasses protected
   default branches.
+
+## 2026-07-16 — Reviewed release convergence
+
+- Main/dev convergence means exact Git tree identity backed by trusted reviewed
+  pull-request ancestry; merge-commit SHA identity is not required.
+- DarkFactory never simulates SHA identity with a protected-ref write. Missing
+  `dev` remains an explicit owner action because a pull request cannot target a
+  nonexistent base branch.

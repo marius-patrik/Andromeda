@@ -1,5 +1,6 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { validateAgentExecutionReceipt } from "./df-model-policy.mjs";
 
 export const API_ROOT = "https://api.github.com";
 export const AGENT_OS_DATA_REPO = "marius-patrik/Andromeda-data";
@@ -14,13 +15,16 @@ export const PARKED_REPOS = new Set([
 ]);
 export const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
 export const MANAGED_REPO_STATES = new Set(["active", "parked", "archived", "completed", "removed"]);
+export const TRUSTED_GATE_APP_ID = 15368;
+export const MANAGED_REQUIRED_CHECKS = Object.freeze(["Validate", "DarkFactory Autoreview"]);
 
 export const WORK_LABELS = [
-  { name: "df:ready", color: "0E8A16", description: "DarkFactory work loop may pick up this issue" },
+  { name: "df:ready", color: "0E8A16", description: "Machine-evaluated issue eligible for DarkFactory dispatch" },
   { name: "df:running", color: "1D76DB", description: "DarkFactory worker is running for this issue" },
   { name: "df:blocked", color: "B60205", description: "DarkFactory worker is blocked on this issue" },
   { name: "df:done", color: "5319E7", description: "DarkFactory worker completed this issue" },
-  { name: "df:ask-owner", color: "B60205", description: "DarkFactory needs owner input before continuing" },
+  { name: "df:ask-owner", color: "F9D0C4", description: "Needs owner input before DarkFactory continues" },
+  { name: "df:no-dispatch", color: "6E7781", description: "Record or owner-executed issue categorically excluded from dispatch" },
   { name: "df:class:mechanical", color: "C5DEF5", description: "DarkFactory mechanical task with a narrow deterministic surface" },
   { name: "df:class:standard", color: "BFDADC", description: "DarkFactory standard task with normal implementation complexity" },
   { name: "df:class:hard", color: "D4C5F9", description: "DarkFactory hard task with substantial implementation complexity" }
@@ -74,6 +78,26 @@ export function repoName(repository) {
 
 export function normalizedRepoName(repository) {
   return repoName(repository).toLowerCase();
+}
+
+export function classifyWorkerBranchRefs(refs, issueNumber) {
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0 || !Array.isArray(refs)) {
+    return { type: "ambiguous", reason: "worker branch inventory is malformed", candidates: [] };
+  }
+  const prefix = `refs/heads/df/${issueNumber}-`;
+  const exactRef = new RegExp(`^refs/heads/df/${issueNumber}-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`);
+  const matching = refs.filter((item) => typeof item?.ref === "string" && item.ref.startsWith(prefix));
+  const candidates = matching
+    .filter((item) => exactRef.test(item.ref) && /^[0-9a-f]{40}$/i.test(item.object?.sha || ""))
+    .map((item) => ({ branch: item.ref.slice("refs/heads/".length), head: item.object.sha.toLowerCase() }));
+  if (matching.length !== candidates.length) {
+    return { type: "ambiguous", reason: "worker branch inventory contains malformed candidate evidence", candidates };
+  }
+  if (candidates.length === 0) return { type: "none" };
+  if (candidates.length !== 1) {
+    return { type: "ambiguous", reason: "multiple worker branches require an owner decision", candidates };
+  }
+  return { type: "branch", ...candidates[0] };
 }
 
 export function isParkedRepo(repository) {
@@ -396,7 +420,9 @@ export function createGithubClient(token, userAgent = "darkfactory") {
       }
 
       if (response.status === 204) return null;
-      return await response.json();
+      const text = await response.text();
+      if (!text.trim()) return null;
+      return JSON.parse(text);
     },
 
     async graphql(query, variables) {
@@ -459,22 +485,17 @@ export async function getBranchProtection(gh, repository, branch) {
 export async function preflightMergePolicy(gh, repository, baseBranch, repo) {
   const branchProtection = await getBranchProtection(gh, repository, baseBranch);
   const autoMergeSupported = repo.allow_auto_merge === true;
-  const requiredContexts = branchProtection.configured
-    ? await getRequiredStatusCheckContexts(gh, repository, baseBranch)
-    : [];
+  const policy = inspectManagedBranchProtection(branchProtection);
 
-  if (!branchProtection.configured || requiredContexts.length === 0) {
-    const summary = branchProtection.configured
-      ? `branch protection on \`${baseBranch}\` has no required status checks; green-PR sweep will squash-merge directly after checks`
-      : `no branch protection on \`${baseBranch}\`; green-PR sweep will squash-merge directly after checks`;
-
+  if (!policy.ok) {
     return {
-      blocked: false,
+      blocked: true,
+      reason: `Target repository ${repoName(repository)} does not expose the exact managed protection policy on \`${baseBranch}\`: ${policy.findings.join("; ")}. Run df setup and re-evaluate before dispatch or merge.`,
       useAutomerge: false,
       autoMergeSupported,
       branchProtection,
-      requiredChecks: requiredContexts,
-      summary
+      requiredChecks: policy.requiredChecks,
+      summary: `managed branch protection on \`${baseBranch}\` is missing, inaccessible, or incomplete; worker dispatch and merge are blocked`
     };
   }
 
@@ -484,7 +505,7 @@ export async function preflightMergePolicy(gh, repository, baseBranch, repo) {
       useAutomerge: true,
       autoMergeSupported,
       branchProtection,
-      requiredChecks: requiredContexts,
+      requiredChecks: policy.requiredChecks,
       summary: `auto-merge is available for \`${baseBranch}\`; GitHub automerge will be attempted`
     };
   }
@@ -494,13 +515,55 @@ export async function preflightMergePolicy(gh, repository, baseBranch, repo) {
     reason: [
       `Target repository ${repoName(repository)} has branch protection with required status checks configured on \`${baseBranch}\`,`,
       "so DarkFactory policy requires GitHub auto-merge before dispatching a worker.",
-      "Enable repository auto-merge or open managed setup work to enable it, then re-apply `df:ready`."
+      "Enable repository auto-merge or open managed setup work to enable it; the system re-evaluates readiness automatically after the cause is resolved."
     ].join(" "),
     useAutomerge: false,
     autoMergeSupported,
     branchProtection,
-    requiredChecks: requiredContexts,
+    requiredChecks: policy.requiredChecks,
     summary: `branch protection with required status checks is configured on \`${baseBranch}\`, but target repository auto-merge is disabled; worker dispatch is blocked`
+  };
+}
+
+export function inspectManagedBranchProtection(branchProtection) {
+  if (!branchProtection?.configured) {
+    const status = branchProtection?.status ? `HTTP ${branchProtection.status}` : "unobservable status";
+    return { ok: false, requiredChecks: [], findings: [`branch protection is not observable (${status})`] };
+  }
+
+  const data = branchProtection.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { ok: false, requiredChecks: [], findings: ["branch protection payload is malformed"] };
+  }
+
+  const findings = [];
+  const required = data.required_status_checks;
+  const rawChecks = Array.isArray(required?.checks) ? required.checks : [];
+  const checks = rawChecks
+    .filter((check) => check && typeof check === "object" && !Array.isArray(check) && typeof check.context === "string" && check.context.trim())
+    .map((check) => ({ context: check.context.trim(), appId: Number.isInteger(check.app_id) ? check.app_id : null }));
+
+  if (!required || typeof required !== "object" || Array.isArray(required)) findings.push("required status checks are missing");
+  else {
+    if (required.strict !== true) findings.push("strict required-status updates are disabled or unobservable");
+    if (!Array.isArray(required.checks) || checks.length !== required.checks.length) {
+      findings.push("required checks are malformed or not bound through exact check records");
+    }
+  }
+
+  for (const context of MANAGED_REQUIRED_CHECKS) {
+    const matches = checks.filter((check) => check.context === context);
+    if (matches.length !== 1) findings.push(`required check ${context} is missing or ambiguous`);
+    else if (matches[0].appId !== TRUSTED_GATE_APP_ID) findings.push(`required check ${context} is not bound to GitHub Actions app ${TRUSTED_GATE_APP_ID}`);
+  }
+  if (data.enforce_admins?.enabled !== true) findings.push("administrator enforcement is disabled or unobservable");
+  if (data.allow_force_pushes?.enabled !== false) findings.push("force-push denial is disabled or unobservable");
+  if (data.allow_deletions?.enabled !== false) findings.push("branch-deletion denial is disabled or unobservable");
+
+  return {
+    ok: findings.length === 0,
+    requiredChecks: [...new Set(checks.map((check) => check.context))],
+    findings
   };
 }
 
@@ -510,26 +573,47 @@ export async function getRequiredStatusCheckContexts(gh, repository, branch) {
       "GET",
       `/repos/${repoName(repository)}/branches/${encodeURIComponent(branch)}/protection`
     );
-    const checks = data?.required_status_checks;
-    if (!checks) return [];
-
-    if (Array.isArray(checks.checks)) {
-      return checks.checks.map((check) => check.context).filter(Boolean);
-    }
-
-    if (Array.isArray(checks.contexts)) return checks.contexts;
-    return [];
+    const policy = inspectManagedBranchProtection({ configured: true, data });
+    return Object.freeze({
+      observable: true,
+      configured: true,
+      healthy: policy.ok,
+      contexts: Object.freeze([...policy.requiredChecks]),
+      findings: Object.freeze([...policy.findings]),
+      status: 200,
+      reason: ""
+    });
   } catch (error) {
-    if (error.status === 404) return [];
-    if (error.status === 403) return [];
+    if (error.status === 404) {
+      return Object.freeze({
+        observable: true,
+        configured: false,
+        healthy: false,
+        contexts: Object.freeze([]),
+        findings: Object.freeze(["branch protection is absent"]),
+        status: 404,
+        reason: error.message || String(error)
+      });
+    }
+    if (error.status === 403) {
+      return Object.freeze({
+        observable: false,
+        configured: null,
+        healthy: false,
+        contexts: Object.freeze([]),
+        findings: Object.freeze(["branch protection is inaccessible"]),
+        status: 403,
+        reason: error.message || String(error)
+      });
+    }
     throw error;
   }
 }
 
-export const CODEX_REVIEW_REQUIRED_CONTEXT = "Codex Review";
+export const AUTOREVIEW_REQUIRED_CONTEXT = "DarkFactory Autoreview";
 
-export function withCodexReviewRequiredContext(requiredContexts = []) {
-  return [...new Set([...requiredContexts, CODEX_REVIEW_REQUIRED_CONTEXT].filter(Boolean))];
+export function withAutoreviewRequiredContext(requiredContexts = []) {
+  return [...new Set([...requiredContexts, AUTOREVIEW_REQUIRED_CONTEXT].filter(Boolean))];
 }
 
 export async function getOptionalFileContent(gh, repository, filePath, ref) {
@@ -611,6 +695,17 @@ export function prdIssueBody(item, blockedBy = []) {
   const blockedByLines = blockedBy.length
     ? ["", "## Sequencing", "", ...blockedBy.map((issueNumber) => `Blocked-by: #${issueNumber}`)]
     : [];
+  const executionRequest = item.modelRequest
+    ? [
+        "",
+        "## Execution Request",
+        "",
+        `- Task class: \`${item.taskClass}\``,
+        `- Model tier: \`${item.modelRequest.modelTier}\``,
+        `- Effort: \`${item.modelRequest.effort}\``,
+        "- Concrete provider and model are resolved only by canonical Agent OS at execution time."
+      ]
+    : [];
 
   return [
     `<!-- ${item.marker} -->`,
@@ -625,6 +720,7 @@ export function prdIssueBody(item, blockedBy = []) {
     "## Acceptance Criteria",
     "",
     acceptance,
+    ...executionRequest,
     ...blockedByLines,
     "",
     "## Planning Notes",
@@ -912,10 +1008,13 @@ export function extractReadmeFirstParagraph(readme) {
   return first.length > 300 ? `${first.slice(0, 297)}...` : first;
 }
 
-export function prdScaffoldPullRequestBody(targetRepoName, paths) {
+export function prdScaffoldPullRequestBody(targetRepoName, paths, provenance = null) {
   const files = paths.map((p) => `- \`${p}\``).join("\n");
+  const marker = provenance
+    ? `<!-- dark-factory:prd-scaffold schema=1 repo=${targetRepoName} base=${provenance.baseRef} source=${provenance.sourceSha} head=${provenance.headSha} content=${provenance.contentDigest} -->`
+    : "<!-- dark-factory:prd-scaffold -->";
   return [
-    "<!-- dark-factory:prd-scaffold -->",
+    marker,
     "## Summary",
     "",
     `DarkFactory fleet bootstrap found missing PRD files in \`${targetRepoName}\` and is opening the smallest scaffold PR so L4 planning can reconcile the backlog from PRD sections.`,
@@ -926,7 +1025,7 @@ export function prdScaffoldPullRequestBody(targetRepoName, paths) {
     "",
     "## Notes",
     "",
-    "- This scaffold is derived from the repository README and the Agent OS root product context. The owner should edit the PRD before merge to reflect the actual product.",
+    "- This scaffold is derived from repository evidence and must pass the normal protected Validate and DarkFactory Autoreview gates before auto-merge; product refinements use a later reviewed PR.",
     "- After merge, DarkFactory L4 planning will parse the PRD and file/update sequenced issues with stable `df-prd:` markers.",
     "- Parked repositories are never touched."
   ].join("\n");
@@ -978,7 +1077,10 @@ export async function readLatestRunLedger(gh, dataRepo, kind, targetRepoName) {
   }
 
   const suffix = `-${kind}.json`;
-  const matches = response
+  const entries = response.length < 1000
+    ? response
+    : await listDirectoryFromGitTree(gh, repository, ledgerDir);
+  const matches = entries
     .filter((entry) => isRecord(entry) && typeof entry.name === "string" && entry.name.endsWith(suffix) && entry.type === "file")
     .map((entry) => entry.name)
     .sort()
@@ -1000,6 +1102,38 @@ export async function readLatestRunLedger(gh, dataRepo, kind, targetRepoName) {
   }
 }
 
+async function listDirectoryFromGitTree(gh, repository, directory) {
+  const ref = await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/main`);
+  const commitSha = ref?.object?.sha;
+  if (typeof commitSha !== "string" || !commitSha) {
+    throw new Error(`DarkFactory ledger tree traversal could not resolve ${repoName(repository)}@main`);
+  }
+  const commit = await gh.request("GET", `/repos/${repoName(repository)}/git/commits/${commitSha}`);
+  let treeSha = commit?.tree?.sha;
+  if (typeof treeSha !== "string" || !treeSha) {
+    throw new Error(`DarkFactory ledger tree traversal could not resolve the main tree for ${repoName(repository)}`);
+  }
+
+  for (const segment of directory.split("/").filter(Boolean)) {
+    const tree = await gh.request("GET", `/repos/${repoName(repository)}/git/trees/${treeSha}`);
+    if (tree?.truncated === true || !Array.isArray(tree?.tree)) {
+      throw new Error(`DarkFactory ledger tree evidence is truncated or malformed at ${segment}`);
+    }
+    const child = tree.tree.find((entry) => entry?.type === "tree" && entry?.path === segment);
+    if (!child) return [];
+    if (typeof child.sha !== "string" || !child.sha) {
+      throw new Error(`DarkFactory ledger tree entry ${segment} has no exact identity`);
+    }
+    treeSha = child.sha;
+  }
+
+  const tree = await gh.request("GET", `/repos/${repoName(repository)}/git/trees/${treeSha}`);
+  if (tree?.truncated === true || !Array.isArray(tree?.tree)) {
+    throw new Error(`DarkFactory ledger directory evidence is truncated or malformed for ${directory}`);
+  }
+  return tree.tree.map((entry) => ({ name: entry?.path, type: entry?.type === "blob" ? "file" : entry?.type }));
+}
+
 export function parseWorkerClaim(ledger) {
   if (!isRecord(ledger)) {
     return null;
@@ -1013,12 +1147,12 @@ export function parseWorkerClaim(ledger) {
   const repoNameFromIssue = issueMatch ? `${issueMatch[1]}/${issueMatch[2]}` : "";
   const repoNameFromLedger = typeof ledger.target_repo === "string" ? ledger.target_repo : "";
 
-  const provider = typeof ledger.token_usage?.provider === "string"
-    ? ledger.token_usage.provider
-    : (typeof ledger.provider === "string" ? ledger.provider : "");
-  const model = typeof ledger.token_usage?.model === "string"
-    ? ledger.token_usage.model
-    : (typeof ledger.model === "string" ? ledger.model : "");
+  let receipt;
+  try {
+    receipt = validateAgentExecutionReceipt(ledger.agent_os?.receipt, ledger.model_request);
+  } catch {
+    return null;
+  }
 
   return {
     repo: repoNameFromLedger || repoNameFromIssue || "",
@@ -1027,8 +1161,14 @@ export function parseWorkerClaim(ledger) {
     baseBranch: typeof ledger.base_branch === "string" ? ledger.base_branch : "",
     pullRequestNumber: Number.isInteger(ledger.pull_request_number) ? ledger.pull_request_number : 0,
     pullRequestUrl: typeof ledger.pull_request === "string" ? ledger.pull_request : "",
-    provider,
-    model,
+    requestedModelTier: receipt.requested.modelTier,
+    requestedEffort: receipt.requested.effort,
+    provider: receipt.resolved.provider,
+    model: receipt.resolved.model,
+    providerVersion: receipt.resolved.providerVersion,
+    agentPreset: receipt.resolved.agentPreset,
+    attempts: receipt.attempts.length,
+    usage: receipt.usage,
     status: typeof ledger.status === "string" ? ledger.status : "",
     summary: typeof ledger.worker_summary === "string" ? ledger.worker_summary : ""
   };
