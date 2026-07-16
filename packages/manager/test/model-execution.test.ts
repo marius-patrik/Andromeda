@@ -91,6 +91,17 @@ function successfulDependencies(
             role: "assistant",
             usage: options.usage ?? { tokensIn: 11, tokensOut: 7, totalTokens: 18 },
             error: options.error,
+            ...(route.provider === "agy"
+              ? {
+                  receipt: {
+                    provider: "agy",
+                    requestedModel: route.model,
+                    concreteModel: `Gemini 3.5 Flash (${request.effort[0]!.toUpperCase()}${request.effort.slice(1)})`,
+                    effort: request.effort,
+                    agentPreset: null,
+                  },
+                }
+              : {}),
           },
         },
       };
@@ -135,7 +146,7 @@ describe("canonical model execution route and receipt", () => {
         resolved: {
           provider: TIER_ROUTES[tier].provider,
           model: {
-            low: "agy-fast",
+            low: "Gemini 3.5 Flash (Medium)",
             medium: "kimi-code/kimi-for-coding",
             high: "gpt-5.6-sol",
             max: "claude-fable-5",
@@ -213,6 +224,44 @@ describe("canonical model execution route and receipt", () => {
     expect(result.content).toBe("");
     expect(result.receipt.blockReason).toBe("execution_policy_mismatch");
     expect(result.receipt.usage).toEqual({ inputTokens: 0, outputTokens: 0, totalTokens: 0 });
+  });
+
+  test("Agy effort varies independently and receipts record the concrete native model", async () => {
+    const { root, state, receiptDir } = await fixture();
+    const captured: Parameters<typeof successfulDependencies>[0] = [];
+    for (const effort of ["low", "medium", "high"] as const) {
+      const result = await executeModelRequest(
+        state,
+        request(root, receiptDir, "low", effort),
+        successfulDependencies(captured),
+      );
+      expect(result.ok).toBe(true);
+      expect(result.receipt.resolved.provider).toBe("agy");
+      expect(result.receipt.resolved.model).toBe(
+        `Gemini 3.5 Flash (${effort[0]!.toUpperCase()}${effort.slice(1)})`,
+      );
+      expect(result.receipt.requested).toEqual({ modelTier: "low", effort });
+    }
+    expect(new Set(captured.map(({ route }) => route.provider))).toEqual(new Set(["agy"]));
+  });
+
+  test("Agy success fails closed when concrete native model evidence is missing", async () => {
+    const { root, state, receiptDir } = await fixture();
+    const dependencies = successfulDependencies();
+    const execute = dependencies.execute!;
+    dependencies.execute = async (...args) => {
+      const executed = await execute(...args);
+      delete executed.outcome.result.receipt;
+      return executed;
+    };
+    const result = await executeModelRequest(
+      state,
+      request(root, receiptDir, "low", "high"),
+      dependencies,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.receipt.blockReason).toBe("provider_receipt_malformed");
+    expect(result.receipt.resolved.model).toBe("agy-fast");
   });
 
   test("provider policy without native attestation blocks as unsupported", async () => {

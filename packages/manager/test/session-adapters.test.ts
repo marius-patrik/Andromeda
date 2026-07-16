@@ -7,6 +7,8 @@ import type { ProviderAdapter, SessionEvent, SessionTranscript, TurnRequest } fr
 import { createSession, loadSessionEvents, loadTranscript, runSessionTurn, streamSessionTurn } from "../../harness/session";
 import {
   agySessionAdapter,
+  attestAgyNativeInvocation,
+  attestClaudeNativeInvocation,
   attestCodexExecutionPolicy,
   buildProviderArgs,
   canonicalProviderEnv,
@@ -227,17 +229,67 @@ describe("provider CLI session arguments", () => {
     ]);
     expect(claude.join(" ")).not.toContain(implementation.prompt);
 
-    expect(
-      buildProviderArgs(
+    const lowEffort = buildProviderArgs(
+      "agy",
+      "Gemini 3.5 Flash (Low)",
+      { ...implementation, effort: "low" },
+      current,
+    );
+    const highEffort = buildProviderArgs("agy", "Gemini 3.5 Flash (Low)", implementation, current);
+    expect(lowEffort).toContain("accept-edits");
+    expect(lowEffort[4]).toBe("Gemini 3.5 Flash (Low)");
+    expect(highEffort[4]).toBe("Gemini 3.5 Flash (High)");
+  });
+
+  test("Agy native effort varies independently while the provider route stays Agy", () => {
+    const current = transcript([{ role: "user", content: "fixture" }]);
+    for (const effort of ["low", "medium", "high"] as const) {
+      const providerArgs = buildProviderArgs(
         "agy",
         "Gemini 3.5 Flash (Low)",
-        { ...implementation, effort: "low" },
+        { prompt: "fixture", effort, executionPolicy: "read-only" },
+        current,
+      );
+      expect(attestAgyNativeInvocation({ providerArgs, stdinPiped: false })).toEqual({
+        executionPolicy: "read-only",
+        model: `Gemini 3.5 Flash (${effort[0]!.toUpperCase()}${effort.slice(1)})`,
+        effort,
+      });
+    }
+    expect(() =>
+      buildProviderArgs(
+        "agy",
+        "agy-model-without-native-effort",
+        { prompt: "fixture", effort: "high", executionPolicy: "read-only" },
         current,
       ),
-    ).toContain("accept-edits");
+    ).toThrow("does not expose a provider-native effort capability");
+  });
+
+  test("native invocation attestation rejects malformed Agy and Claude authority", () => {
     expect(() =>
-      buildProviderArgs("agy", "Gemini 3.5 Flash (Low)", implementation, current),
-    ).toThrow("cannot represent the requested independent effort");
+      attestAgyNativeInvocation({
+        providerArgs: ["--sandbox", "--mode", "auto", "--model", AGY_LOW_MODEL, "--print", "fixture"],
+        stdinPiped: false,
+      }),
+    ).toThrow("Agy native invocation receipt is malformed");
+    expect(() =>
+      attestClaudeNativeInvocation({
+        providerArgs: [
+          "--print",
+          "--model",
+          "claude-fable-5",
+          "--permission-mode",
+          "acceptEdits",
+          "--tools",
+          "Read,Glob,Grep",
+          "--no-session-persistence",
+          "--output-format",
+          "json",
+        ],
+        stdinPiped: true,
+      }),
+    ).toThrow("Claude native invocation receipt is malformed");
   });
 
   test("rejects broader or unknown execution policy before provider spawn", () => {
@@ -410,6 +462,7 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
     options: {
       sandbox?: string;
       sandboxPolicy?: Record<string, unknown>;
+      permissionProfile?: Record<string, unknown>;
       effort?: string;
       duplicateContext?: boolean;
     } = {},
@@ -434,6 +487,7 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
+            writable_roots: [],
           }
         : { type: resolvedSandbox });
     const context = {
@@ -445,6 +499,19 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
         workspace_roots: [root],
         approval_policy: "never",
         sandbox_policy: sandboxPolicy,
+        permission_profile: options.permissionProfile ?? {
+          type: "managed",
+          file_system: {
+            type: "restricted",
+            entries: [
+              { path: { type: "special", value: { kind: "root" } }, access: "read" },
+              ...(resolvedSandbox === "workspace-write"
+                ? [{ path: { type: "path", path: root }, access: "write" }]
+                : []),
+            ],
+          },
+          network: "restricted",
+        },
         model: descriptor.model,
         effort: options.effort ?? request.effort,
       },
@@ -560,12 +627,14 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
         network_access: true,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
+        writable_roots: [],
       },
       {
         type: "workspace-write",
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: true,
+        writable_roots: [],
       },
       {
         type: "workspace-write",
@@ -592,6 +661,91 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
           executionPolicy: "workspace-write",
         };
         const threadId = await writeCodexRollout(root, descriptor, policyRequest, { sandboxPolicy });
+        await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
+          "resolved execution policy does not match",
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("denied: read-only native policy rejects network or writable-root extensions", async () => {
+    const variants: Record<string, unknown>[] = [
+      { type: "read-only", network_access: true },
+      { type: "read-only", network_access: false, writable_roots: [] },
+      { type: "read-only", writable_roots: [path.resolve(os.tmpdir(), "outside")] },
+    ];
+    for (const [index, sandboxPolicy] of variants.entries()) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agents-codex-policy-readonly-${index}-`));
+      try {
+        const descriptor: SessionDescriptor = {
+          sessionId: `canonical-readonly-${index}`,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          mode: "task",
+          workdir: root,
+          stateDir: path.join(root, ".agents"),
+        };
+        const policyRequest: TurnRequest = {
+          prompt: "fixture",
+          effort: "high",
+          executionPolicy: "read-only",
+        };
+        const threadId = await writeCodexRollout(root, descriptor, policyRequest, { sandboxPolicy });
+        await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
+          "resolved execution policy does not match",
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("denied: completed native permission profiles cannot add network or writable authority", async () => {
+    const variants: Record<string, unknown>[] = [
+      {
+        type: "managed",
+        file_system: {
+          type: "restricted",
+          entries: [{ path: { type: "special", value: { kind: "root" } }, access: "read" }],
+        },
+        network: "enabled",
+      },
+      {
+        type: "managed",
+        file_system: {
+          type: "restricted",
+          entries: [
+            { path: { type: "special", value: { kind: "root" } }, access: "read" },
+            { path: { type: "path", path: path.resolve(os.tmpdir(), "outside") }, access: "write" },
+          ],
+        },
+        network: "restricted",
+      },
+      {
+        type: "managed",
+        file_system: { type: "restricted", entries: [] },
+        network: "restricted",
+      },
+    ];
+    for (const [index, permissionProfile] of variants.entries()) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agents-codex-permissions-${index}-`));
+      try {
+        const descriptor: SessionDescriptor = {
+          sessionId: `canonical-permissions-${index}`,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          mode: "task",
+          workdir: root,
+          stateDir: path.join(root, ".agents"),
+        };
+        const policyRequest: TurnRequest = {
+          prompt: "fixture",
+          effort: "high",
+          executionPolicy: "read-only",
+        };
+        const threadId = await writeCodexRollout(root, descriptor, policyRequest, { permissionProfile });
         await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
           "resolved execution policy does not match",
         );
@@ -951,7 +1105,7 @@ async function fakeClaudeJsonBinary(stateDir: string): Promise<string> {
 }
 
 describe("provider-native execution-policy evidence", () => {
-  test("successful Claude output does not echo the requested policy as resolved evidence", async () => {
+  test("successful Claude output attests the exact native permission profile", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-claude-policy-evidence-"));
     const stateDir = path.join(root, ".agents");
     const userHome = path.join(root, "user-home");
@@ -972,11 +1126,11 @@ describe("provider-native execution-policy evidence", () => {
       });
       expect(result.error).toBeUndefined();
       expect(result.content).toBe("claude-ok");
-      expect(result.resolvedExecutionPolicy).toBeUndefined();
+      expect(result.resolvedExecutionPolicy).toBe("read-only");
       expect(result.receipt).toMatchObject({
         provider: "claude",
         requestedExecutionPolicy: "read-only",
-        resolvedExecutionPolicy: null,
+        resolvedExecutionPolicy: "read-only",
       });
     } finally {
       restore();
@@ -1034,6 +1188,11 @@ async function fakeKimiAcpBinary(
       status?: "pending" | "in_progress";
       duplicateAllowOnce?: boolean;
     };
+    fileWrite?: {
+      path: string;
+      content: string;
+      swapParentTo?: string;
+    };
   } = {},
 ): Promise<string> {
   const binDir = path.join(stateDir, "clis", "kimi", "bin");
@@ -1041,7 +1200,7 @@ async function fakeKimiAcpBinary(
   const server = path.join(binDir, "fake-kimi-acp.mjs");
   const behavior = JSON.stringify(opts);
   const source = `
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
@@ -1121,7 +1280,7 @@ for await (const line of lines) {
   if (typeof message.method !== "string") {
     responses.push(message);
     capture();
-    if (message.id === 900 && pendingPromptId !== null) {
+    if ((message.id === 900 || message.id === 901) && pendingPromptId !== null) {
       finishPrompt(pendingPromptId);
       pendingPromptId = null;
     }
@@ -1189,6 +1348,19 @@ for await (const line of lines) {
               : []),
             { kind: "reject_once", name: "Reject", optionId: "reject-once" },
           ],
+        } });
+      } else if (behavior.fileWrite) {
+        pendingPromptId = message.id;
+        const fileWrite = behavior.fileWrite;
+        if (fileWrite.swapParentTo) {
+          const parent = path.dirname(fileWrite.path);
+          renameSync(parent, parent + "-provider-backup");
+          symlinkSync(fileWrite.swapParentTo, parent, process.platform === "win32" ? "junction" : "dir");
+        }
+        send({ id: 901, method: "fs/write_text_file", params: {
+          sessionId: activeSessionId,
+          path: fileWrite.path,
+          content: fileWrite.content,
         } });
       } else {
         finishPrompt(message.id);
@@ -1310,7 +1482,7 @@ describe("managed Kimi native continuation (issue #254)", () => {
     }
   }, 30_000);
 
-  test("workspace policy primary: manual ACP grants one edit inside the exact worktree", async () => {
+  test("workspace filesystem primary: manager-owned ACP write mutates an existing in-worktree file", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-write-"));
     const stateDir = path.join(root, ".agents");
     const userHome = path.join(root, "user-home");
@@ -1322,7 +1494,7 @@ describe("managed Kimi native continuation (issue #254)", () => {
       await seedKimiCanonicalStartup(state, stateDir);
       await writeFile(target, "before\n");
       const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
-        permissionRequest: { kind: "edit", path: target },
+        fileWrite: { path: target, content: "after\n" },
       });
       const descriptor = await createSession(state, {
         provider: "kimi",
@@ -1342,8 +1514,12 @@ describe("managed Kimi native continuation (issue #254)", () => {
         ({ method, params }) => method === "session/set_config_option" && params.configId === "mode",
       );
       expect(mode?.params.value).toBe("manual");
-      expect(captured.responses.find((response) => response.id === 900)).toMatchObject({
-        result: { outcome: { outcome: "selected", optionId: "allow-once" } },
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(target, "utf8")).toBe("after\n");
+      const initialize = captured.requests.find(({ method }) => method === "initialize");
+      expect(initialize?.params.clientCapabilities).toEqual({
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: false,
       });
     } finally {
       restore();
@@ -1351,18 +1527,18 @@ describe("managed Kimi native continuation (issue #254)", () => {
     }
   }, 30_000);
 
-  test("workspace policy edge: an out-of-worktree edit is cancelled and fails the turn", async () => {
+  test("workspace filesystem edge: manager-owned ACP write can create a new in-worktree file", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-escape-"));
     const stateDir = path.join(root, ".agents");
     const userHome = path.join(root, "user-home");
     const capturePath = path.join(root, "kimi-acp.json");
-    const outside = path.resolve(root, "..", `${path.basename(root)}-outside.txt`);
+    const target = path.join(root, "created.txt");
     const restore = withDisposableHome(stateDir, userHome);
     try {
       const state = sharedStateAt(root, stateDir, userHome);
       await seedKimiCanonicalStartup(state, stateDir);
       const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
-        permissionRequest: { kind: "edit", path: outside },
+        fileWrite: { path: target, content: "created safely\n" },
       });
       const descriptor = await createSession(state, {
         provider: "kimi",
@@ -1370,16 +1546,50 @@ describe("managed Kimi native continuation (issue #254)", () => {
         mode: "task",
         workdir: root,
       });
+      const result = await runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+        prompt: "Create a managed file.",
+        executionPolicy: "workspace-write",
+      });
+      expect(result.resolvedExecutionPolicy).toBe("workspace-write");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(target, "utf8")).toBe("created safely\n");
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace filesystem denied: a lexical out-of-worktree write fails closed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-outside-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const outside = path.resolve(root, "..", `${path.basename(root)}-owner-data.txt`);
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      await writeFile(outside, "outside-owner-data\n");
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        fileWrite: { path: outside, content: "must not land\n" },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+
       await expect(
         runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
-          prompt: "Attempt an escaped edit.",
+          prompt: "Attempt an escaped write.",
           executionPolicy: "workspace-write",
         }),
-      ).rejects.toThrow("requested permission despite the confirmed execution policy");
+      ).rejects.toThrow("outside managed containment");
       const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
-      expect(captured.responses.find((response) => response.id === 900)).toMatchObject({
-        result: { outcome: { outcome: "cancelled" } },
-      });
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(outside, "utf8")).toBe("outside-owner-data\n");
     } finally {
       restore();
       await rm(outside, { force: true });
@@ -1401,7 +1611,7 @@ describe("managed Kimi native continuation (issue #254)", () => {
       await writeFile(outside, "outside-owner-data\n");
       await link(outside, target);
       const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
-        permissionRequest: { kind: "edit", path: target },
+        fileWrite: { path: target, content: "must not land\n" },
       });
       const descriptor = await createSession(state, {
         provider: "kimi",
@@ -1415,16 +1625,59 @@ describe("managed Kimi native continuation (issue #254)", () => {
           prompt: "Attempt an edit through a hard link.",
           executionPolicy: "workspace-write",
         }),
-      ).rejects.toThrow("requested permission despite the confirmed execution policy");
+      ).rejects.toThrow("outside managed containment");
       const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
-      expect(captured.responses.find((response) => response.id === 900)).toMatchObject({
-        result: { outcome: { outcome: "cancelled" } },
-      });
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
       expect(await readFile(outside, "utf8")).toBe("outside-owner-data\n");
     } finally {
       restore();
       await rm(outside, { force: true });
       await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace filesystem denied: a parent swapped to an outside link before mutation fails closed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-toctou-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-toctou-outside-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const workspace = path.join(root, "workspace");
+    const target = path.join(workspace, "managed.txt");
+    const outsideTarget = path.join(outside, "managed.txt");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      await mkdir(workspace);
+      await writeFile(target, "inside-owner-data\n");
+      await writeFile(outsideTarget, "outside-owner-data\n");
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        fileWrite: { path: target, content: "must not escape\n", swapParentTo: outside },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt a raced edit.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("outside managed containment");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(outsideTarget, "utf8")).toBe("outside-owner-data\n");
+      expect(await readFile(path.join(`${workspace}-provider-backup`, "managed.txt"), "utf8")).toBe(
+        "inside-owner-data\n",
+      );
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
     }
   }, 30_000);
 
@@ -2010,7 +2263,7 @@ describe("managed Agy provider boundary (issue #252)", () => {
         executionPolicy: "read-only",
       });
       expect(result.error).toBeUndefined();
-      expect(result.resolvedExecutionPolicy).toBeUndefined();
+      expect(result.resolvedExecutionPolicy).toBe("read-only");
 
       // The exact prompt and the concrete Low model reach the provider boundary.
       const captured = parseCapture(await readFile(capture, "utf8"));

@@ -47,6 +47,7 @@ export type ExecutionPolicy = (typeof EXECUTION_POLICIES)[number];
 export const MAX_PROMPT_BYTES = 8 * 1024 * 1024;
 
 const SAFE_RECEIPT_VALUE = /^[A-Za-z0-9][A-Za-z0-9_.\/-]{0,127}$/;
+const SAFE_RECEIPT_MODEL = /^[A-Za-z0-9][A-Za-z0-9_.\/() -]{0,127}$/;
 const SAFE_BLOCK_REASON = /^[a-z][a-z0-9_-]{0,63}$/;
 
 export interface AgentExecutionReceipt {
@@ -207,15 +208,41 @@ function normalizedUsage(usage: TurnResult["usage"]): AgentExecutionReceipt["usa
   return { inputTokens, outputTokens, totalTokens };
 }
 
+function providerResolvedModel(
+  route: ResolvedRoute,
+  effort: ModelEffort,
+  receipt: TurnResult["receipt"],
+): string | null {
+  if (route.provider !== "agy") return route.model;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return null;
+  const keys = Object.keys(receipt).sort();
+  const expected = ["agentPreset", "concreteModel", "effort", "provider", "requestedModel"];
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index]) ||
+    receipt.provider !== "agy" ||
+    receipt.requestedModel !== route.model ||
+    receipt.effort !== effort ||
+    receipt.agentPreset !== null ||
+    typeof receipt.concreteModel !== "string" ||
+    !SAFE_RECEIPT_MODEL.test(receipt.concreteModel)
+  ) {
+    return null;
+  }
+  return receipt.concreteModel;
+}
+
 function resolvedReceipt(
   tier: ModelTier,
   route: ResolvedRoute | null,
   providerVersion: string | null | undefined,
+  providerModel?: string,
 ): AgentExecutionReceipt["resolved"] {
   const declared = TIER_ROUTES[tier];
+  const model = providerModel ?? route?.model ?? "unresolved";
   return {
     provider: outputSafe(route?.provider ?? declared.provider),
-    model: outputSafe(route?.model ?? "unresolved"),
+    model: SAFE_RECEIPT_MODEL.test(model) ? model : "unresolved",
     agentPreset: outputSafe(route?.agentPreset ?? declared.agentPreset),
     providerVersion: receiptProviderVersion(providerVersion),
   };
@@ -246,11 +273,12 @@ function successReceipt(
   route: ResolvedRoute,
   providerVersion: string,
   usage: AgentExecutionReceipt["usage"],
+  providerModel: string,
 ): AgentExecutionReceipt {
   return {
     schemaVersion: 1,
     requested: { modelTier: tier, effort },
-    resolved: resolvedReceipt(tier, route, providerVersion),
+    resolved: resolvedReceipt(tier, route, providerVersion, providerModel),
     attempts: [{ number: 1, outcome: "success", reason: null }],
     usage,
     outcome: "success",
@@ -511,10 +539,13 @@ export async function executeModelRequest(
     } else if (executed.outcome.resolvedExecutionPolicy !== executionPolicy) {
       finalReceipt = blockedReceipt(tier, effort, route, safeVersion, "execution_policy_mismatch");
     } else {
+      const resolvedModel = providerResolvedModel(route, effort, executed.outcome.result.receipt);
       const usage = normalizedUsage(executed.outcome.result.usage);
-      finalReceipt = usage
-        ? successReceipt(tier, effort, route, safeVersion, usage)
-        : blockedReceipt(tier, effort, route, safeVersion, "usage_malformed");
+      finalReceipt = !resolvedModel
+        ? blockedReceipt(tier, effort, route, safeVersion, "provider_receipt_malformed")
+        : usage
+          ? successReceipt(tier, effort, route, safeVersion, usage, resolvedModel)
+          : blockedReceipt(tier, effort, route, safeVersion, "usage_malformed");
     }
     content = finalReceipt.outcome === "success" ? providerContent : "";
     await reservation.commit(finalReceipt);

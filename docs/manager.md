@@ -77,10 +77,13 @@ native session id. A later turn must resume that id, verify the resumed native
 model still matches the canonical model, and keep the same receipt. Missing,
 malformed, conflicting, or model-mismatched receipts fail before launch; an
 ACP resume failure never falls back to `session/new`. Read-only turns select
-Kimi's `plan` mode. Workspace-write turns select `manual` mode and admit only
-bounded create/update operations inside the physical worktree; shell execution,
-delete/move operations, linked-path escapes, and all other permission requests
-are denied. ACP control requests have a 30-second deadline, prompts have a
+Kimi's `plan` mode. Workspace-write turns select `manual` mode, advertise the
+ACP client filesystem boundary, and service bounded create/update operations
+through manager-owned, identity-pinned file handles. Provider-side pathname
+writes are never granted. The manager re-attests physical containment at open
+and mutation time; shell execution, delete/move operations, linked-path escapes,
+hard links, and all permission requests are denied. ACP control requests have a
+30-second deadline, prompts have a
 10-minute deadline, and process exit plus stderr draining use bounded one-second
 cleanup windows; an expired phase terminates the provider and records only a
 sanitized timeout failure.
@@ -124,11 +127,13 @@ The Agy (`antigravity-cli`) boundary is enforced per launch:
   after final verification and before or during spawn, or a transient mid-run
   swap fully restored before postflight, is not eliminated; this boundary does
   not claim the executed bytes remain immutable for the whole process lifetime.
-- **Tier resolution and receipt.** Canonical reasoning tiers
-  (`low`/`medium`/`high`) resolve to the concrete authenticated model — Agy
-  carries the tier in the model string, e.g. `Gemini 3.5 Flash (Low)` — and are
-  recorded in the session receipt as the resolved concrete model, provider,
-  effort, and agent preset.
+- **Independent effort and receipt.** The logical `low` tier keeps the Agy
+  provider route fixed while canonical effort (`low`/`medium`/`high`) selects
+  the matching provider-native model variant — Agy carries effort in the model
+  string, e.g. `Gemini 3.5 Flash (High)`. A configured model family without a
+  native effort variant fails closed. The exact spawned model and effort are
+  reconstructed from provider argv and recorded in the session and execution
+  receipts.
 
 ### Agy source-and-installed-boundary repair
 
@@ -270,8 +275,11 @@ Codex resolves the matching built-in `:read-only` or `:workspace` permission
 profile through an ephemeral, zero-token app-server thread before provider work.
 That receipt must bind the canonical model, provider home, worktree, approval
 policy, effort, and sole runtime workspace root. A completed native rollout then
-re-attests the exact CLI sandbox, including network denial, temporary-directory
-exclusions, and the absence of extra writable roots for `workspace-write`.
+re-attests the exact CLI sandbox and native managed permission profile. The
+profile must explicitly report restricted network access and prove that no
+writable path exists for `read-only`, or that the sole writable path is the
+canonical worktree for `workspace-write`; the latter also requires explicit
+temporary-directory exclusions and an empty extra `writable_roots` list.
 
 `--receipt` must name an absolute, nonexistent file inside the physical
 worktree. The manager reserves it with a blocked `execution_pending` receipt

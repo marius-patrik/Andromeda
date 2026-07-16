@@ -38,6 +38,7 @@ export interface CliAdapterOptions {
     descriptor: SessionDescriptor,
     request: TurnRequest,
     result: TurnResult,
+    launch: NativeCliLaunch,
   ) => Promise<"read-only" | "workspace-write">;
   /**
    * Captures immutable per-run authority before canonical launch preparation.
@@ -71,7 +72,14 @@ export interface CliAdapterOptions {
     descriptor: SessionDescriptor,
     request: TurnRequest,
     result: TurnResult,
+    launch: NativeCliLaunch,
   ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+}
+
+/** Immutable provider-native launch material that actually reached Bun.spawn. */
+export interface NativeCliLaunch {
+  providerArgs: readonly string[];
+  stdinPiped: boolean;
 }
 
 function defaultParseResult(stdout: string, stderr: string, code: number): TurnResult {
@@ -146,6 +154,10 @@ export class CliProviderAdapter implements ProviderAdapter {
     );
     forceAgyAutoUpdateDisabled(env, this.id);
     const invocation = commandInvocation(this.options.binary, args, env);
+    const nativeLaunch: NativeCliLaunch = Object.freeze({
+      providerArgs: Object.freeze([...args]),
+      stdinPiped: stdinText !== undefined,
+    });
     const spawnOptions = {
       cwd,
       env,
@@ -184,7 +196,12 @@ export class CliProviderAdapter implements ProviderAdapter {
     const code = processExit.value;
     const result = (this.options.parseResult ?? defaultParseResult)(stdout, stderr, code);
     if (this.options.resolveExecutionPolicy) {
-      result.resolvedExecutionPolicy = await this.options.resolveExecutionPolicy(descriptor, request, result);
+      result.resolvedExecutionPolicy = await this.options.resolveExecutionPolicy(
+        descriptor,
+        request,
+        result,
+        nativeLaunch,
+      );
     } else if (preworkExecutionPolicy) {
       result.resolvedExecutionPolicy = preworkExecutionPolicy;
     } else {
@@ -197,7 +214,9 @@ export class CliProviderAdapter implements ProviderAdapter {
     if (preworkExecutionPolicy && result.resolvedExecutionPolicy !== preworkExecutionPolicy) {
       throw new Error("provider pre-work and completed-turn execution-policy receipts disagree");
     }
-    if (this.options.receipt) result.receipt = await this.options.receipt(descriptor, request, result);
+    if (this.options.receipt) {
+      result.receipt = await this.options.receipt(descriptor, request, result, nativeLaunch);
+    }
     return result;
   }
 }
@@ -363,8 +382,8 @@ export interface AgyModelResolution {
   effort: "low" | "medium" | "high" | null;
 }
 
-/** The authenticated Agy Flash model for each canonical reasoning tier. */
-const AGY_TIER_MODELS: Record<"low" | "medium" | "high", string> = {
+/** The authenticated Agy Flash model for each provider-native effort setting. */
+const AGY_EFFORT_MODELS: Record<"low" | "medium" | "high", string> = {
   low: "Gemini 3.5 Flash (Low)",
   medium: "Gemini 3.5 Flash (Medium)",
   high: "Gemini 3.5 Flash (High)",
@@ -373,22 +392,108 @@ const AGY_TIER_MODELS: Record<"low" | "medium" | "high", string> = {
 /**
  * Resolve a requested Agy model to the concrete display-name model Agy expects.
  * Agy carries the reasoning tier inside the model string ("... (Low)") and has
- * no separate effort flag, so a canonical tier keyword maps to the concrete
- * authenticated model. An explicit display name passes through with its tier
- * extracted; any other concrete identifier passes through without claiming an
- * effort tier we cannot verify.
+ * no separate effort flag, so canonical effort selects a concrete model
+ * variant without changing the Agy provider route. An explicit display name
+ * keeps its model family while changing only the provider-native effort
+ * suffix; identifiers without a native effort capability fail closed when an
+ * independent effort is requested.
  */
-export function resolveAgyModel(requestedModel: string): AgyModelResolution {
+export function resolveAgyModel(
+  requestedModel: string,
+  requestedEffort?: "low" | "medium" | "high",
+): AgyModelResolution {
   const requested = requestedModel.trim();
   const tier = requested.toLowerCase();
   if (tier === "low" || tier === "medium" || tier === "high") {
-    return { requestedModel, concreteModel: AGY_TIER_MODELS[tier], effort: tier };
+    const effort = requestedEffort ?? tier;
+    return { requestedModel, concreteModel: AGY_EFFORT_MODELS[effort], effort };
   }
   const display = requested.match(/^(.*?)\s*\((low|medium|high)\)$/i);
   if (display) {
-    return { requestedModel, concreteModel: requested, effort: display[2]!.toLowerCase() as AgyModelResolution["effort"] };
+    const embeddedEffort = display[2]!.toLowerCase() as Exclude<AgyModelResolution["effort"], null>;
+    const effort = requestedEffort ?? embeddedEffort;
+    const label = `${effort[0]!.toUpperCase()}${effort.slice(1)}`;
+    return { requestedModel, concreteModel: `${display[1]!.trim()} (${label})`, effort };
+  }
+  if (requestedEffort) {
+    throw new Error("Agy configured model does not expose a provider-native effort capability");
   }
   return { requestedModel, concreteModel: requested, effort: null };
+}
+
+export interface NativeInvocationAttestation {
+  executionPolicy: "read-only" | "workspace-write";
+  model: string;
+  effort: "low" | "medium" | "high" | null;
+}
+
+/** Reconstruct Agy authority exclusively from the exact provider argv that was spawned. */
+export function attestAgyNativeInvocation(launch: NativeCliLaunch): NativeInvocationAttestation {
+  const args = launch.providerArgs;
+  if (
+    launch.stdinPiped ||
+    args.length !== 7 ||
+    args[0] !== "--sandbox" ||
+    args[1] !== "--mode" ||
+    (args[2] !== "plan" && args[2] !== "accept-edits") ||
+    args[3] !== "--model" ||
+    typeof args[4] !== "string" ||
+    !args[4]!.trim() ||
+    args[4]!.includes("\0") ||
+    args[5] !== "--print" ||
+    typeof args[6] !== "string" ||
+    !args[6]!.trim()
+  ) {
+    throw new Error("Agy native invocation receipt is malformed");
+  }
+  const resolution = resolveAgyModel(args[4]!);
+  return {
+    executionPolicy: args[2] === "plan" ? "read-only" : "workspace-write",
+    model: resolution.concreteModel,
+    effort: resolution.effort,
+  };
+}
+
+/** Reconstruct Claude authority exclusively from its exact native flags and stdin transport. */
+export function attestClaudeNativeInvocation(launch: NativeCliLaunch): NativeInvocationAttestation {
+  const args = launch.providerArgs;
+  if (!launch.stdinPiped || args[0] !== "--print" || args[1] !== "--model") {
+    throw new Error("Claude native invocation receipt is malformed");
+  }
+  const model = args[2];
+  if (typeof model !== "string" || !model.trim() || model.includes("\0")) {
+    throw new Error("Claude native invocation receipt is malformed");
+  }
+  let cursor = 3;
+  let effort: NativeInvocationAttestation["effort"] = null;
+  if (args[cursor] === "--effort") {
+    const candidate = args[cursor + 1];
+    if (candidate !== "low" && candidate !== "medium" && candidate !== "high") {
+      throw new Error("Claude native invocation receipt is malformed");
+    }
+    effort = candidate;
+    cursor += 2;
+  }
+  if (
+    args[cursor] !== "--permission-mode" ||
+    args[cursor + 2] !== "--tools" ||
+    args[cursor + 4] !== "--no-session-persistence" ||
+    args[cursor + 5] !== "--output-format" ||
+    args[cursor + 6] !== "json" ||
+    args.length !== cursor + 7
+  ) {
+    throw new Error("Claude native invocation receipt is malformed");
+  }
+  const permissionMode = args[cursor + 1];
+  const tools = args[cursor + 3];
+  const executionPolicy =
+    permissionMode === "plan" && tools === "Read,Glob,Grep"
+      ? "read-only"
+      : permissionMode === "acceptEdits" && tools === "Read,Glob,Grep,Edit,Write"
+        ? "workspace-write"
+        : null;
+  if (!executionPolicy) throw new Error("Claude native invocation receipt is malformed");
+  return { executionPolicy, model, effort };
 }
 
 export function buildProviderArgs(
@@ -457,11 +562,7 @@ export function buildProviderArgs(
       // model silently falls back to the default. Bind "--model <concrete>"
       // first and place "--print <prompt>" last so the exact prompt and the
       // requested model both apply.
-      const { concreteModel } = resolveAgyModel(model);
-      const resolution = resolveAgyModel(model);
-      if (request.effort && resolution.effort && request.effort !== resolution.effort) {
-        throw new Error("Agy configured model cannot represent the requested independent effort");
-      }
+      const { concreteModel } = resolveAgyModel(model, request.effort);
       return [
         "--sandbox",
         "--mode",
@@ -553,6 +654,65 @@ function candidateCodexDateDirectories(sessionsRoot: string): string[] {
 
 function exactRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value).sort();
+  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+}
+
+function codexPermissionPath(value: unknown): { kind: "root" } | { kind: "path"; path: string } | null {
+  if (!exactRecord(value)) return null;
+  if (value.type === "special" && exactKeys(value, ["type", "value"]) && exactRecord(value.value)) {
+    return exactKeys(value.value, ["kind"]) && value.value.kind === "root" ? { kind: "root" } : null;
+  }
+  if (value.type === "path" && exactKeys(value, ["path", "type"]) && typeof value.path === "string") {
+    return { kind: "path", path: value.path };
+  }
+  return null;
+}
+
+/** Verify completed Codex network and writable-root authority from its native permission profile. */
+function attestCodexPermissionProfile(
+  value: unknown,
+  requested: "read-only" | "workspace-write",
+  workdir: string,
+): boolean {
+  if (
+    !exactRecord(value) ||
+    !exactKeys(value, ["file_system", "network", "type"]) ||
+    value.type !== "managed" ||
+    value.network !== "restricted" ||
+    !exactRecord(value.file_system) ||
+    !exactKeys(value.file_system, ["entries", "type"]) ||
+    value.file_system.type !== "restricted" ||
+    !Array.isArray(value.file_system.entries)
+  ) {
+    return false;
+  }
+  let rootRead = 0;
+  const writablePaths: string[] = [];
+  for (const entry of value.file_system.entries) {
+    if (
+      !exactRecord(entry) ||
+      !exactKeys(entry, ["access", "path"]) ||
+      (entry.access !== "read" && entry.access !== "write")
+    ) {
+      return false;
+    }
+    const permissionPath = codexPermissionPath(entry.path);
+    if (!permissionPath) return false;
+    if (entry.access === "read") {
+      if (permissionPath.kind === "root") rootRead += 1;
+      continue;
+    }
+    if (permissionPath.kind !== "path") return false;
+    writablePaths.push(permissionPath.path);
+  }
+  if (rootRead !== 1) return false;
+  return requested === "read-only"
+    ? writablePaths.length === 0
+    : writablePaths.length === 1 && samePath(writablePaths[0]!, workdir);
 }
 
 /**
@@ -667,18 +827,39 @@ export async function attestCodexExecutionPolicy(
   if (request.effort && turnContext.effort !== request.effort) {
     throw new Error("Codex native execution receipt does not match the requested effort");
   }
+  if (!attestCodexPermissionProfile(turnContext.permission_profile, requested, descriptor.workdir)) {
+    throw new Error("Codex resolved execution policy does not match the requested policy");
+  }
   if (!sandboxPolicy || sandboxPolicy.type !== requested) {
     throw new Error("Codex resolved execution policy does not match the requested policy");
   }
+  const policyKeys = Object.keys(sandboxPolicy).sort();
+  if (requested === "read-only") {
+    // Codex serializes read-only as a closed native enum variant. Its exact
+    // one-key shape is the completed-turn proof that neither a network toggle
+    // nor any writable-root extension was admitted; accepting extra authority
+    // fields would make this variant ambiguous.
+    if (policyKeys.length !== 1 || policyKeys[0] !== "type") {
+      throw new Error("Codex resolved execution policy does not match the requested policy");
+    }
+    return requested;
+  }
+  const writableRoots = sandboxPolicy.writable_roots;
+  const expectedWorkspaceKeys = [
+    "exclude_slash_tmp",
+    "exclude_tmpdir_env_var",
+    "network_access",
+    "type",
+    "writable_roots",
+  ];
   if (
-    requested === "workspace-write" &&
-    (
-      sandboxPolicy.network_access !== false ||
-      sandboxPolicy.exclude_tmpdir_env_var !== true ||
-      sandboxPolicy.exclude_slash_tmp !== true ||
-      ("writable_roots" in sandboxPolicy &&
-        (!Array.isArray(sandboxPolicy.writable_roots) || sandboxPolicy.writable_roots.length !== 0))
-    )
+    policyKeys.length !== expectedWorkspaceKeys.length ||
+    policyKeys.some((key, index) => key !== expectedWorkspaceKeys[index]) ||
+    sandboxPolicy.network_access !== false ||
+    sandboxPolicy.exclude_tmpdir_env_var !== true ||
+    sandboxPolicy.exclude_slash_tmp !== true ||
+    !Array.isArray(writableRoots) ||
+    writableRoots.length !== 0
   ) {
     throw new Error("Codex resolved execution policy does not match the requested policy");
   }
@@ -790,14 +971,19 @@ export function claudeSessionAdapter(binaryOverride?: string): ProviderAdapter {
     buildArgs: (request, transcript, descriptor) => buildProviderArgs("claude", descriptor.model, request, transcript),
     buildStdin: (request, transcript) => transcriptAsPrompt(request, transcript),
     parseResult: parseClaudeJsonResult,
-    receipt: (descriptor, request, result) => ({
-      provider: "claude",
-      model: descriptor.model,
-      effort: request.effort ?? null,
-      agentPreset: request.agentPreset ?? null,
-      requestedExecutionPolicy: request.executionPolicy ?? "read-only",
-      resolvedExecutionPolicy: result.resolvedExecutionPolicy ?? null,
-    }),
+    resolveExecutionPolicy: async (_descriptor, _request, _result, launch) =>
+      attestClaudeNativeInvocation(launch).executionPolicy,
+    receipt: (_descriptor, request, result, launch) => {
+      const native = attestClaudeNativeInvocation(launch);
+      return {
+        provider: "claude",
+        model: native.model,
+        effort: native.effort,
+        agentPreset: request.agentPreset ?? null,
+        requestedExecutionPolicy: request.executionPolicy ?? "read-only",
+        resolvedExecutionPolicy: result.resolvedExecutionPolicy ?? null,
+      };
+    },
   });
 }
 
@@ -813,7 +999,7 @@ export function codexSessionAdapter(binaryOverride?: string): ProviderAdapter {
     parseResult: parseCodexJsonResult,
     preworkExecutionPolicy: (descriptor, request, env) =>
       preflightCodexExecutionPolicy(binary, descriptor, request, env),
-    resolveExecutionPolicy: async (descriptor, request, result) => {
+    resolveExecutionPolicy: async (descriptor, request, result, _launch) => {
       const providerThreadId = exactRecord(result.receipt) ? result.receipt.providerThreadId : null;
       if (typeof providerThreadId !== "string") throw new Error("Codex native execution receipt is missing");
       return attestCodexExecutionPolicy(descriptor, request, providerThreadId);
@@ -1138,13 +1324,15 @@ export function agySessionAdapter(binaryOverride?: string): ProviderAdapter {
       verifyAgyAttestedState(attestation as AgyLaunchAttestation | undefined, "immediately before launch"),
     postflight: (_descriptor, attestation) =>
       verifyAgyAttestedState(attestation as AgyLaunchAttestation | undefined, "after the managed run"),
-    receipt: (descriptor) => {
-      const resolution = resolveAgyModel(descriptor.model);
+    resolveExecutionPolicy: async (_descriptor, _request, _result, launch) =>
+      attestAgyNativeInvocation(launch).executionPolicy,
+    receipt: (descriptor, _request, _result, launch) => {
+      const native = attestAgyNativeInvocation(launch);
       return {
         provider: "agy",
-        requestedModel: resolution.requestedModel,
-        concreteModel: resolution.concreteModel,
-        effort: resolution.effort,
+        requestedModel: descriptor.model,
+        concreteModel: native.model,
+        effort: native.effort,
         // No --agent preset is overridden; Agy applies its own default.
         agentPreset: null,
       };
