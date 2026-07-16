@@ -913,12 +913,14 @@ test("df-plan workflow reacts safely to PRD edits on the trusted default branch"
   assert.doesNotMatch(workflow, /DARK_FACTORY_CONTROL_REF/);
 });
 
-test("df-plan queues newly ready PRD issues for the control orchestrator", async () => {
+test("df-plan never publishes or queues readiness without exact issue Autoreview", async () => {
   const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
 
-  assert.match(source, /dispatchIfNewlyReady/);
-  assert.match(source, /labelUpdate\.add\.includes\("df:ready"\)/);
-  assert.match(source, /await-control-orchestrator/);
+  assert.doesNotMatch(source, /dispatchIfNewlyReady|dispatchReadyWorker|await-control-orchestrator/);
+  assert.doesNotMatch(source, /labels\.push\("df:ready"\)/);
+  assert.match(source, /Planning owns sequencing, never readiness/);
+  assert.match(source, /invalidateReadiness/);
+  assert.match(source, /\["df:ready", "df:reviewed"\]/);
   assert.doesNotMatch(source, /actions\/workflows\/df-work\.yml\/dispatches/);
 });
 
@@ -926,9 +928,9 @@ test("df-plan preserves PRD sequence references across completed predecessors", 
   const source = await readFile(new URL("../.github/scripts/df-plan.mjs", import.meta.url), "utf8");
 
   assert.match(source, /let previousIssueNumber = null/);
-  assert.match(source, /let previousOpenIssueNumber = null/);
+  assert.doesNotMatch(source, /previousOpenIssueNumber/);
   assert.match(source, /const blockedBy = previousIssueNumber \? \[previousIssueNumber\] : \[\]/);
-  assert.match(source, /if \(previousOpenIssueNumber === null\) labels\.push\("df:ready"\)/);
+  assert.doesNotMatch(source, /previousOpenIssueNumber === null\) labels\.push\("df:ready"\)/);
   assert.match(source, /previousIssueNumber = closed\.number/);
   assert.match(source, /previousIssueNumber = existing\.number/);
   assert.match(source, /create-closed-completed-prd-issue/);
@@ -2337,6 +2339,8 @@ test("df-orchestrate workflow validates trusted refs before privileged tokens", 
   assert.doesNotMatch(workflow, /GITHUB_REF_NAME.*dev/);
   assert.match(workflow, /repository:\s+marius-patrik\/DarkFactory/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /uses:\s+actions\/setup-node@v4[\s\S]+node-version:\s+22/);
+  assert.match(workflow, /node --experimental-strip-types \$\{\{ steps\.script-path\.outputs\.path \}\}/);
   assert.match(workflow, /github\.repository == 'marius-patrik\/DarkFactory'[\s\S]+github\.event_name == 'schedule'/);
   assert.doesNotMatch(workflow, /^\s+issues:\s*$/m);
   assert.doesNotMatch(workflow, /^\s+issue_comment:\s*$/m);
@@ -2474,14 +2478,16 @@ test("df-orchestrate blocks target auto-merge setup failures before worker dispa
   assert.match(source, /not a code implementation failure/);
 });
 
-test("df-orchestrate restores df:ready when workflow dispatch fails", async () => {
+test("df-orchestrate clears a failed claim and requires fresh readiness evaluation", async () => {
   const source = await readFile(new URL("../.github/scripts/df-orchestrate.mjs", import.meta.url), "utf8");
 
   const dispatchIndex = source.indexOf("/actions/workflows/df-work.yml/dispatches");
-  const restoreIndex = source.indexOf("replaceIssueLabels(gh, repository, issueNumber, [\"df:ready\"], [\"df:running\"])");
+  const clearIndex = source.indexOf("replaceIssueLabels(gh, repository, issueNumber, [], [\"df:running\"])", dispatchIndex);
   assert.notEqual(dispatchIndex, -1);
-  assert.notEqual(restoreIndex, -1);
-  assert.ok(dispatchIndex < restoreIndex);
+  assert.notEqual(clearIndex, -1);
+  assert.ok(dispatchIndex < clearIndex);
+  assert.doesNotMatch(source, /replaceIssueLabels\(gh, repository, issueNumber, \["df:ready"\], \["df:running"\]\)/);
+  assert.match(source, /never restore df:ready from a past snapshot/);
 });
 
 test("df-sweep evaluates enforcement rules before merge", async () => {

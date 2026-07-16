@@ -32,7 +32,7 @@ const item = {
   priority: "P1",
   taskClass: "standard"
 };
-const labels = [item.priority, "roadmap", `df:class:${item.taskClass}`, "df:ready"];
+const labels = [item.priority, "roadmap", `df:class:${item.taskClass}`];
 
 test("planner discovers product PRDs but excludes template, example, fixture, test, archive, and hidden trees", async () => {
   const paths = await listPrdPaths(repository, "main", {
@@ -202,7 +202,6 @@ test("handleClosedIncompletePrdIssue escalates human-closed issue without reopen
 
   assert.equal(result.action.action, "escalate-human-closed-prd-issue");
   assert.equal(result.previousIssueNumber, 7);
-  assert.equal(result.previousOpenIssueNumber, null);
   assert.equal(
     calls.some((call) => call.method === "PATCH" && call.path === "/repos/marius-patrik/example/issues/7"),
     false
@@ -218,8 +217,10 @@ test("handleClosedIncompletePrdIssue reopens bot-closed issue as today", async (
   };
   const { gh, calls } = mockGh({
     "PATCH /repos/marius-patrik/example/issues/7": { number: 7, html_url: "https://github.com/marius-patrik/example/issues/7", state: "open" },
-    "GET /repos/marius-patrik/example/issues/7": { number: 7, labels: [] },
+    "GET /repos/marius-patrik/example/issues/7": { number: 7, labels: [{ name: "df:ready" }, { name: "df:reviewed" }] },
     "POST /repos/marius-patrik/example/issues/7/labels": {},
+    "DELETE /repos/marius-patrik/example/issues/7/labels/df%3Aready": {},
+    "DELETE /repos/marius-patrik/example/issues/7/labels/df%3Areviewed": {},
     "POST /repos/marius-patrik/example/labels": {}
   });
 
@@ -227,12 +228,13 @@ test("handleClosedIncompletePrdIssue reopens bot-closed issue as today", async (
 
   assert.equal(result.action.action, "reopen-prd-issue");
   assert.equal(result.previousIssueNumber, 7);
-  assert.equal(result.previousOpenIssueNumber, 7);
-  assert.equal(result.action.dispatch.action, "queue-worker");
+  assert.equal(result.action.dispatch, undefined);
 
   const patch = calls.find(
     (call) => call.method === "PATCH" && call.path === "/repos/marius-patrik/example/issues/7"
   );
   assert.ok(patch);
   assert.equal(patch.body.state, "open");
+  assert.ok(calls.some((call) => call.path.endsWith("/labels/df%3Aready")));
+  assert.ok(calls.some((call) => call.path.endsWith("/labels/df%3Areviewed")));
 });

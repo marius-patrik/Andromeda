@@ -171,7 +171,6 @@ async function reconcileTargetRepository(repo, controlRepo) {
 
   const expectedMarkers = new Set(items.map((item) => item.marker));
   let previousIssueNumber = null;
-  let previousOpenIssueNumber = null;
 
   for (const item of items) {
     const existing = byMarker.get(item.marker);
@@ -211,35 +210,26 @@ async function reconcileTargetRepository(repo, controlRepo) {
     }
 
     // Keep deterministic PRD-order references even when the predecessor is
-    // already closed, but only an unfinished predecessor blocks readiness.
+    // already closed. Planning owns sequencing, never readiness: only the
+    // exact current-version issue Autoreview evaluator may publish df:ready.
     const blockedBy = previousIssueNumber ? [previousIssueNumber] : [];
-    if (previousOpenIssueNumber === null) labels.push("df:ready");
     const body = prdIssueBody(item, blockedBy);
 
     if (!existing) {
-      // Create the issue without the df:ready label; add it in a separate call so
-      // GitHub emits a trusted `issues:labeled` event that the L3 worker trigger
-      // can react to.
-      const createLabels = labels.filter((label) => label !== "df:ready");
       const created = await gh.request("POST", `/repos/${repoName(TARGET_REPO)}/issues`, {
         title: item.title,
         body,
-        labels: createLabels
+        labels
       });
-      const labelUpdate = await setIssueLabels(gh, TARGET_REPO, created.number, labels);
-      const dispatch = await dispatchIfNewlyReady(gh, TARGET_REPO, created.number, labelUpdate);
       ledger.actions.push({ action: "create-issue", marker: item.marker, issue: issueRef(created), labels });
-      if (dispatch) ledger.actions.push(dispatch);
       previousIssueNumber = created.number;
-      previousOpenIssueNumber = created.number;
       continue;
     }
 
     if (existing.state === "closed") {
-      const { action, previousIssueNumber: nextPrevious, previousOpenIssueNumber: nextPreviousOpen } = await handleClosedIncompletePrdIssue(gh, TARGET_REPO, controlRepo, item, existing, labels, blockedBy);
+      const { action, previousIssueNumber: nextPrevious } = await handleClosedIncompletePrdIssue(gh, TARGET_REPO, controlRepo, item, existing, labels, blockedBy);
       ledger.actions.push(action);
       previousIssueNumber = nextPrevious;
-      previousOpenIssueNumber = nextPreviousOpen;
       continue;
     }
 
@@ -263,12 +253,11 @@ async function reconcileTargetRepository(repo, controlRepo) {
       const updated = await gh.request("PATCH", `/repos/${repoName(TARGET_REPO)}/issues/${existing.number}`, update);
       ledger.actions.push({ action: "update-issue", marker: item.marker, issue: issueRef(updated), fields: Object.keys(update) });
     }
-    const labelUpdate = await setIssueLabels(gh, TARGET_REPO, existing.number, labels);
+    await setIssueLabels(gh, TARGET_REPO, existing.number, labels, {
+      invalidateReadiness: Object.keys(update).length > 0
+    });
     ledger.actions.push({ action: "sequence-labels", marker: item.marker, issue: issueRef(existing), labels });
-    const dispatch = await dispatchIfNewlyReady(gh, TARGET_REPO, existing.number, labelUpdate);
-    if (dispatch) ledger.actions.push(dispatch);
     previousIssueNumber = existing.number;
-    previousOpenIssueNumber = existing.number;
   }
 
   const staleMarkedIssues = [...byMarker.values()].filter((issue) => {
@@ -555,6 +544,11 @@ async function setIssueLabels(gh, repository, issueNumber, labels, options = {})
     (current.labels || []).map((label) => typeof label === "string" ? label : label.name).filter(Boolean)
   );
   const { add, remove } = plannedIssueLabelDiff([...currentNames], labels, options);
+  if (options.invalidateReadiness === true) {
+    for (const staleLabel of ["df:ready", "df:reviewed"]) {
+      if (currentNames.has(staleLabel) && !remove.includes(staleLabel)) remove.push(staleLabel);
+    }
+  }
 
   if (add.length) {
     await gh.request("POST", `/repos/${repoName(repository)}/issues/${issueNumber}/labels`, { labels: add });
@@ -567,23 +561,6 @@ async function setIssueLabels(gh, repository, issueNumber, labels, options = {})
     }
   }
   return { add, remove };
-}
-
-async function dispatchIfNewlyReady(gh, repository, issueNumber, labelUpdate) {
-  if (!labelUpdate.add.includes("df:ready")) return null;
-  return await dispatchReadyWorker(repository, issueNumber);
-}
-
-async function dispatchReadyWorker(repository, issueNumber) {
-  // Planning never dispatches privileged workers with a repository-scoped token.
-  // It queues readiness; the trusted control orchestrator dispatches workers
-  // with the GitHub App installation token.
-  return {
-    action: "queue-worker",
-    repo: repoName(repository),
-    issue: `#${issueNumber}`,
-    reason: "await-control-orchestrator"
-  };
 }
 
 async function detectCodeDrift(repository, ref, items, staleMarkedIssues) {
@@ -657,7 +634,7 @@ async function detectPrdArtifactDrift(repository, ref, itemText) {
             { snippet: "parsePrdItems", reason: "parse PRD items deterministically" },
             { snippet: "prdIssueBody", reason: "write PRD-backed issue bodies" },
             { snippet: "Blocked-by", reason: "maintain sequencing references" },
-            { snippet: "df:ready", reason: "queue newly unblocked PRD issues" }
+            { snippet: "setIssueLabels", reason: "reconcile PRD-backed issue metadata without dispatch authority" }
           ]
         }
       ]
@@ -886,15 +863,16 @@ async function handleClosedIncompletePrdIssue(gh, repository, controlRepo, item,
       body: prdIssueBody(item, blockedBy),
       state: "open"
     });
-    const labelUpdate = await setIssueLabels(gh, repository, existing.number, labels, { preserveWorkerState: false });
-    const dispatch = await dispatchIfNewlyReady(gh, repository, existing.number, labelUpdate);
+    await setIssueLabels(gh, repository, existing.number, labels, {
+      preserveWorkerState: false,
+      invalidateReadiness: true
+    });
     const action = { action: "reopen-prd-issue", marker: item.marker, issue: issueRef(reopened), labels };
-    if (dispatch) action.dispatch = dispatch;
-    return { action, previousIssueNumber: reopened.number, previousOpenIssueNumber: reopened.number };
+    return { action, previousIssueNumber: reopened.number };
   }
 
   const escalation = await escalateHumanClosedPrdIssue(gh, controlRepo, repository, item, existing);
-  return { action: escalation, previousIssueNumber: existing.number, previousOpenIssueNumber: null };
+  return { action: escalation, previousIssueNumber: existing.number };
 }
 
 function issueRef(issue) {
