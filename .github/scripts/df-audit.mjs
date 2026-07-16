@@ -1246,12 +1246,16 @@ export async function auditRetiredAuthorityNames(github, repository, ref) {
     "PRD.md",
     "AGENTS.md",
     ".agents/.project/AGENTS.md",
+    ".agents/.project/COMMANDS.md",
+    ".agents/.project/DECISIONS.md",
+    ".agents/.project/HANDOFF.md",
+    ".agents/.project/PROJECT.md",
+    ".agents/.project/STATUS.md",
+    ".agents/.project/STRUCTURE.md",
     ".darkfactory/branching-policy.md",
     ".darkfactory/installer-policy.json",
     ".darkfactory/managed-repository.json",
     ".github/workflows/sync-managed-repos.yml",
-    ".agents/.project/PROJECT.md",
-    ".agents/.project/STATUS.md",
     "src/managed-files.ts"
   ];
   const documents = [];

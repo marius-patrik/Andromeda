@@ -1425,7 +1425,7 @@ test("human and JSON formats preserve deterministic zero-token evidence", () => 
 
 test("retired authority audit includes repository-local project rules", async () => {
   const { gh, calls } = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/contents/.agents/.project/AGENTS.md")) {
+    if (requestPath.includes("/contents/.agents/.project/DECISIONS.md")) {
       return content("The managed source is $AGENTS_ROOT/data/agent-os.\n");
     }
     throw notFound();
@@ -1434,5 +1434,7 @@ test("retired authority audit includes repository-local project rules", async ()
   const findings = await doctor.auditRetiredAuthorityNames(gh, repo, "main");
 
   assert.ok(findings.some((finding) => finding.id === "retired-agent-os-data-path"));
-  assert.ok(calls.some((call) => call.path.includes("/contents/.agents/.project/AGENTS.md")));
+  for (const name of ["AGENTS.md", "COMMANDS.md", "DECISIONS.md", "HANDOFF.md", "PROJECT.md", "STATUS.md", "STRUCTURE.md"]) {
+    assert.ok(calls.some((call) => call.path.includes(`/contents/.agents/.project/${name}`)), name);
+  }
 });
