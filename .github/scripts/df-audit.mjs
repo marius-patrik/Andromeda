@@ -319,12 +319,21 @@ async function auditTargetRepository(github, repository, metadata, options) {
   const defaultBranch = metadata.default_branch || "";
   const branches = await listBranches(github, repository);
   const branchNames = new Set(branches.map((branch) => branch.name));
+  const defaultRevision = defaultBranch ? immutableBranchRevision(branches, defaultBranch) : null;
+  const mainRevision = branchNames.has("main") ? immutableBranchRevision(branches, "main") : null;
+  const devRevision = branchNames.has("dev") ? immutableBranchRevision(branches, "dev") : null;
   const pulls = await listOpenPullRequests(github, repository);
   const issues = isData ? [] : await listDoctorIssues(github, repository, "all");
   const openIssues = issues.filter((issue) => issue.state === "open");
-  const tree = !isData && defaultBranch ? await getRecursiveTree(github, repository, defaultBranch) : null;
+  const tree = !isData && defaultRevision ? await getRecursiveTree(github, repository, defaultRevision) : null;
   const findings = [];
   const observations = [];
+
+  if (defaultBranch && !defaultRevision) {
+    findings.push(doctorFinding("default-branch-head-missing", "branch policy", `The declared default branch \`${defaultBranch}\` was not present in the complete branch snapshot, so target content cannot be audited immutably.`, {
+      severity: "critical"
+    }));
+  }
 
   const branchAudit = await auditBranchAndReleaseState(github, repository, metadata, {
     branches,
@@ -339,22 +348,23 @@ async function auditTargetRepository(github, repository, metadata, options) {
   if (isData) {
     observations.push("Canonical data repository was inspected only under the main-only protection, administration, force-push, deletion, and branch-hygiene policy; managed-code, workflow, PRD, and submodule requirements do not apply.");
   } else {
-    findings.push(...await auditManagedFileDrift(github, repository, defaultBranch, options.controlRepo, {
+    findings.push(...await auditManagedFileDrift(github, repository, defaultRevision, options.controlRepo, {
       controlRevision: options.controlRevision,
       agentOsDataRevision: options.agentOsDataRevision
     }));
     findings.push(...await auditRepositoryTree(repository, tree, { isData: false }));
-    findings.push(...await auditRootLayout(github, repository, defaultBranch, tree));
-    findings.push(...await auditRuntimeAuthority(github, repository, defaultBranch, options.controlRepo, options.controlRevision));
-    findings.push(...await auditPrerequisites(github, repository, defaultBranch, options));
+    findings.push(...await auditRootLayout(github, repository, defaultRevision, tree));
+    findings.push(...await auditRuntimeAuthority(github, repository, defaultRevision, options.controlRepo, options.controlRevision));
+    findings.push(...await auditPrerequisites(github, repository, defaultRevision, options));
     findings.push(...auditIssueLane(repository, issues, { now: options.now }));
-    findings.push(...await auditPrdDrift(github, repository, defaultBranch, openIssues));
-    findings.push(...await auditDocStaleness(repository, metadata, defaultBranch, github));
-    findings.push(...await auditRetiredAuthorityNames(github, repository, defaultBranch));
+    findings.push(...await auditPrdDrift(github, repository, defaultRevision, openIssues));
+    findings.push(...await auditDocStaleness(repository, metadata, defaultRevision, github));
+    findings.push(...await auditRetiredAuthorityNames(github, repository, defaultRevision));
 
     for (const branch of ["main", "dev"].filter((name) => branchNames.has(name))) {
-      findings.push(...await auditHealth(repository, branch, branchSha(branches, branch), github, { now: options.now }));
-      findings.push(...await auditSubmoduleState(github, repository, branch));
+      const revision = branch === "main" ? mainRevision : devRevision;
+      findings.push(...await auditHealth(repository, branch, revision, github, { now: options.now }));
+      findings.push(...await auditSubmoduleState(github, repository, branch, revision));
     }
   }
 
@@ -383,8 +393,9 @@ async function auditTargetRepository(github, repository, metadata, options) {
     observed_at: observedAt,
     source_refs: {
       default_branch: defaultBranch,
-      main: branchNames.has("main") ? branchSha(branches, "main") : null,
-      dev: branchNames.has("dev") ? branchSha(branches, "dev") : null,
+      default_branch_revision: defaultRevision,
+      main: mainRevision,
+      dev: devRevision,
       control: `${repoName(options.controlRepo)}@${options.controlRevision}`,
       agent_os_data: options.agentOsDataRevision
         ? `${AGENT_OS_DATA_REPO}@${options.agentOsDataRevision}`
@@ -1293,9 +1304,9 @@ export async function auditRetiredAuthorityNames(github, repository, ref) {
   return findings;
 }
 
-export async function auditSubmoduleState(github, repository, branch) {
+export async function auditSubmoduleState(github, repository, branch, revision = branch) {
   const findings = [];
-  const gitmodules = await getOptionalFileContent(github, repository, ".gitmodules", branch);
+  const gitmodules = await getOptionalFileContent(github, repository, ".gitmodules", revision);
   const parsed = parseGitmodulesDocument(gitmodules);
   const submodules = parsed.submodules;
   const seenPaths = new Set();
@@ -1336,7 +1347,7 @@ export async function auditSubmoduleState(github, repository, branch) {
       findings.push(doctorFinding(`submodule-${slug(submodule.path)}-url-invalid`, "submodule metadata", `Submodule \`${submodule.path}\` uses an unsupported ${describeSubmoduleUrl(submodule.url)}.`, { severity: "critical" }));
       continue;
     }
-    const recorded = await getSubmoduleCommit(github, repository, submodule.path, branch);
+    const recorded = await getSubmoduleCommit(github, repository, submodule.path, revision);
     if (!recorded) {
       findings.push(doctorFinding(`submodule-${slug(submodule.path)}-gitlink-missing-${slug(branch)}`, "submodule pointer", `Submodule \`${submodule.path}\` is declared but has no gitlink on \`${branch}\`.`, { severity: "critical" }));
       continue;
@@ -1360,7 +1371,7 @@ export async function auditSubmoduleState(github, repository, branch) {
 
   let tree;
   try {
-    tree = await getRecursiveTree(github, repository, branch);
+    tree = await getRecursiveTree(github, repository, revision);
   } catch (error) {
     findings.push(doctorFinding(
       `submodule-tree-${slug(branch)}-unavailable`,
@@ -2116,6 +2127,11 @@ function sameRepositoryPullHead(pull, repository) {
 
 function branchSha(branches, name) {
   return branches.find((branch) => branch.name === name)?.commit?.sha || null;
+}
+
+function immutableBranchRevision(branches, name) {
+  const revision = branchSha(branches, name);
+  return revision === null ? null : assertExactCommit(revision, `target ${name} branch`);
 }
 
 function compareEvidence(repository, base, head) {

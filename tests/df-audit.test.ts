@@ -11,6 +11,7 @@ const doctor: any = await import("../.github/scripts/df-audit.mjs?unit=repositor
 const repo = { owner: "marius-patrik", repo: "DarkFactory" };
 const controlRevision = "c".repeat(40);
 const agentOsDataRevision = "d".repeat(40);
+const targetRevision = "a".repeat(40);
 
 function content(text: string) {
   return { type: "file", encoding: "base64", content: Buffer.from(text).toString("base64") };
@@ -530,7 +531,7 @@ test("canonical data repositories run only the main-only protection and branch p
     if (requestPath === "/repos/marius-patrik/Andromeda-data") {
       return { default_branch: "main", archived: false, disabled: false };
     }
-    if (requestPath.includes("/branches?")) return [{ name: "main", commit: { sha: "a" } }];
+    if (requestPath.includes("/branches?")) return [{ name: "main", commit: { sha: targetRevision } }];
     if (requestPath.includes("/pulls?state=open")) return [];
     if (requestPath.endsWith("/branches/main/protection")) return protectedBranch();
     throw new Error(`managed-code audit escaped the data policy: ${requestPath}`);
@@ -1087,21 +1088,24 @@ test("worker session isolation reads canonical state and catches escaped cwd", a
   }
 });
 
-test("diagnose mode performs no GitHub writes", async () => {
+test("diagnose mode performs no GitHub writes and pins target reads when a branch name moves after enumeration", async () => {
   const { gh, calls } = mockGh((method, requestPath) => {
     if (method !== "GET") throw new Error(`unexpected write ${method} ${requestPath}`);
     if (requestPath === "/repos/marius-patrik/DarkFactory") return { default_branch: "main", allow_auto_merge: true, archived: false, disabled: false, pushed_at: "2026-07-13T00:00:00Z" };
-    if (requestPath.includes("/branches?")) return requestPath.endsWith("page=1") ? [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }] : [];
+    if (requestPath.includes("/branches?")) return requestPath.endsWith("page=1") ? [{ name: "main", commit: { sha: targetRevision } }, { name: "dev", commit: { sha: targetRevision } }] : [];
+    if (requestPath.startsWith("/repos/marius-patrik/DarkFactory/contents/") && requestPath.includes("ref=main")) return content("branch moved after enumeration\n");
+    if (requestPath.endsWith("/git/trees/main?recursive=1")) return { truncated: false, tree: [{ path: "MOVED_AFTER_ENUMERATION", type: "blob" }] };
+    if (requestPath.includes("/commits?sha=main&path=")) return [{ sha: "b".repeat(40), commit: { committer: { date: "2026-07-13T00:00:00Z" } } }];
     if (requestPath.includes("/pulls?state=open")) return [];
     if (requestPath.includes("/issues?state=all")) return [];
-    if (requestPath.endsWith("/git/trees/main?recursive=1")) return { truncated: false, tree: [{ path: "README.md", type: "blob" }] };
+    if (requestPath.endsWith(`/git/trees/${targetRevision}?recursive=1`)) return { truncated: false, tree: [{ path: "README.md", type: "blob" }] };
     if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.includes("/actions/secrets")) return { secrets: [] };
     if (requestPath.includes("/actions/runners")) return { runners: [{ status: "online", labels: [{ name: "df-local" }] }] };
-    if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: "a", status: "completed", conclusion: "success" }] };
-    if (requestPath.includes("/commits/a/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/a/status")) return { total_count: 0, statuses: [] };
+    if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: targetRevision, status: "completed", conclusion: "success" }] };
+    if (requestPath.includes(`/commits/${targetRevision}/check-runs`)) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes(`/commits/${targetRevision}/status`)) return { total_count: 0, statuses: [] };
     if (requestPath.includes("/commits?sha=")) return [];
     if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("AGENTS_HOME bin\\agents.ps1 state doctor --json");
     if (requestPath.includes("/contents/AGENTS.md")) return content("Use AGENTS_HOME.");
@@ -1123,7 +1127,16 @@ test("diagnose mode performs no GitHub writes", async () => {
   });
   assert.equal(reports[0].read_only, true);
   assert.equal(reports[0].trigger, "test");
+  assert.equal(reports[0].source_refs.default_branch_revision, targetRevision);
   assert.equal(calls.every((call) => call.method === "GET"), true);
+  const targetSnapshotReads = calls.filter((call) => (
+    call.path.startsWith("/repos/marius-patrik/DarkFactory/contents/") ||
+    call.path.startsWith("/repos/marius-patrik/DarkFactory/git/trees/") ||
+    (call.path.startsWith("/repos/marius-patrik/DarkFactory/commits?") && call.path.includes("path="))
+  ) && !call.path.includes(controlRevision));
+  assert.ok(targetSnapshotReads.length > 0);
+  assert.equal(targetSnapshotReads.every((call) => call.path.includes(targetRevision)), true);
+  assert.equal(targetSnapshotReads.some((call) => /(?:ref|sha)=main(?:&|$)/.test(call.path) || call.path.includes("/git/trees/main?")), false);
 });
 
 test("report mode routes issue writes to target authority and contents writes only to scoped ledger authority", async () => {
@@ -1137,18 +1150,18 @@ test("report mode routes issue writes to target authority and contents writes on
     }
     if (method !== "GET") throw new Error(`unexpected target write ${method} ${requestPath}`);
     if (requestPath === "/repos/marius-patrik/DarkFactory") return { default_branch: "main", allow_auto_merge: true, archived: false, disabled: false, pushed_at: "2026-07-13T00:00:00Z" };
-    if (requestPath.includes("/branches?")) return requestPath.endsWith("page=1") ? [{ name: "main", commit: { sha: "a" } }, { name: "dev", commit: { sha: "a" } }] : [];
+    if (requestPath.includes("/branches?")) return requestPath.endsWith("page=1") ? [{ name: "main", commit: { sha: targetRevision } }, { name: "dev", commit: { sha: targetRevision } }] : [];
     if (requestPath.includes("/pulls?state=open")) return [];
     if (requestPath.includes("/issues?state=all")) return [];
     if (requestPath.includes("/labels?") && requestPath.endsWith("page=1")) return doctor.DOCTOR_REPORT_LABEL_NAMES.map((name) => ({ name }));
-    if (requestPath.endsWith("/git/trees/main?recursive=1")) return { truncated: false, tree: [{ path: "README.md", type: "blob" }] };
+    if (requestPath.endsWith(`/git/trees/${targetRevision}?recursive=1`)) return { truncated: false, tree: [{ path: "README.md", type: "blob" }] };
     if (requestPath.endsWith("/compare/main...dev")) return { status: "identical", ahead_by: 0, behind_by: 0 };
     if (requestPath.includes("/protection")) return protectedBranch();
     if (requestPath.includes("/actions/secrets")) return { secrets: [] };
     if (requestPath.includes("/actions/runners")) return { runners: [{ status: "online", labels: [{ name: "df-local" }] }] };
-    if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: "a", status: "completed", conclusion: "success" }] };
-    if (requestPath.includes("/commits/a/check-runs")) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
-    if (requestPath.includes("/commits/a/status")) return { total_count: 0, statuses: [] };
+    if (requestPath.includes("/actions/runs?")) return { workflow_runs: [{ name: "Validate", head_sha: targetRevision, status: "completed", conclusion: "success" }] };
+    if (requestPath.includes(`/commits/${targetRevision}/check-runs`)) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "Codex Review", status: "completed", conclusion: "success", app: { id: 15368 } }] };
+    if (requestPath.includes(`/commits/${targetRevision}/status`)) return { total_count: 0, statuses: [] };
     if (requestPath.includes("/commits?sha=")) return [];
     if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("AGENTS_HOME bin\\agents.ps1 state doctor --json");
     if (requestPath.includes("/contents/AGENTS.md")) return content("Use AGENTS_HOME.");
