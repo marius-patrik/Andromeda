@@ -29,6 +29,7 @@ const {
   isVerifiedWorkerIssue,
   listActiveManagedRepos,
   listPackagePaths,
+  normalizeWorkerPullRequestActor,
   parsePrdItems,
   parseWorkerClaim,
   plannedIssueLabelDiff,
@@ -442,19 +443,59 @@ test("df-sweep dev-merge closure uses worker PR provenance instead of issue labe
   assert.match(source, /extractClosingIssueNumbers\(pull\.body \|\| "", repoName\(repository\)\)/);
 });
 
-test("df-sweep recognizes worker PRs from managed and app-token paths", () => {
+test("worker actor normalization accepts the exact installed App actor from REST and GraphQL", () => {
+  assert.equal(
+    normalizeWorkerPullRequestActor({ type: "Bot", login: "darkfactory-agent[bot]" }),
+    "darkfactory-agent"
+  );
+  assert.equal(
+    normalizeWorkerPullRequestActor({ __typename: "Bot", login: "darkfactory-agent" }),
+    "darkfactory-agent"
+  );
+});
+
+test("worker actor normalization rejects REST near-miss identities", () => {
+  for (const login of [
+    "darkfactory-agent",
+    "app/darkfactory-agent",
+    "evil-darkfactory-agent[bot]",
+    "darkfactory-agent[bot] ",
+    "DarkFactory-agent[bot]"
+  ]) {
+    assert.equal(normalizeWorkerPullRequestActor({ type: "Bot", login }), null, login);
+  }
+});
+
+test("worker actor normalization rejects stale producers and ambiguous actor shapes", () => {
+  assert.equal(normalizeWorkerPullRequestActor({ type: "Bot", login: "github-actions[bot]" }), null);
+  assert.equal(normalizeWorkerPullRequestActor({ type: "Bot", login: "mp-agents[bot]" }), null);
+  assert.equal(normalizeWorkerPullRequestActor({ type: "User", login: "darkfactory-agent[bot]" }), null);
+  assert.equal(normalizeWorkerPullRequestActor({ login: "darkfactory-agent[bot]" }), null);
+  assert.equal(
+    normalizeWorkerPullRequestActor({ type: "Bot", __typename: "Bot", login: "darkfactory-agent[bot]" }),
+    null
+  );
+});
+
+test("df-sweep recognizes worker PRs only from the canonical App actor", () => {
   const repository = { owner: "marius-patrik", repo: "example" };
   const workerPull = {
     title: "Implement issue #23",
     body: "<!-- dark-factory:worker-pr issue=23 -->\n\nCloses #23",
-    author: { login: "github-actions[bot]" },
+    author: { __typename: "Bot", login: "darkfactory-agent" },
     headRefName: "df/23-add-worker",
     headRepository: { owner: { login: "marius-patrik" }, name: "example" }
   };
 
   assert.equal(isDarkFactoryWorkerPullRequest(workerPull, repository), true);
-  assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, author: { login: "mp-agents[bot]" } }, repository), true);
-  assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, author: { login: "marius-patrik" } }, repository), false);
+  assert.equal(
+    isDarkFactoryWorkerPullRequest(
+      { ...workerPull, author: { type: "Bot", login: "darkfactory-agent[bot]" } },
+      repository
+    ),
+    true
+  );
+  assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, author: { type: "User", login: "marius-patrik" } }, repository), false);
   assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, headRefName: "feature/23-add-worker" }, repository), false);
   assert.equal(isDarkFactoryWorkerPullRequest({ ...workerPull, body: "<!-- dark-factory:worker-pr issue=23 -->" }, repository), false);
   assert.equal(darkFactoryWorkerIssueNumber(workerPull), 23);
@@ -1022,7 +1063,7 @@ test("df-fix selects only red worker PRs from active repositories", async () => 
   const candidates = [
     { repository: activeRepository, pull: workerPull({ number: 10, checkConclusion: "FAILURE" }) },
     { repository: activeRepository, pull: workerPull({ number: 11, checkConclusion: "SUCCESS" }) },
-    { repository: activeRepository, pull: { ...workerPull({ number: 12, checkConclusion: "FAILURE" }), author: { login: "marius-patrik" } } },
+    { repository: activeRepository, pull: { ...workerPull({ number: 12, checkConclusion: "FAILURE" }), author: { __typename: "User", login: "marius-patrik" } } },
     { repository: parkedRepository, pull: workerPull({ number: 13, checkConclusion: "FAILURE" }) }
   ];
 
@@ -1395,8 +1436,8 @@ test("df-sweep does not skip green worker PRs solely because the issue is blocke
 
 test("df-sweep merges green app-authored dev worker PRs and blocks red ones", async () => {
   const repository = { owner: "marius-patrik", repo: "active" };
-  const green = workerPull({ number: 40, checkConclusion: "SUCCESS", author: "mp-agents[bot]" });
-  const red = workerPull({ number: 41, checkConclusion: "FAILURE", author: "mp-agents[bot]" });
+  const green = workerPull({ number: 40, checkConclusion: "SUCCESS", author: "darkfactory-agent" });
+  const red = workerPull({ number: 41, checkConclusion: "FAILURE", author: "darkfactory-agent" });
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
 
   configureSweepRuntime({
@@ -1463,7 +1504,7 @@ test("df-sweep holds worker PRs when the Codex Review context is present and red
     number: 42,
     checkConclusion: "SUCCESS",
     codexReviewConclusion: "FAILURE",
-    author: "mp-agents[bot]"
+    author: "darkfactory-agent"
   });
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
 
@@ -1502,7 +1543,7 @@ test("df-sweep falls back to branch-protection checks when Codex Review is not p
     number: 43,
     checkConclusion: "SUCCESS",
     includeCodexReview: false,
-    author: "mp-agents[bot]"
+    author: "darkfactory-agent"
   });
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
   const warnings: string[] = [];
@@ -1568,7 +1609,7 @@ test("df-sweep holds worker PRs when managed config declares Codex Review but th
     number: 44,
     checkConclusion: "SUCCESS",
     includeCodexReview: false,
-    author: "mp-agents[bot]"
+    author: "darkfactory-agent"
   });
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
   const managedConfig = {
@@ -1613,7 +1654,7 @@ test("df-sweep holds worker PRs when managed config declares Codex Review but th
 
 test("df-sweep merges green app-authored dev worker PRs even when the worker issue is done", async () => {
   const repository = { owner: "marius-patrik", repo: "active" };
-  const pull = workerPull({ number: 1349, checkConclusion: "SUCCESS", author: "mp-agents[bot]" });
+  const pull = workerPull({ number: 1349, checkConclusion: "SUCCESS", author: "darkfactory-agent" });
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
 
   configureSweepRuntime({
@@ -1668,7 +1709,7 @@ test("df-sweep merges green app-authored dev worker PRs even when the worker iss
 
 test("df-sweep skips green worker PRs when the worker issue is not verified", async () => {
   const repository = { owner: "marius-patrik", repo: "active" };
-  const pull = workerPull({ number: 8, checkConclusion: "SUCCESS", author: "mp-agents[bot]" });
+  const pull = workerPull({ number: 8, checkConclusion: "SUCCESS", author: "darkfactory-agent" });
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
 
   configureSweepRuntime({
@@ -1785,7 +1826,7 @@ test("df-sweep direct-merges protected branch with no required checks instead of
     number: 50,
     checkConclusion: "SUCCESS",
     includeCodexReview: false,
-    author: "mp-agents[bot]"
+    author: "darkfactory-agent"
   });
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
   const graphqlCalls: string[] = [];
@@ -2002,7 +2043,7 @@ test("df-orchestrate restores df:ready when workflow dispatch fails", async () =
 
 test("df-sweep evaluates enforcement rules before merge", async () => {
   const repository = { owner: "marius-patrik", repo: "active" };
-  const pull = workerPull({ number: 200, checkConclusion: "SUCCESS", author: "mp-agents[bot]" });
+  const pull = workerPull({ number: 200, checkConclusion: "SUCCESS", author: "darkfactory-agent" });
   const enforcementRules = {
     schemaVersion: 1,
     rules: [{ id: "work-PRs-target-dev", enabled: true, severity: "block", parameters: { defaultBranch: "main" } }]
@@ -2083,7 +2124,7 @@ function workerPull(options: {
     number: options.number,
     title: `Worker PR ${options.number}`,
     body: `<!-- dark-factory:worker-pr issue=${options.number} -->\n\nCloses #${options.number}`,
-    author: { login: options.author || "mp-agents[bot]" },
+    author: { __typename: "Bot", login: options.author || "darkfactory-agent" },
     headRefName: `df/${options.number}-worker`,
     headRepository: { owner: { login: "marius-patrik" }, name: "active" },
     baseRefName: "dev",
