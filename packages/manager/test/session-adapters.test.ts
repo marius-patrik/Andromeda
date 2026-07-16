@@ -1,20 +1,27 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { unlinkSync, writeFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderAdapter, SessionEvent, SessionTranscript, TurnRequest } from "../../harness/session";
 import { createSession, loadSessionEvents, loadTranscript, runSessionTurn, streamSessionTurn } from "../../harness/session";
 import {
   agySessionAdapter,
+  attestAgyNativeInvocation,
+  attestClaudeNativeInvocation,
+  attestCodexExecutionPolicy,
   buildProviderArgs,
   canonicalProviderEnv,
+  claudeSessionAdapter,
   CliProviderAdapter,
   codexSessionAdapter,
   kimiSessionAdapter,
   loadCanonicalStartup,
   providerBinarySafetyReason,
+  parseClaudeJsonResult,
+  parseCodexJsonResult,
   resolveAgyModel,
+  transcriptAsPrompt,
   withCanonicalStartup,
 } from "../src/session-adapters";
 import type { SessionDescriptor } from "../../harness/session";
@@ -22,6 +29,7 @@ import { ensureSharedState, sharedStateAt } from "../src/state";
 import { rememberMemory } from "../src/memory";
 import { inspectProviderExecutable, readProviderRegistry, verifyProviderRegistration, writeProviderRegistration } from "../src/provider-registry";
 import { stateV2Paths } from "../src/state-v2";
+import { attestCodexPreworkResponse } from "../src/codex-preflight";
 
 type CompletedTurnEvent = Extract<SessionEvent, { type: "turn.completed" }>;
 
@@ -51,29 +59,77 @@ describe("provider CLI session arguments", () => {
     const current = transcript([{ role: "user", content: request.prompt }]);
     const prompt = "User: next question\n\nAssistant:";
 
-    expect(buildProviderArgs("codex", "gpt-test", request, current)).toEqual(["exec", "--model", "gpt-test", prompt]);
+    expect(buildProviderArgs("codex", "gpt-test", request, current)).toEqual([
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "--sandbox",
+      "read-only",
+      "--ignore-user-config",
+      "--strict-config",
+      "--model",
+      "gpt-test",
+      "--json",
+      "-",
+    ]);
     expect(buildProviderArgs("kimi", "kimi-test", request, current)).toEqual(["acp"]);
-    expect(buildProviderArgs("claude", "claude-test", request, current)).toEqual(["--print", "--model", "claude-test", prompt]);
-    expect(buildProviderArgs("agy", "agy-test", request, current)).toEqual(["--model", "agy-test", "--print", prompt]);
+    expect(buildProviderArgs("claude", "claude-test", request, current)).toEqual([
+      "--print",
+      "--model",
+      "claude-test",
+      "--permission-mode",
+      "plan",
+      "--tools",
+      "Read,Glob,Grep",
+      "--no-session-persistence",
+      "--output-format",
+      "json",
+    ]);
+    expect(buildProviderArgs("agy", "agy-test", request, current)).toEqual([
+      "--sandbox",
+      "--mode",
+      "plan",
+      "--model",
+      "agy-test",
+      "--print",
+      prompt,
+    ]);
+    expect(transcriptAsPrompt(request, current)).toBe(prompt);
   });
 
   test("passes an explicitly selected model for every provider", () => {
     const empty = transcript();
 
     expect(buildProviderArgs("codex", "gpt-test", request, empty)).toEqual([
+      "--ask-for-approval",
+      "never",
       "exec",
+      "--sandbox",
+      "read-only",
+      "--ignore-user-config",
+      "--strict-config",
       "--model",
       "gpt-test",
-      request.prompt,
+      "--json",
+      "-",
     ]);
     expect(buildProviderArgs("kimi", "kimi-test", request, empty)).toEqual(["acp"]);
     expect(buildProviderArgs("claude", "claude-test", request, empty)).toEqual([
       "--print",
       "--model",
       "claude-test",
-      request.prompt,
+      "--permission-mode",
+      "plan",
+      "--tools",
+      "Read,Glob,Grep",
+      "--no-session-persistence",
+      "--output-format",
+      "json",
     ]);
     expect(buildProviderArgs("agy", "agy-test", request, empty)).toEqual([
+      "--sandbox",
+      "--mode",
+      "plan",
       "--model",
       "agy-test",
       "--print",
@@ -98,6 +154,9 @@ describe("provider CLI session arguments", () => {
         effort: null,
       });
       expect(buildProviderArgs("agy", model, request, empty)).toEqual([
+        "--sandbox",
+        "--mode",
+        "plan",
         "--model",
         model,
         "--print",
@@ -113,24 +172,630 @@ describe("provider CLI session arguments", () => {
       { role: "user", content: request.prompt },
     ]);
 
-    const args = buildProviderArgs("codex", "gpt-test", request, current);
-    expect(args[3]).toBe("User: earlier\n\nAssistant: answer\n\nUser: next question\n\nAssistant:");
-    expect(args[3].match(/next question/g)?.length).toBe(1);
+    const prompt = transcriptAsPrompt(request, current);
+    expect(prompt).toBe("User: earlier\n\nAssistant: answer\n\nUser: next question\n\nAssistant:");
+    expect(prompt.match(/next question/g)?.length).toBe(1);
+    expect(buildProviderArgs("codex", "gpt-test", request, current)).not.toContain(prompt);
+  });
+
+  test("maps Codex narrow policy and rejects unsupported provider writes without putting prompts in argv", () => {
+    const current = transcript([{ role: "user", content: "SECRET_PROMPT_SENTINEL" }]);
+    const implementation: TurnRequest = {
+      prompt: "SECRET_PROMPT_SENTINEL",
+      effort: "high",
+      executionPolicy: "workspace-write",
+      agentPreset: "Sol",
+    };
+    const codex = buildProviderArgs("codex", "gpt-5.6-sol", implementation, current);
+    expect(codex).toEqual([
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "--sandbox",
+      "workspace-write",
+      "--config",
+      'model_reasoning_effort="high"',
+      "--config",
+      "sandbox_workspace_write.network_access=false",
+      "--config",
+      "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+      "--config",
+      "sandbox_workspace_write.exclude_slash_tmp=true",
+      "--config",
+      "sandbox_workspace_write.writable_roots=[]",
+      "--ignore-user-config",
+      "--strict-config",
+      "--model",
+      "gpt-5.6-sol",
+      "--json",
+      "-",
+    ]);
+    expect(codex.join(" ")).not.toContain(implementation.prompt);
+
+    expect(() => buildProviderArgs("claude", "claude-fable-5", implementation, current)).toThrow(
+      "workspace-write is unsupported without a manager-owned physical containment boundary",
+    );
+
+    expect(() => buildProviderArgs("agy", "Gemini 3.5 Flash (Low)", implementation, current)).toThrow(
+      "Agy workspace-write is unsupported without provider-native physical authority evidence",
+    );
+  });
+
+  test("Agy native effort varies independently while the provider route stays Agy", () => {
+    const current = transcript([{ role: "user", content: "fixture" }]);
+    for (const effort of ["low", "medium", "high"] as const) {
+      const providerArgs = buildProviderArgs(
+        "agy",
+        "Gemini 3.5 Flash (Low)",
+        { prompt: "fixture", effort, executionPolicy: "read-only" },
+        current,
+      );
+      expect(attestAgyNativeInvocation({ providerArgs, stdinPiped: false })).toEqual({
+        executionPolicy: "read-only",
+        model: `Gemini 3.5 Flash (${effort[0]!.toUpperCase()}${effort.slice(1)})`,
+        effort,
+      });
+    }
+    expect(() =>
+      buildProviderArgs(
+        "agy",
+        "agy-model-without-native-effort",
+        { prompt: "fixture", effort: "high", executionPolicy: "read-only" },
+        current,
+      ),
+    ).toThrow("does not expose a provider-native effort capability");
+  });
+
+  test("native invocation attestation rejects malformed Agy and Claude authority", () => {
+    expect(() =>
+      attestAgyNativeInvocation({
+        providerArgs: ["--sandbox", "--mode", "accept-edits", "--model", AGY_LOW_MODEL, "--print", "fixture"],
+        stdinPiped: false,
+      }),
+    ).toThrow("Agy workspace-write cannot be attested from provider argv alone");
+    expect(() =>
+      attestAgyNativeInvocation({
+        providerArgs: ["--sandbox", "--mode", "auto", "--model", AGY_LOW_MODEL, "--print", "fixture"],
+        stdinPiped: false,
+      }),
+    ).toThrow("Agy native invocation receipt is malformed");
+    expect(() =>
+      attestClaudeNativeInvocation({
+        providerArgs: [
+          "--print",
+          "--model",
+          "claude-fable-5",
+          "--permission-mode",
+          "acceptEdits",
+          "--tools",
+          "Read,Glob,Grep",
+          "--no-session-persistence",
+          "--output-format",
+          "json",
+        ],
+        stdinPiped: true,
+      }),
+    ).toThrow("Claude native invocation receipt is malformed");
+  });
+
+  test("rejects broader or unknown execution policy before provider spawn", () => {
+    const unsafe = { prompt: "no", executionPolicy: "danger-full-access" } as unknown as TurnRequest;
+    expect(() => buildProviderArgs("codex", "gpt-test", unsafe, transcript())).toThrow(
+      "execution policy is unsupported",
+    );
+    const bypass = { prompt: "no", executionPolicy: "bypass" } as unknown as TurnRequest;
+    expect(() => buildProviderArgs("claude", "claude-test", bypass, transcript())).toThrow(
+      "execution policy is unsupported",
+    );
+  });
+
+  test("normalizes structured Codex and Claude outputs without provider stderr leakage", () => {
+    const codex = parseCodexJsonResult(
+      [
+        JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+        JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "done" } }),
+        JSON.stringify({ type: "turn.completed", usage: { input_tokens: 9, output_tokens: 4 } }),
+      ].join("\n"),
+      "",
+      0,
+    );
+    expect(codex).toMatchObject({
+      content: "done",
+      usage: { tokensIn: 9, tokensOut: 4, totalTokens: 13 },
+      finishReason: "stop",
+    });
+    const claude = parseClaudeJsonResult(
+      JSON.stringify({ result: "fixed", usage: { input_tokens: 5, output_tokens: 2 } }),
+      "",
+      0,
+    );
+    expect(claude).toMatchObject({
+      content: "fixed",
+      usage: { tokensIn: 5, tokensOut: 2, totalTokens: 7 },
+      finishReason: "stop",
+    });
+    const secret = "PROVIDER_SECRET_STDERR";
+    expect(parseCodexJsonResult("not-json", secret, 0).error).toBe("provider returned malformed structured output");
+    expect(parseClaudeJsonResult("not-json", secret, 0).error).toBe("provider returned malformed structured output");
+    expect(parseCodexJsonResult("", secret, 1)).toEqual({
+      content: "",
+      role: "assistant",
+      error: "provider execution failed",
+    });
+    expect(parseClaudeJsonResult("", secret, 1)).toEqual({
+      content: "",
+      role: "assistant",
+      error: "provider execution failed",
+    });
+  });
+});
+
+describe("Codex resolved execution-policy attestation (issue #257)", () => {
+  function preworkFixture(
+    root: string,
+    executionPolicy: "read-only" | "workspace-write",
+  ): {
+    descriptor: SessionDescriptor;
+    request: TurnRequest;
+    initialized: Record<string, unknown>;
+    started: Record<string, unknown>;
+  } {
+    const descriptor: SessionDescriptor = {
+      sessionId: `canonical-prework-${executionPolicy}`,
+      provider: "codex",
+      model: "gpt-5.6-sol",
+      mode: "task",
+      workdir: root,
+      stateDir: path.join(root, ".agents"),
+    };
+    const policyRequest: TurnRequest = {
+      prompt: "fixture",
+      effort: "high",
+      executionPolicy,
+    };
+    return {
+      descriptor,
+      request: policyRequest,
+      initialized: { codexHome: path.join(descriptor.stateDir, "clis", "codex") },
+      started: {
+        model: descriptor.model,
+        cwd: root,
+        runtimeWorkspaceRoots: [root],
+        approvalPolicy: "never",
+        reasoningEffort: policyRequest.effort,
+        thread: { ephemeral: true, cwd: root },
+        activePermissionProfile: {
+          id: executionPolicy === "read-only" ? ":read-only" : ":workspace",
+          extends: null,
+        },
+        sandbox:
+          executionPolicy === "read-only"
+            ? { type: "readOnly", networkAccess: false }
+            : {
+                type: "workspaceWrite",
+                writableRoots: [],
+                networkAccess: false,
+                excludeTmpdirEnvVar: true,
+                excludeSlashTmp: true,
+              },
+      },
+    };
+  }
+
+  test("pre-work primary: zero-token thread receipts attest both narrow policies", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework");
+    for (const executionPolicy of ["read-only", "workspace-write"] as const) {
+      const fixture = preworkFixture(root, executionPolicy);
+      expect(
+        attestCodexPreworkResponse(
+          fixture.descriptor,
+          fixture.request,
+          fixture.initialized,
+          fixture.started,
+        ),
+      ).toBe(executionPolicy);
+    }
+  });
+
+  test("pre-work edge: extra writable roots fail closed before a model turn", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework-extra-root");
+    const fixture = preworkFixture(root, "workspace-write");
+    (fixture.started.sandbox as { writableRoots: string[] }).writableRoots.push(
+      path.resolve(root, "..", "outside"),
+    );
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("resolved execution policy does not match");
+
+    fixture.started.sandbox = { type: "workspaceWrite", networkAccess: false };
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("resolved execution policy does not match");
+  });
+
+  test("pre-work denied: workspace-write temporary-directory exclusions must both resolve true", () => {
+    const variants = [
+      { excludeTmpdirEnvVar: false, excludeSlashTmp: true },
+      { excludeTmpdirEnvVar: true, excludeSlashTmp: false },
+      { excludeSlashTmp: true },
+      { excludeTmpdirEnvVar: true },
+    ];
+    for (const [index, sandbox] of variants.entries()) {
+      const root = path.resolve(os.tmpdir(), `agents-codex-prework-tmp-denied-${index}`);
+      const fixture = preworkFixture(root, "workspace-write");
+      fixture.started.sandbox = {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: false,
+        ...sandbox,
+      };
+      expect(() =>
+        attestCodexPreworkResponse(
+          fixture.descriptor,
+          fixture.request,
+          fixture.initialized,
+          fixture.started,
+        ),
+      ).toThrow("resolved execution policy does not match");
+    }
+  });
+
+  test("pre-work denied: workspace-write resolving read-only is rejected", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework-denied");
+    const fixture = preworkFixture(root, "workspace-write");
+    fixture.started.sandbox = { type: "readOnly", networkAccess: false };
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("resolved execution policy does not match");
+  });
+
+  test("pre-work denied: mismatched built-in permission profile is rejected", () => {
+    const root = path.resolve(os.tmpdir(), "agents-codex-prework-profile-denied");
+    const fixture = preworkFixture(root, "workspace-write");
+    fixture.started.activePermissionProfile = { id: ":read-only", extends: null };
+    expect(() =>
+      attestCodexPreworkResponse(
+        fixture.descriptor,
+        fixture.request,
+        fixture.initialized,
+        fixture.started,
+      ),
+    ).toThrow("does not match the canonical request");
+  });
+
+  async function writeCodexRollout(
+    root: string,
+    descriptor: SessionDescriptor,
+    request: TurnRequest,
+    options: {
+      sandbox?: string;
+      sandboxPolicy?: Record<string, unknown>;
+      permissionProfile?: Record<string, unknown>;
+      effort?: string;
+      duplicateContext?: boolean;
+    } = {},
+  ): Promise<string> {
+    const threadId = "019f-policy-attestation-0001";
+    const now = new Date();
+    const directory = path.join(
+      descriptor.stateDir,
+      "clis",
+      "codex",
+      "sessions",
+      String(now.getUTCFullYear()).padStart(4, "0"),
+      String(now.getUTCMonth() + 1).padStart(2, "0"),
+      String(now.getUTCDate()).padStart(2, "0"),
+    );
+    await mkdir(directory, { recursive: true });
+    const resolvedSandbox = options.sandbox ?? request.executionPolicy ?? "read-only";
+    const sandboxPolicy = options.sandboxPolicy ??
+      (resolvedSandbox === "workspace-write"
+        ? {
+            type: resolvedSandbox,
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+            writable_roots: [],
+          }
+        : { type: resolvedSandbox });
+    const context = {
+      timestamp: now.toISOString(),
+      type: "turn_context",
+      payload: {
+        turn_id: "turn-1",
+        cwd: root,
+        workspace_roots: [root],
+        approval_policy: "never",
+        sandbox_policy: sandboxPolicy,
+        permission_profile: options.permissionProfile ?? {
+          type: "managed",
+          file_system: {
+            type: "restricted",
+            entries: [
+              { path: { type: "special", value: { kind: "root" } }, access: "read" },
+              ...(resolvedSandbox === "workspace-write"
+                ? [{ path: { type: "path", path: root }, access: "write" }]
+                : []),
+            ],
+          },
+          network: "restricted",
+        },
+        model: descriptor.model,
+        effort: options.effort ?? request.effort,
+      },
+    };
+    const events = [
+      {
+        timestamp: now.toISOString(),
+        type: "session_meta",
+        payload: {
+          session_id: threadId,
+          id: threadId,
+          cwd: root,
+          source: "exec",
+          cli_version: "0.144.1",
+        },
+      },
+      context,
+      ...(options.duplicateContext ? [context] : []),
+    ];
+    await writeFile(
+      path.join(directory, `rollout-${now.toISOString().replaceAll(":", "-")}-${threadId}.jsonl`),
+      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    );
+    return threadId;
+  }
+
+  test("primary: exact native context attests read-only and workspace-write requests", async () => {
+    for (const executionPolicy of ["read-only", "workspace-write"] as const) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agents-codex-policy-${executionPolicy}-`));
+      try {
+        const descriptor: SessionDescriptor = {
+          sessionId: `canonical-${executionPolicy}`,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          mode: "task",
+          workdir: root,
+          stateDir: path.join(root, ".agents"),
+        };
+        const policyRequest: TurnRequest = {
+          prompt: "fixture",
+          effort: "high",
+          executionPolicy,
+        };
+        const threadId = await writeCodexRollout(root, descriptor, policyRequest);
+        expect(await attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).toBe(executionPolicy);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("edge: malformed or duplicate native context fails with fixed diagnostics", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-codex-policy-malformed-"));
+    try {
+      const descriptor: SessionDescriptor = {
+        sessionId: "canonical-malformed",
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        mode: "task",
+        workdir: root,
+        stateDir: path.join(root, ".agents"),
+      };
+      const policyRequest: TurnRequest = {
+        prompt: "fixture",
+        effort: "medium",
+        executionPolicy: "read-only",
+      };
+      const threadId = await writeCodexRollout(root, descriptor, policyRequest, { duplicateContext: true });
+      await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
+        "native execution receipt is malformed",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("denied: requested workspace-write resolving read-only blocks with no native path or id leakage", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-codex-policy-denied-"));
+    try {
+      const descriptor: SessionDescriptor = {
+        sessionId: "canonical-denied",
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        mode: "task",
+        workdir: root,
+        stateDir: path.join(root, ".agents"),
+      };
+      const policyRequest: TurnRequest = {
+        prompt: "fixture",
+        effort: "high",
+        executionPolicy: "workspace-write",
+      };
+      const threadId = await writeCodexRollout(root, descriptor, policyRequest, { sandbox: "read-only" });
+      try {
+        await attestCodexExecutionPolicy(descriptor, policyRequest, threadId);
+        throw new Error("expected policy mismatch");
+      } catch (error) {
+        expect((error as Error).message).toBe(
+          "Codex resolved execution policy does not match the requested policy",
+        );
+        expect((error as Error).message).not.toContain(root);
+        expect((error as Error).message).not.toContain(threadId);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("denied: weakened workspace-write native policy fails closed", async () => {
+    const variants: Record<string, unknown>[] = [
+      {
+        type: "workspace-write",
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+        writable_roots: [],
+      },
+      {
+        type: "workspace-write",
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: true,
+        writable_roots: [],
+      },
+      {
+        type: "workspace-write",
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+        writable_roots: [path.resolve(os.tmpdir(), "outside")],
+      },
+    ];
+    for (const [index, sandboxPolicy] of variants.entries()) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agents-codex-policy-weakened-${index}-`));
+      try {
+        const descriptor: SessionDescriptor = {
+          sessionId: `canonical-weakened-${index}`,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          mode: "task",
+          workdir: root,
+          stateDir: path.join(root, ".agents"),
+        };
+        const policyRequest: TurnRequest = {
+          prompt: "fixture",
+          effort: "high",
+          executionPolicy: "workspace-write",
+        };
+        const threadId = await writeCodexRollout(root, descriptor, policyRequest, { sandboxPolicy });
+        await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
+          "resolved execution policy does not match",
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("denied: read-only native policy rejects network or writable-root extensions", async () => {
+    const variants: Record<string, unknown>[] = [
+      { type: "read-only", network_access: true },
+      { type: "read-only", network_access: false, writable_roots: [] },
+      { type: "read-only", writable_roots: [path.resolve(os.tmpdir(), "outside")] },
+    ];
+    for (const [index, sandboxPolicy] of variants.entries()) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agents-codex-policy-readonly-${index}-`));
+      try {
+        const descriptor: SessionDescriptor = {
+          sessionId: `canonical-readonly-${index}`,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          mode: "task",
+          workdir: root,
+          stateDir: path.join(root, ".agents"),
+        };
+        const policyRequest: TurnRequest = {
+          prompt: "fixture",
+          effort: "high",
+          executionPolicy: "read-only",
+        };
+        const threadId = await writeCodexRollout(root, descriptor, policyRequest, { sandboxPolicy });
+        await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
+          "resolved execution policy does not match",
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("denied: completed native permission profiles cannot add network or writable authority", async () => {
+    const variants: Record<string, unknown>[] = [
+      {
+        type: "managed",
+        file_system: {
+          type: "restricted",
+          entries: [{ path: { type: "special", value: { kind: "root" } }, access: "read" }],
+        },
+        network: "enabled",
+      },
+      {
+        type: "managed",
+        file_system: {
+          type: "restricted",
+          entries: [
+            { path: { type: "special", value: { kind: "root" } }, access: "read" },
+            { path: { type: "path", path: path.resolve(os.tmpdir(), "outside") }, access: "write" },
+          ],
+        },
+        network: "restricted",
+      },
+      {
+        type: "managed",
+        file_system: { type: "restricted", entries: [] },
+        network: "restricted",
+      },
+    ];
+    for (const [index, permissionProfile] of variants.entries()) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `agents-codex-permissions-${index}-`));
+      try {
+        const descriptor: SessionDescriptor = {
+          sessionId: `canonical-permissions-${index}`,
+          provider: "codex",
+          model: "gpt-5.6-sol",
+          mode: "task",
+          workdir: root,
+          stateDir: path.join(root, ".agents"),
+        };
+        const policyRequest: TurnRequest = {
+          prompt: "fixture",
+          effort: "high",
+          executionPolicy: "read-only",
+        };
+        const threadId = await writeCodexRollout(root, descriptor, policyRequest, { permissionProfile });
+        await expect(attestCodexExecutionPolicy(descriptor, policyRequest, threadId)).rejects.toThrow(
+          "resolved execution policy does not match",
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
   });
 });
 
 describe("canonical startup projection", () => {
-  test("injects canonical Agent OS startup exactly once for each argv-based provider prompt", () => {
+  test("injects canonical Agent OS startup exactly once without exposing stdin provider prompts in argv", () => {
     const startup = "# Canonical startup context\n\n- product-count = 1";
     const once = withCanonicalStartup(transcript(), startup);
     const twice = withCanonicalStartup(once, startup);
     expect(twice.messages.filter((message) => message.content === startup)).toHaveLength(1);
 
-    for (const provider of ["codex", "claude", "agy"] as const) {
+    const stdinPrompt = transcriptAsPrompt(request, twice);
+    expect(stdinPrompt).toContain(startup);
+    expect(stdinPrompt.match(/product-count = 1/g)?.length).toBe(1);
+    for (const provider of ["codex", "claude"] as const) {
       const args = buildProviderArgs(provider, `${provider}-test`, request, twice);
-      expect(args.join("\n")).toContain(startup);
-      expect(args.join("\n").match(/product-count = 1/g)?.length).toBe(1);
+      expect(args.join("\n")).not.toContain(startup);
     }
+    const agyArgs = buildProviderArgs("agy", "agy-test", request, twice);
+    expect(agyArgs.join("\n")).toContain(startup);
+    expect(agyArgs.join("\n").match(/product-count = 1/g)?.length).toBe(1);
 
     // Kimi receives startup and current-turn content through ACP stdin; its
     // argv remains constant regardless of canonical context size.
@@ -287,11 +952,14 @@ function fakeAgyBinary(
       `$capture = '${capture}'`,
       `$autoUpdateEntries = @(Get-ChildItem Env: | Where-Object { $_.Name -ieq 'AGY_CLI_DISABLE_AUTO_UPDATE' })`,
       ...startupUpdater,
-      `$prompt64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$args[3]))`,
+      `$prompt64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$args[6]))`,
       `$lines = @(`,
       `  "argv0=$($args[0])",`,
       `  "argv1=$($args[1])",`,
       `  "argv2=$($args[2])",`,
+      `  "argv3=$($args[3])",`,
+      `  "argv4=$($args[4])",`,
+      `  "argv5=$($args[5])",`,
       `  "argc=$($args.Count)",`,
       `  "prompt64=$prompt64",`,
       `  "geminiDir=$env:GEMINI_DIR",`,
@@ -344,11 +1012,14 @@ function fakeAgyBinary(
     ...startupUpdater,
     `agy_auto_update_keys=$(env | awk -F= 'toupper($1) == "AGY_CLI_DISABLE_AUTO_UPDATE" { print $1 }' | paste -sd, -)`,
     `agy_auto_update_count=$(env | awk -F= 'toupper($1) == "AGY_CLI_DISABLE_AUTO_UPDATE" { count++ } END { print count + 0 }')`,
-    `prompt64=$(printf '%s' "$4" | base64 | tr -d '\\n')`,
+    `prompt64=$(printf '%s' "$7" | base64 | tr -d '\\n')`,
     `{`,
     `  printf 'argv0=%s\\n' "$1"`,
     `  printf 'argv1=%s\\n' "$2"`,
     `  printf 'argv2=%s\\n' "$3"`,
+    `  printf 'argv3=%s\\n' "$4"`,
+    `  printf 'argv4=%s\\n' "$5"`,
+    `  printf 'argv5=%s\\n' "$6"`,
     `  printf 'argc=%s\\n' "$#"`,
     `  printf 'prompt64=%s\\n' "$prompt64"`,
     `  printf 'geminiDir=%s\\n' "$GEMINI_DIR"`,
@@ -441,11 +1112,92 @@ async function seedCanonicalStartup(state: ReturnType<typeof sharedStateAt>, sta
   });
 }
 
+async function fakeClaudeJsonBinary(stateDir: string): Promise<string> {
+  const binDir = path.join(stateDir, "clis", "claude", "bin");
+  await mkdir(binDir, { recursive: true });
+  const payload = JSON.stringify({ result: "claude-ok", usage: { input_tokens: 3, output_tokens: 2 } });
+  if (process.platform === "win32") {
+    const binary = path.join(binDir, "claude.ps1");
+    await Bun.write(binary, `[Console]::Out.WriteLine('${payload.replaceAll("'", "''")}')\r\n`);
+    return binary;
+  }
+  const binary = path.join(binDir, "claude");
+  await Bun.write(binary, `#!/bin/sh\nprintf '%s\\n' '${payload}'\n`);
+  await chmod(binary, 0o700);
+  return binary;
+}
+
+describe("provider-native execution-policy evidence", () => {
+  test("successful Claude output attests the exact native permission profile", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-claude-policy-evidence-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedCanonicalStartup(state, stateDir);
+      const binary = await fakeClaudeJsonBinary(stateDir);
+      const descriptor = await createSession(state, {
+        provider: "claude",
+        model: "claude-test",
+        mode: "task",
+        workdir: root,
+      });
+      const result = await runSessionTurn(state, claudeSessionAdapter(binary), descriptor, {
+        prompt: "Return the fixture.",
+        executionPolicy: "read-only",
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.content).toBe("claude-ok");
+      expect(result.resolvedExecutionPolicy).toBe("read-only");
+      expect(result.receipt).toMatchObject({
+        provider: "claude",
+        requestedExecutionPolicy: "read-only",
+        resolvedExecutionPolicy: "read-only",
+      });
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("Claude workspace-write fails closed before a provider turn without physical containment", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-claude-workspace-denied-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedCanonicalStartup(state, stateDir);
+      const binary = await fakeClaudeJsonBinary(stateDir);
+      const descriptor = await createSession(state, {
+        provider: "claude",
+        model: "claude-fable-5",
+        mode: "task",
+        workdir: root,
+      });
+      await expect(
+        runSessionTurn(state, claudeSessionAdapter(binary), descriptor, {
+          prompt: "Attempt a workspace write.",
+          effort: "high",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("workspace-write is unsupported without a manager-owned physical containment boundary");
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 interface FakeKimiAcpCapture {
   argv: string[];
   agentsHome: string | null;
   kimiCodeHome: string | null;
+  home: string | null;
+  userProfile: string | null;
   requests: Array<{ method: string; params: Record<string, unknown> }>;
+  responses: Array<Record<string, unknown>>;
 }
 
 async function seedKimiCanonicalStartup(
@@ -479,6 +1231,19 @@ async function fakeKimiAcpBinary(
     malformedProtocolJson?: boolean;
     wrongSessionUpdate?: boolean;
     hangAt?: "initialize" | "prompt";
+    probeHomeFallback?: boolean;
+    permissionRequest?: {
+      kind: "edit" | "execute";
+      path: string;
+      sessionId?: string;
+      status?: "pending" | "in_progress";
+      duplicateAllowOnce?: boolean;
+    };
+    fileWrite?: {
+      path: string;
+      content: string;
+      swapParentTo?: string;
+    };
   } = {},
 ): Promise<string> {
   const binDir = path.join(stateDir, "clis", "kimi", "bin");
@@ -486,15 +1251,18 @@ async function fakeKimiAcpBinary(
   const server = path.join(binDir, "fake-kimi-acp.mjs");
   const behavior = JSON.stringify(opts);
   const source = `
-import { writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { createInterface } from "node:readline";
 
 const capturePath = ${JSON.stringify(capturePath)};
 const behavior = ${behavior};
 const requests = [];
+const responses = [];
 let activeSessionId = "native-kimi-session";
 let model = "kimi-test";
 let mode = "manual";
+let pendingPromptId = null;
 
 function configOptions() {
   return [
@@ -512,17 +1280,28 @@ function configOptions() {
       category: "mode",
       type: "select",
       currentValue: mode,
-      options: [{ name: "Auto", value: "auto" }, { name: "Manual", value: "manual" }],
+      options: [
+        { name: "Auto", value: "auto" },
+        { name: "Plan", value: "plan" },
+        { name: "Manual", value: "manual" },
+      ],
     },
   ];
 }
 
 function capture() {
+  if (behavior.probeHomeFallback) {
+    const platformHome = process.env.USERPROFILE ?? process.env.HOME;
+    if (platformHome) mkdirSync(path.join(platformHome, ".kimi-code"), { recursive: true });
+  }
   writeFileSync(capturePath, JSON.stringify({
     argv: process.argv.slice(2),
     agentsHome: process.env.AGENTS_HOME ?? null,
     kimiCodeHome: process.env.KIMI_CODE_HOME ?? null,
+    home: process.env.HOME ?? null,
+    userProfile: process.env.USERPROFILE ?? null,
     requests,
+    responses,
   }));
 }
 
@@ -530,12 +1309,34 @@ function send(message) {
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
 }
 
+function finishPrompt(id) {
+  send({ method: "session/update", params: {
+    sessionId: behavior.wrongSessionUpdate ? "provider-secret-wrong-session" : activeSessionId,
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "kimi-probe-ok" },
+    },
+  } });
+  send({ id, result: {
+    stopReason: "end_turn",
+    usage: { inputTokens: 13, outputTokens: 5, totalTokens: 18 },
+  } });
+}
+
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let stop = false;
 for await (const line of lines) {
   if (!line.trim()) continue;
   const message = JSON.parse(line);
-  if (typeof message.method !== "string") continue;
+  if (typeof message.method !== "string") {
+    responses.push(message);
+    capture();
+    if ((message.id === 900 || message.id === 901) && pendingPromptId !== null) {
+      finishPrompt(pendingPromptId);
+      pendingPromptId = null;
+    }
+    continue;
+  }
   const params = message.params ?? {};
   requests.push({ method: message.method, params });
   capture();
@@ -579,14 +1380,42 @@ for await (const line of lines) {
       break;
     case "session/prompt":
       if (behavior.hangAt === "prompt") break;
-      send({ method: "session/update", params: {
-        sessionId: behavior.wrongSessionUpdate ? "provider-secret-wrong-session" : activeSessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "kimi-probe-ok" },
-        },
-      } });
-      send({ id: message.id, result: { stopReason: "end_turn" } });
+      if (behavior.permissionRequest) {
+        pendingPromptId = message.id;
+        const permission = behavior.permissionRequest;
+        send({ id: 900, method: "session/request_permission", params: {
+          sessionId: permission.sessionId ?? activeSessionId,
+          toolCall: {
+            title: "managed permission fixture",
+            kind: permission.kind,
+            status: permission.status ?? "pending",
+            toolCallId: "tool-900",
+            locations: [{ path: permission.path }],
+          },
+          options: [
+            { kind: "allow_once", name: "Allow once", optionId: "allow-once" },
+            ...(permission.duplicateAllowOnce
+              ? [{ kind: "allow_once", name: "Also allow once", optionId: "allow-once-2" }]
+              : []),
+            { kind: "reject_once", name: "Reject", optionId: "reject-once" },
+          ],
+        } });
+      } else if (behavior.fileWrite) {
+        pendingPromptId = message.id;
+        const fileWrite = behavior.fileWrite;
+        if (fileWrite.swapParentTo) {
+          const parent = path.dirname(fileWrite.path);
+          renameSync(parent, parent + "-provider-backup");
+          symlinkSync(fileWrite.swapParentTo, parent, process.platform === "win32" ? "junction" : "dir");
+        }
+        send({ id: 901, method: "fs/write_text_file", params: {
+          sessionId: activeSessionId,
+          path: fileWrite.path,
+          content: fileWrite.content,
+        } });
+      } else {
+        finishPrompt(message.id);
+      }
       break;
     default:
       send({ id: message.id, error: { code: -32601, message: "method not found" } });
@@ -652,7 +1481,7 @@ describe("managed Kimi native continuation (issue #254)", () => {
     try {
       const state = sharedStateAt(root, stateDir, userHome);
       await seedKimiCanonicalStartup(state, stateDir);
-      const binary = await fakeKimiAcpBinary(stateDir, capturePath);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, { probeHomeFallback: true });
       const adapter = kimiSessionAdapter(binary);
       const descriptor = await createSession(state, {
         provider: "kimi",
@@ -668,11 +1497,16 @@ describe("managed Kimi native continuation (issue #254)", () => {
       expect(result.content).toBe("kimi-probe-ok");
       expect(result.error).toBeUndefined();
       expect(result.receipt).toEqual(nativeKimiReceipt());
+      expect(result.usage).toEqual({ tokensIn: 13, tokensOut: 5, totalTokens: 18 });
 
       const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
       expect(captured.argv).toEqual(["acp"]);
       expect(captured.agentsHome).toBe(stateDir);
       expect(captured.kimiCodeHome).toBe(path.join(stateDir, "clis", "kimi"));
+      expect(captured.home).toBe(path.join(stateDir, "clis", "kimi"));
+      expect(captured.userProfile).toBe(path.join(stateDir, "clis", "kimi"));
+      expect(await pathExists(path.join(userHome, ".kimi-code"))).toBe(false);
+      expect(await pathExists(path.join(stateDir, "clis", "kimi", ".kimi-code"))).toBe(true);
       expect(captured.requests.map(({ method }) => method)).toEqual([
         "initialize",
         "session/new",
@@ -693,6 +1527,240 @@ describe("managed Kimi native continuation (issue #254)", () => {
         nativeKimiReceipt(),
       );
       expect(Object.keys(result.receipt!).sort()).toEqual(["model", "provider", "providerSessionId", "transport"]);
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace filesystem primary: manager-owned ACP write mutates an existing in-worktree file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-write-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const target = path.join(root, "managed.txt");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      await writeFile(target, "before\n");
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        fileWrite: { path: target, content: "after\n" },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+
+      const result = await runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+        prompt: "Edit the managed file.",
+        executionPolicy: "workspace-write",
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.resolvedExecutionPolicy).toBe("workspace-write");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      const mode = captured.requests.find(
+        ({ method, params }) => method === "session/set_config_option" && params.configId === "mode",
+      );
+      expect(mode?.params.value).toBe("manual");
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(target, "utf8")).toBe("after\n");
+      const initialize = captured.requests.find(({ method }) => method === "initialize");
+      expect(initialize?.params.clientCapabilities).toEqual({
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: false,
+      });
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace filesystem denied: missing-target creation has no pre-attestation side effect", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-escape-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const target = path.join(root, "created.txt");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        fileWrite: { path: target, content: "created safely\n" },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt to create a managed file.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("outside managed containment");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await stat(target).catch(() => null)).toBeNull();
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace filesystem denied: a lexical out-of-worktree write fails closed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-outside-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const outside = path.resolve(root, "..", `${path.basename(root)}-owner-data.txt`);
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      await writeFile(outside, "outside-owner-data\n");
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        fileWrite: { path: outside, content: "must not land\n" },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt an escaped write.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("outside managed containment");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(outside, "utf8")).toBe("outside-owner-data\n");
+    } finally {
+      restore();
+      await rm(outside, { force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace policy edge: an in-worktree hard link to an outside inode is cancelled", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-hardlink-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const outside = path.resolve(root, "..", `${path.basename(root)}-outside.txt`);
+    const target = path.join(root, "linked-inside.txt");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      await writeFile(outside, "outside-owner-data\n");
+      await link(outside, target);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        fileWrite: { path: target, content: "must not land\n" },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt an edit through a hard link.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("outside managed containment");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(outside, "utf8")).toBe("outside-owner-data\n");
+    } finally {
+      restore();
+      await rm(outside, { force: true });
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace filesystem denied: a parent swapped to an outside link before mutation fails closed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-toctou-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-toctou-outside-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const workspace = path.join(root, "workspace");
+    const target = path.join(workspace, "managed.txt");
+    const outsideTarget = path.join(outside, "managed.txt");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      await mkdir(workspace);
+      await writeFile(target, "inside-owner-data\n");
+      await writeFile(outsideTarget, "outside-owner-data\n");
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        fileWrite: { path: target, content: "must not escape\n", swapParentTo: outside },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt a raced edit.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("outside managed containment");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 901)).toMatchObject({ result: {} });
+      expect(await readFile(outsideTarget, "utf8")).toBe("outside-owner-data\n");
+      expect(await readFile(path.join(`${workspace}-provider-backup`, "managed.txt"), "utf8")).toBe(
+        "inside-owner-data\n",
+      );
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("workspace policy denied: shell execution is never promoted to workspace-write", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-kimi-acp-execute-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capturePath = path.join(root, "kimi-acp.json");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedKimiCanonicalStartup(state, stateDir);
+      const binary = await fakeKimiAcpBinary(stateDir, capturePath, {
+        permissionRequest: { kind: "execute", path: path.join(root, "package.json") },
+      });
+      const descriptor = await createSession(state, {
+        provider: "kimi",
+        model: "kimi-test",
+        mode: "task",
+        workdir: root,
+      });
+      await expect(
+        runSessionTurn(state, kimiSessionAdapter(binary), descriptor, {
+          prompt: "Attempt a shell command.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("requested permission despite the confirmed execution policy");
+      const captured = JSON.parse(await readFile(capturePath, "utf8")) as FakeKimiAcpCapture;
+      expect(captured.responses.find((response) => response.id === 900)).toMatchObject({
+        result: { outcome: { outcome: "cancelled" } },
+      });
     } finally {
       restore();
       await rm(root, { recursive: true, force: true });
@@ -1242,15 +2310,22 @@ describe("managed Agy provider boundary (issue #252)", () => {
       const adapter = agySessionAdapter(binary);
       const descriptor = await createSession(state, { provider: "agy", model: "low", mode: "chat", workdir: root });
       const promptText = "Reply with the single word ok.";
-      const result = await runSessionTurn(state, adapter, descriptor, { prompt: promptText });
+      const result = await runSessionTurn(state, adapter, descriptor, {
+        prompt: promptText,
+        executionPolicy: "read-only",
+      });
       expect(result.error).toBeUndefined();
+      expect(result.resolvedExecutionPolicy).toBe("read-only");
 
       // The exact prompt and the concrete Low model reach the provider boundary.
       const captured = parseCapture(await readFile(capture, "utf8"));
-      expect(captured.argv0).toBe("--model");
-      expect(captured.argv1).toBe(AGY_LOW_MODEL);
-      expect(captured.argv2).toBe("--print");
-      expect(captured.argc).toBe("4");
+      expect(captured.argv0).toBe("--sandbox");
+      expect(captured.argv1).toBe("--mode");
+      expect(captured.argv2).toBe("plan");
+      expect(captured.argv3).toBe("--model");
+      expect(captured.argv4).toBe(AGY_LOW_MODEL);
+      expect(captured.argv5).toBe("--print");
+      expect(captured.argc).toBe("7");
       const reachedPrompt = decodePrompt(captured);
       expect(reachedPrompt).toContain(promptText);
       expect(reachedPrompt).toContain("AGY-CANONICAL-CONTEXT");
@@ -1295,6 +2370,32 @@ describe("managed Agy provider boundary (issue #252)", () => {
     }
   }, 30000);
 
+  test("denied: workspace-write fails before Agy spawn without provider-native physical authority", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-agy-workspace-denied-"));
+    const stateDir = path.join(root, ".agents");
+    const userHome = path.join(root, "user-home");
+    const capture = path.join(root, "agy-capture.txt");
+    const restore = withDisposableHome(stateDir, userHome);
+    try {
+      const state = sharedStateAt(root, stateDir, userHome);
+      await seedCanonicalStartup(state, stateDir);
+      const binary = await pinFakeAgy(state, stateDir, capture);
+      await Bun.write(path.join(stateDir, "clis", "agy", ".gemini", "oauth_creds.json"), '{"token":"redacted"}');
+      const descriptor = await createSession(state, { provider: "agy", model: "low", mode: "task", workdir: root });
+
+      await expect(
+        runSessionTurn(state, agySessionAdapter(binary), descriptor, {
+          prompt: "Attempt a workspace write.",
+          executionPolicy: "workspace-write",
+        }),
+      ).rejects.toThrow("Agy workspace-write is unsupported without provider-native physical authority evidence");
+      expect(await pathExists(capture)).toBe(false);
+    } finally {
+      restore();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test("success: a managed agy/low turn accepts a safe OS-level ancestor alias and stays inside the physical attested bin", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-agy-ancestor-alias-"));
     const physicalRoot = path.join(root, "physical");
@@ -1329,8 +2430,8 @@ describe("managed Agy provider boundary (issue #252)", () => {
 
       // Executed exactly once.
       const captured = parseCapture(await readFile(capture, "utf8"));
-      expect(captured.argc).toBe("4");
-      expect(captured.argv1).toBe(AGY_LOW_MODEL);
+      expect(captured.argc).toBe("7");
+      expect(captured.argv4).toBe(AGY_LOW_MODEL);
       const reachedPrompt = decodePrompt(captured);
       expect(reachedPrompt).toContain(promptText);
 
@@ -1377,7 +2478,15 @@ describe("managed Agy provider boundary (issue #252)", () => {
       // The low tier resolves to the concrete authenticated Low model.
       expect(resolveAgyModel("low")).toMatchObject({ concreteModel: AGY_LOW_MODEL, effort: "low" });
       const args = buildProviderArgs("agy", "low", { prompt: "hello edge" }, transcript());
-      expect(args).toEqual(["--model", AGY_LOW_MODEL, "--print", "hello edge"]);
+      expect(args).toEqual([
+        "--sandbox",
+        "--mode",
+        "plan",
+        "--model",
+        AGY_LOW_MODEL,
+        "--print",
+        "hello edge",
+      ]);
     } finally {
       restore();
       await rm(root, { recursive: true, force: true });
@@ -2078,15 +3187,16 @@ describe("managed Agy provider boundary (issue #252)", () => {
         workdir: root,
       });
       const normalResult = await runSessionTurn(state, adapter, normalDescriptor, { prompt: "normal error" });
-      expect(normalResult.error).toContain(providerError);
+      expect(normalResult.error).toBe("provider execution failed");
+      expect(JSON.stringify(normalResult)).not.toContain(providerError);
       expect(normalResult.receipt).toEqual(expectedReceipt);
       const normalTranscript = await loadTranscript(state, normalDescriptor.sessionId);
       const normalAssistant = normalTranscript?.messages.find((message) => message.role === "assistant");
       expect(normalAssistant?.metadata?.error).toBe(true);
       expect(normalAssistant?.metadata?.receipt).toEqual(expectedReceipt);
-      expect(completedTurnEvent(await loadSessionEvents(state, normalDescriptor.sessionId)).data.receipt).toEqual(
-        expectedReceipt,
-      );
+      const normalEvents = await loadSessionEvents(state, normalDescriptor.sessionId);
+      expect(completedTurnEvent(normalEvents).data.receipt).toEqual(expectedReceipt);
+      expect(JSON.stringify(normalEvents)).not.toContain(providerError);
 
       const streamDescriptor = await createSession(state, {
         provider: "agy",
@@ -2098,14 +3208,15 @@ describe("managed Agy provider boundary (issue #252)", () => {
       for await (const chunk of streamSessionTurn(state, adapter, streamDescriptor, { prompt: "stream error" })) {
         chunks.push(chunk);
       }
-      expect(chunks.some((chunk) => chunk.type === "error" && chunk.error?.includes(providerError))).toBe(true);
+      expect(chunks.some((chunk) => chunk.type === "error" && chunk.error === "provider execution failed")).toBe(true);
+      expect(JSON.stringify(chunks)).not.toContain(providerError);
       const streamTranscript = await loadTranscript(state, streamDescriptor.sessionId);
       const streamAssistant = streamTranscript?.messages.find((message) => message.role === "assistant");
       expect(streamAssistant?.metadata?.error).toBe(true);
       expect(streamAssistant?.metadata?.receipt).toEqual(expectedReceipt);
-      expect(completedTurnEvent(await loadSessionEvents(state, streamDescriptor.sessionId)).data.receipt).toEqual(
-        expectedReceipt,
-      );
+      const streamEvents = await loadSessionEvents(state, streamDescriptor.sessionId);
+      expect(completedTurnEvent(streamEvents).data.receipt).toEqual(expectedReceipt);
+      expect(JSON.stringify(streamEvents)).not.toContain(providerError);
 
       const captured = parseCapture(await readFile(capture, "utf8"));
       expect(captured.startupUpdaterDecision).toBe("disabled");

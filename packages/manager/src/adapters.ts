@@ -3,7 +3,7 @@ import path from "node:path";
 import { lstat, realpath } from "node:fs/promises";
 import { systemDataPath, type SharedState } from "./state";
 import { providerBinarySafetyReason } from "./session-adapters";
-import { canonicalChildEnvironment } from "./runtime-paths";
+import { canonicalChildEnvironment, overlayChildEnvironment } from "./runtime-paths";
 import { commandInvocation } from "./process-command";
 import {
   inspectProviderExecutable,
@@ -41,6 +41,8 @@ export interface AdapterDoctorEvidence {
   pinned: boolean;
   executableVerified: boolean;
   credentialsPresent: boolean;
+  /** Path-free pinned provider version; null when no canonical pin exists. */
+  providerVersion?: string | null;
 }
 
 export const adapters: Record<CliId, CliAdapter> = {
@@ -120,6 +122,14 @@ export function adapterEnv(state: SharedState, id: CliId): Record<string, string
     AGENTS_SYSTEM_DATA_ROOT: systemDataPath(state),
   };
   for (const [name, dir] of Object.entries(spec.homeEnv)) env[name] = path.join(state.clisDir, dir);
+  if (id === "kimi") {
+    // Kimi normally honors KIMI_CODE_HOME, but its platform fallback resolves
+    // beneath HOME/USERPROFILE. Isolate both as well so a fallback cannot
+    // recreate the forbidden standalone ~/.kimi-code root.
+    const providerHome = path.join(state.clisDir, "kimi");
+    env.HOME = providerHome;
+    env.USERPROFILE = providerHome;
+  }
   if (id === "agy") {
     // Agy (antigravity-cli) resolves its config root from the OS user profile
     // and ignores HOME on Windows. Bind the explicit absolute canonical config
@@ -247,6 +257,7 @@ export async function doctorAdapter(state: SharedState, id: CliId): Promise<Adap
     pinned: Boolean(registration),
     executableVerified: binary !== null,
     credentialsPresent,
+    providerVersion: registration?.version ?? null,
   };
   return { id, home: root, binary, ok: binary !== null, pinned: Boolean(registration), notes, evidence };
 }
@@ -262,7 +273,7 @@ export async function pinAdapter(
   const unsafeReason = providerBinarySafetyReason(binary);
   if (unsafeReason) throw new Error(`cannot pin ${id}: ${unsafeReason}`);
 
-  const env = { ...canonicalChildEnvironment(), ...adapterEnv(state, id) };
+  const env = overlayChildEnvironment(canonicalChildEnvironment(), adapterEnv(state, id));
   forceAgyAutoUpdateDisabled(env, id);
   const child = Bun.spawn(commandInvocation(binary, ["--version"], env), {
     cwd: state.root,

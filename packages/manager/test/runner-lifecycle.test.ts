@@ -6,6 +6,7 @@ import path from "node:path";
 import type { StateDoctorReport } from "../src/state-doctor";
 import { ensureSharedState, sharedState, type SharedState } from "../src/state";
 import { canonicalChildEnvironment } from "../src/runtime-paths";
+import { validateSecretName } from "../src/secrets";
 import {
   buildRunnerTaskSpec,
   createGitHubControlPlane,
@@ -23,8 +24,8 @@ import {
   runnerInstallDir,
   runnerLauncherPath,
   runnerStatus,
-  RUNNER_LABELS,
   RUNNER_GITHUB_CREDENTIAL,
+  RUNNER_LABELS,
   RUNNER_NAME,
   RUNNER_REPOSITORY,
   RUNNER_SCHEDULED_TASK,
@@ -47,7 +48,6 @@ import {
   type ScheduledTaskInfo,
   type ScheduledTaskSpec,
 } from "../src/runner-lifecycle";
-import { validateSecretName } from "../src/secrets";
 
 const REGISTRATION_TOKEN = "ghr_FAKE_REGISTRATION_TOKEN_0123456789";
 const UNRELATED_TASK = "ContosoBackupNightly";
@@ -420,6 +420,23 @@ afterEach(async () => {
     const root = roots.pop();
     if (root) await rm(root, { recursive: true, force: true });
   }
+});
+
+test("runner status requests the canonical provisionable credential name exactly", async () => {
+  const { state } = await freshState();
+  const kit = makeKit();
+  const requested: string[] = [];
+  const report = await runnerStatus(state, {
+    ...kit.deps,
+    github: undefined,
+    readCredential: async (_state, name) => {
+      requested.push(name);
+      throw new Error("credential unavailable");
+    },
+  });
+
+  expect(requested).toEqual([RUNNER_GITHUB_CREDENTIAL]);
+  expect(report.issues).toContain("GitHub runner observation failed");
 });
 
 // ---------------------------------------------------------------------------

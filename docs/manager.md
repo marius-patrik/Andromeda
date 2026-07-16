@@ -76,12 +76,22 @@ receipt containing the provider, canonical model, `acp` transport, and opaque
 native session id. A later turn must resume that id, verify the resumed native
 model still matches the canonical model, and keep the same receipt. Missing,
 malformed, conflicting, or model-mismatched receipts fail before launch; an
-ACP resume failure never falls back to `session/new`. The adapter selects Kimi's
-automatic permission mode for headless parity and cancels any permission request
-that still reaches the non-interactive client. ACP control requests have a
-30-second deadline, prompts have a 10-minute deadline, and process exit plus
-stderr draining use bounded one-second cleanup windows; an expired phase
-terminates the provider and records only a sanitized timeout failure.
+ACP resume failure never falls back to `session/new`. Read-only turns select
+Kimi's `plan` mode. Workspace-write turns select `manual` mode, advertise the
+ACP client filesystem boundary, and service bounded replacement operations on
+existing regular files through one manager-owned anchored mutation authority.
+That authority resolves component-only paths beneath a canonical physical root,
+holds every ancestor, then requires a second identity-equal anchored traversal
+before its first truncate/write side effect. Windows handles deny delete
+sharing; POSIX traversal uses `openat` plus `O_NOFOLLOW`. New-file creation is
+not exposed to Kimi, linked and multiply-linked targets are denied, and
+provider-side pathname writes are never granted. Shell execution,
+create/delete/move operations, linked-path escapes, hard links, and all
+permission requests are denied. ACP
+control requests have a 30-second deadline, prompts have a
+10-minute deadline, and process exit plus stderr draining use bounded one-second
+cleanup windows; an expired phase terminates the provider and records only a
+sanitized timeout failure.
 
 The Agy (`antigravity-cli`) boundary is enforced per launch:
 
@@ -122,11 +132,13 @@ The Agy (`antigravity-cli`) boundary is enforced per launch:
   after final verification and before or during spawn, or a transient mid-run
   swap fully restored before postflight, is not eliminated; this boundary does
   not claim the executed bytes remain immutable for the whole process lifetime.
-- **Tier resolution and receipt.** Canonical reasoning tiers
-  (`low`/`medium`/`high`) resolve to the concrete authenticated model — Agy
-  carries the tier in the model string, e.g. `Gemini 3.5 Flash (Low)` — and are
-  recorded in the session receipt as the resolved concrete model, provider,
-  effort, and agent preset.
+- **Independent effort and receipt.** The logical `low` tier keeps the Agy
+  provider route fixed while canonical effort (`low`/`medium`/`high`) selects
+  the matching provider-native model variant — Agy carries effort in the model
+  string, e.g. `Gemini 3.5 Flash (High)`. A configured model family without a
+  native effort variant fails closed. The exact spawned model and effort are
+  reconstructed from provider argv and recorded in the session and execution
+  receipts.
 
 ### Agy source-and-installed-boundary repair
 
@@ -177,7 +189,9 @@ There is no compatibility mode or alternate loader to bypass.
 ## Command surface
 
 ```text
+agents run --model-tier low|medium|high|max --effort low|medium|high --execution-policy read-only|workspace-write --receipt <absolute-new-path> [--mode orchestrator|default|chat|task] [--prompt-file <absolute-path> | --prompt-stdin | <prompt>]
 agents run [--mode orchestrator|default] [--provider <id>] [--model <model>] [--tui] <prompt>
+agents route probe [--model-tier low|medium|high|max] [--effort low|medium|high] [--json]
 agents tui [--provider <id>] [--model <model>] [--mode <mode>]
 agents sessions list [--json]
 agents sessions resume <id> <prompt>
@@ -247,6 +261,74 @@ agents os deploy <profile> [--image agents-os] [--env agents-os] [--channel dev]
 agents runner install|enable|disable|status|repair [--json]
 ```
 
+### Logical-tier execution
+
+The logical-tier form is the canonical automation boundary used by managed
+DarkFactory work. Its stable routes are `low` to Agy, `medium` to Kimi, `high`
+to Codex with the Sol preset, and `max` to Claude with the Fable preset. The
+concrete model and pinned provider executable come only from canonical Agent OS
+state. A caller cannot override the provider, model, agent preset, executable,
+registry, fallback, or TUI.
+
+The caller's invocation directory is physically resolved before prompt
+admission and remains the provider cwd and receipt boundary. `AGENTS_ROOT`
+identifies the Agent OS distribution only; pointing it at a separate checkout
+cannot rebind logical-tier execution away from the caller worktree.
+
+Claude's max route currently admits `read-only` only. Its pinned native CLI has
+no completed-turn or manager-owned physical-worktree containment proof for
+Edit/Write, so `max` plus `workspace-write` fails before provider spawn instead
+of claiming unsupported write authority.
+
+Agy's low route also admits `read-only` only. Its native `accept-edits` flag is
+a request, not completed evidence of the effective cwd, sandbox, or writable
+roots, so low-tier `workspace-write` likewise fails before provider spawn.
+
+Model tier and model effort are independent axes. Every invocation must also
+declare either `read-only` or `workspace-write`; the provider adapter must attest
+that exact effective policy before a successful result is accepted. Exactly one
+prompt source is allowed: one positional value, one absolute `--prompt-file`, or
+`--prompt-stdin`. A prompt file is admitted only when the final entry and every
+parent component are physical and equal their own realpath; linked parents,
+Windows junction/reparse aliases, and mid-read path drift fail before provider
+work. File and stdin input stay out of downstream process argv.
+
+Codex resolves the matching built-in `:read-only` or `:workspace` permission
+profile through an ephemeral, zero-token app-server thread before provider work.
+That receipt must bind the canonical model, provider home, worktree, approval
+policy, effort, and sole runtime workspace root. Workspace-write preflight also
+requires explicit network denial, both temporary-directory exclusions, and an
+empty extra writable-root list. A completed native rollout then
+re-attests the exact CLI sandbox and native managed permission profile. The
+profile must explicitly report restricted network access and prove that no
+writable path exists for `read-only`, or that the sole writable path is the
+canonical worktree for `workspace-write`; the latter also requires explicit
+temporary-directory exclusions and an empty extra `writable_roots` list.
+
+`--receipt` must name an absolute, nonexistent file inside the physical
+worktree. The manager first durably stages the complete blocked
+`execution_pending` receipt in canonical manager state, which must be on the
+same volume and physically disjoint from the provider-writable worktree, then
+atomically admits that new file before provider work begins. Final publication
+must reproduce the physical worktree root, pending receipt identity, and exact
+prior-content hash, durably stage the complete final receipt under the same
+manager-only authority, then atomically replace the pending path. The staged
+file's new identity becomes the final proof, so an observer can see only a
+complete pending or complete final route, provider version, attempt, usage,
+outcome, and sanitized block reason. Parent, ancestor, overlapping-authority,
+and cross-volume publication drift fail closed. Provider errors and prompt
+content never enter receipts or blocked CLI output; a route, doctor, policy,
+usage, or provider failure remains blocked.
+
+`agents route probe` is the read-only, zero-token readiness check for the same
+canonical route boundary. With no flags it checks DarkFactory's default
+`medium` tier at `medium` effort; explicit model tier and effort remain
+independent. JSON output preserves the versioned route-probe report and exits
+nonzero when canonical configuration, the provider pin, executable
+verification, or credential presence is unready. The CLI never invokes a
+provider and deliberately exposes no reachability flag until a production
+executor can satisfy the bounded disposable-state contract.
+
 Memory mutations require `--source`, `--hash`, `--source-class`, and
 `--confidence`. Secret commands never print secret values. A live
 `agents secrets github sync` is an external mutation and requires an explicit
@@ -264,6 +346,11 @@ checksum-verified runner build is version-pinned with its upstream self-updater
 disabled, so local version truth remains Agent OS-owned.
 Runner mutations are Windows-only and fail closed on other platforms; `status`
 is read-only everywhere.
+
+Runner registration reads the canonical uppercase `GITHUB` secret only. Admit
+an already authorized owner credential through `agents secrets set GITHUB`
+(stdin by default, or `--from-file` for a verified local source); registration
+tokens remain short-lived and are never persisted.
 
 ### Runner status contract
 
