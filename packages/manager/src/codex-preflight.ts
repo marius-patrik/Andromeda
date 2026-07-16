@@ -102,7 +102,9 @@ export function attestCodexPreworkResponse(
     started.sandbox.type !== "workspaceWrite" ||
     !Array.isArray(writableRoots) ||
     writableRoots.length !== 0 ||
-    started.sandbox.networkAccess !== false
+    started.sandbox.networkAccess !== false ||
+    started.sandbox.excludeTmpdirEnvVar !== true ||
+    started.sandbox.excludeSlashTmp !== true
   ) {
     throw new CodexPreflightError("Codex resolved execution policy does not match the requested policy");
   }

@@ -18,6 +18,15 @@ const TIER_EXECUTION_FLAGS = [
   "agent",
   "agent-preset",
 ] as const;
+const TIER_ALLOWED_FLAGS = new Set([
+  "model-tier",
+  "effort",
+  "execution-policy",
+  "receipt",
+  "prompt-file",
+  "prompt-stdin",
+  "mode",
+]);
 
 export interface ModelExecutionCliInput {
   values: string[];
@@ -53,6 +62,8 @@ export async function modelExecutionRequestFromCli(input: ModelExecutionCliInput
   if (conflicting) {
     throw new Error(`run --model-tier cannot be combined with --${conflicting}`);
   }
+  const unknown = Object.keys(input.flags).find((name) => !TIER_ALLOWED_FLAGS.has(name));
+  if (unknown) throw new Error(`run --model-tier does not accept --${unknown}`);
   // Admit the complete control contract before opening or consuming a prompt
   // source. An incomplete invocation must not touch potentially sensitive input.
   const modelTier = requiredStringFlag(input.flags, "model-tier");

@@ -379,8 +379,8 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
                 type: "workspaceWrite",
                 writableRoots: [],
                 networkAccess: false,
-                excludeTmpdirEnvVar: false,
-                excludeSlashTmp: false,
+                excludeTmpdirEnvVar: true,
+                excludeSlashTmp: true,
               },
       },
     };
@@ -425,6 +425,33 @@ describe("Codex resolved execution-policy attestation (issue #257)", () => {
         fixture.started,
       ),
     ).toThrow("resolved execution policy does not match");
+  });
+
+  test("pre-work denied: workspace-write temporary-directory exclusions must both resolve true", () => {
+    const variants = [
+      { excludeTmpdirEnvVar: false, excludeSlashTmp: true },
+      { excludeTmpdirEnvVar: true, excludeSlashTmp: false },
+      { excludeSlashTmp: true },
+      { excludeTmpdirEnvVar: true },
+    ];
+    for (const [index, sandbox] of variants.entries()) {
+      const root = path.resolve(os.tmpdir(), `agents-codex-prework-tmp-denied-${index}`);
+      const fixture = preworkFixture(root, "workspace-write");
+      fixture.started.sandbox = {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: false,
+        ...sandbox,
+      };
+      expect(() =>
+        attestCodexPreworkResponse(
+          fixture.descriptor,
+          fixture.request,
+          fixture.initialized,
+          fixture.started,
+        ),
+      ).toThrow("resolved execution policy does not match");
+    }
   });
 
   test("pre-work denied: workspace-write resolving read-only is rejected", () => {

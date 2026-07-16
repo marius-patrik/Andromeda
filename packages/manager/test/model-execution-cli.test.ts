@@ -205,6 +205,19 @@ describe("model execution CLI prompt boundary", () => {
     }
   });
 
+  test("logical tier selection rejects unknown executable, registry, and fallback controls", async () => {
+    const root = await rootFixture();
+    for (const name of ["executable", "registry", "fallback"]) {
+      await expect(
+        modelExecutionRequestFromCli({
+          values: ["prompt"],
+          flags: { ...flags(root), [name]: "override" },
+          workdir: root,
+        }),
+      ).rejects.toThrow(`does not accept --${name}`);
+    }
+  });
+
   test("agents run routes the complete logical-tier contract and emits only a stable block", async () => {
     const { root, state, receiptDir } = await executionFixture();
     const receiptPath = path.join(receiptDir, "direct receipt.json");

@@ -274,7 +274,9 @@ prompt source is allowed: one positional value, one absolute `--prompt-file`, or
 Codex resolves the matching built-in `:read-only` or `:workspace` permission
 profile through an ephemeral, zero-token app-server thread before provider work.
 That receipt must bind the canonical model, provider home, worktree, approval
-policy, effort, and sole runtime workspace root. A completed native rollout then
+policy, effort, and sole runtime workspace root. Workspace-write preflight also
+requires explicit network denial, both temporary-directory exclusions, and an
+empty extra writable-root list. A completed native rollout then
 re-attests the exact CLI sandbox and native managed permission profile. The
 profile must explicitly report restricted network access and prove that no
 writable path exists for `read-only`, or that the sole writable path is the
