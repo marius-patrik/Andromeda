@@ -2,12 +2,14 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 export const API_ROOT = "https://api.github.com";
-export const AGENT_OS_DATA_REPO = "marius-patrik/agents-data";
+export const AGENT_OS_DATA_REPO = "marius-patrik/Andromeda-data";
 export const DARK_FACTORY_DATA_REPO = "marius-patrik/darkfactory-data";
 export const PARKED_REPOS = new Set([
   "marius-patrik/fabrica",
+  "marius-patrik/skyagent",
   "marius-patrik/skyblock-agent",
   "marius-patrik/singularity",
+  "marius-patrik/lifequest",
   "marius-patrik/life-support"
 ]);
 export const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
@@ -30,7 +32,8 @@ export const PLANNING_LABELS = [
   { name: "P1", color: "D93F0B", description: "Priority 1: important planned work" },
   { name: "P2", color: "FBCA04", description: "Priority 2: follow-up or lower urgency" },
   { name: "df:prd-drift", color: "B60205", description: "DarkFactory PRD drift report" },
-  { name: "df:audit", color: "0E8A16", description: "DarkFactory audit finding" }
+  { name: "df:audit", color: "0E8A16", description: "Legacy DarkFactory aggregate audit finding" },
+  { name: "df:doctor", color: "0E8A16", description: "DarkFactory repository-doctor repair finding" }
 ];
 
 const TRUSTED_WORKER_PULL_REQUEST_ACTOR = "darkfactory-agent";
@@ -130,13 +133,45 @@ export function normalizeInstallationRepository(repository) {
 
 export async function listInstallationRepositories(gh) {
   const repositories = [];
+  const seen = new Set();
+  let totalCount = null;
   for (let page = 1; page <= 20; page += 1) {
     const data = await gh.request("GET", `/installation/repositories?per_page=100&page=${page}`);
-    if (!Array.isArray(data.repositories) || data.repositories.length === 0) break;
-    repositories.push(...data.repositories);
-    if (data.repositories.length < 100) break;
+    if (
+      !data ||
+      typeof data !== "object" ||
+      !Number.isSafeInteger(data.total_count) ||
+      data.total_count < 0 ||
+      !Array.isArray(data.repositories) ||
+      data.repositories.length > 100
+    ) {
+      throw new Error("DarkFactory received malformed installation repository enumeration evidence.");
+    }
+    if (totalCount === null) totalCount = data.total_count;
+    if (data.total_count !== totalCount) {
+      throw new Error("DarkFactory observed installation repository enumeration drift between pages.");
+    }
+    for (const installationRepository of data.repositories) {
+      const normalized = normalizeInstallationRepository(installationRepository);
+      if (!normalized) {
+        throw new Error("DarkFactory received a malformed installation repository entry.");
+      }
+      const identity = normalizedRepoName(normalized.repository);
+      if (seen.has(identity)) {
+        throw new Error("DarkFactory received a duplicate installation repository entry.");
+      }
+      seen.add(identity);
+      repositories.push(installationRepository);
+    }
+    if (repositories.length > totalCount) {
+      throw new Error("DarkFactory received more installation repositories than the declared total.");
+    }
+    if (repositories.length === totalCount) return repositories;
+    if (data.repositories.length < 100) {
+      throw new Error("DarkFactory received an incomplete installation repository enumeration.");
+    }
   }
-  return repositories;
+  throw new Error("DarkFactory cannot prove complete installation repository enumeration within 20 pages.");
 }
 
 export async function listActiveManagedRepos(gh, controlRepo, options = {}) {
@@ -144,11 +179,19 @@ export async function listActiveManagedRepos(gh, controlRepo, options = {}) {
   const installationRepositories = options.repositories ?? await listInstallationRepositories(gh);
   const warn = options.warn ?? console.warn;
   const active = [];
+  const seen = new Set();
 
   for (const installationRepository of installationRepositories) {
     const normalized = normalizeInstallationRepository(installationRepository);
-    if (!normalized) continue;
+    if (!normalized) {
+      throw new Error("DarkFactory received a malformed installation repository entry.");
+    }
     const { repository, archived, disabled } = normalized;
+    const identity = normalizedRepoName(repository);
+    if (seen.has(identity)) {
+      throw new Error("DarkFactory received a duplicate installation repository entry.");
+    }
+    seen.add(identity);
     if (repository.owner !== controlRepo.owner) continue;
 
     const state = managedRepoLifecycleState(repository, registry);
@@ -772,12 +815,34 @@ export function listPackagePaths(treeEntries) {
       continue;
     }
     const dir = entry.path.slice(0, -"/package.json".length);
-    if (dir.includes("node_modules") || dir.includes("/.") || !dir) {
+    if (isNonProductPlanningPath(dir) || !dir) {
       continue;
     }
     packageDirs.add(dir);
   }
   return [...packageDirs].sort();
+}
+
+export function isNonProductPlanningPath(filePath) {
+  const segments = String(filePath || "")
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
+  const excluded = new Set([
+    "node_modules",
+    "templates",
+    "template",
+    "examples",
+    "example",
+    "fixtures",
+    "fixture",
+    "tests",
+    "test",
+    "archive",
+    "archived"
+  ]);
+  return segments.some((segment) => segment.startsWith(".") || excluded.has(segment));
 }
 
 export function scaffoldPackagePrd(repositoryName, options = {}) {

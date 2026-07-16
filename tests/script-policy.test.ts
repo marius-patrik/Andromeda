@@ -28,6 +28,7 @@ const {
   isParkedRepo,
   isVerifiedWorkerIssue,
   listActiveManagedRepos,
+  listInstallationRepositories,
   listPackagePaths,
   normalizeWorkerPullRequestActor,
   parsePrdItems,
@@ -92,12 +93,17 @@ test("parsePrdItems treats checked PRD checkboxes as a completion signal", () =>
   assert.equal(doneItem.marker, openItem.marker);
 });
 
-test("listPackagePaths finds package.json directories excluding node_modules", () => {
+test("listPackagePaths excludes dependencies and non-product template/example/test trees", () => {
   const paths = listPackagePaths([
     { type: "blob", path: "package.json" },
     { type: "blob", path: "packages/core/package.json" },
     { type: "blob", path: "packages/ui/package.json" },
     { type: "blob", path: "node_modules/lib/package.json" },
+    { type: "blob", path: "templates/sample/package.json" },
+    { type: "blob", path: "examples/demo/package.json" },
+    { type: "blob", path: "fixtures/repo/package.json" },
+    { type: "blob", path: "tests/fake/package.json" },
+    { type: "blob", path: "archive/old/package.json" },
     { type: "blob", path: "packages/core/index.ts" }
   ]);
 
@@ -356,9 +362,12 @@ test("extractClosingIssueNumbers deduplicates close references", () => {
 
 test("parked repositories include the current owner exclusions", () => {
   assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "skyblock-agent" }), true);
+  assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "SkyAgent" }), true);
   assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "fabrica" }), true);
+  assert.equal(isParkedRepo({ owner: "marius-patrik", repo: "LifeQuest" }), true);
   assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "singularity" }), /parked/);
   assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "life-support" }), /parked/);
+  assert.throws(() => assertAllowedRepo({ owner: "marius-patrik", repo: "LifeQuest" }), /parked/);
 });
 
 test("listActiveManagedRepos excludes archived, disabled, and non-active lifecycle repos", async () => {
@@ -398,6 +407,63 @@ test("listActiveManagedRepos excludes archived, disabled, and non-active lifecyc
   assert.ok(warnings.some((warning) => warning.includes("disabled=true")));
   assert.ok(warnings.some((warning) => warning.includes("managed lifecycle state is 'parked'")));
   assert.ok(warnings.some((warning) => warning.includes("managed lifecycle state is 'removed'")));
+});
+
+test("installation repository enumeration is total-bound, strict, and fail-closed", async () => {
+  const firstPage = Array.from({ length: 100 }, (_, index) => ({
+    full_name: `marius-patrik/repo-${index}`,
+    archived: false,
+    disabled: false
+  }));
+  const secondPage = [{ full_name: "marius-patrik/repo-100", archived: false, disabled: false }];
+  const calls: string[] = [];
+  const repositories = await listInstallationRepositories({
+    async request(_method: string, requestPath: string) {
+      calls.push(requestPath);
+      return requestPath.endsWith("page=1")
+        ? { total_count: 101, repositories: firstPage }
+        : { total_count: 101, repositories: secondPage };
+    }
+  });
+  assert.equal(repositories.length, 101);
+  assert.equal(calls.length, 2);
+
+  await assert.rejects(
+    () => listInstallationRepositories({ request: async () => ({ repositories: [] }) }),
+    /malformed installation repository enumeration evidence/
+  );
+  await assert.rejects(
+    () => listInstallationRepositories({
+      request: async (_method: string, requestPath: string) => requestPath.endsWith("page=1")
+        ? { total_count: 101, repositories: firstPage }
+        : { total_count: 101, repositories: [] }
+    }),
+    /incomplete installation repository enumeration/
+  );
+  let cappedPage = 0;
+  await assert.rejects(
+    () => listInstallationRepositories({
+      async request() {
+        cappedPage += 1;
+        return {
+          total_count: 2001,
+          repositories: Array.from({ length: 100 }, (_, index) => ({
+            full_name: `marius-patrik/capped-${cappedPage}-${index}`
+          }))
+        };
+      }
+    }),
+    /cannot prove complete installation repository enumeration/
+  );
+  assert.equal(cappedPage, 20);
+  await assert.rejects(
+    () => listActiveManagedRepos(
+      { request: async () => ({ total_count: 0, repositories: [] }) },
+      { owner: "marius-patrik", repo: "DarkFactory" },
+      { repositories: [{ full_name: "marius-patrik/valid" }, { unexpected: true }], registry: { repositories: {} } }
+    ),
+    /malformed installation repository entry/
+  );
 });
 
 test("canonical Andromeda installation names resolve through the live managed registry", async () => {
@@ -642,31 +708,48 @@ test("df-plan preserves PRD sequence references across completed predecessors", 
   assert.match(source, /create-closed-completed-prd-issue/);
 });
 
-test("df-audit script performs deterministic repo audits and files findings as issues", async () => {
+test("repository doctor performs deterministic diagnosis and explicit per-finding reporting", async () => {
   const source = await readFile(new URL("../.github/scripts/df-audit.mjs", import.meta.url), "utf8");
 
-  assert.match(source, /auditGitState/);
+  assert.match(source, /runRepositoryDoctor/);
+  assert.match(source, /auditBranchAndReleaseState/);
+  assert.match(source, /auditManagedFileDrift/);
+  assert.match(source, /auditRepositoryTree/);
   assert.match(source, /auditHealth/);
-  assert.match(source, /auditEnforcement/);
   assert.match(source, /auditPrdDrift/);
   assert.match(source, /auditDocStaleness/);
-  assert.match(source, /upsertAuditIssue/);
-  assert.match(source, /closeResolvedAuditIssue/);
-  assert.match(source, /df-audit/);
-  assert.match(source, /df:audit/);
+  assert.match(source, /auditWorkerSessionIsolation/);
+  assert.match(source, /reconcileDoctorIssues/);
+  assert.match(source, /df-doctor/);
+  assert.match(source, /df:doctor/);
+  assert.match(source, /parseDoctorMode/);
+  assert.match(source, /mode === "report"/);
+  assert.match(source, /mode === "report"[\s\S]+requiredEnv\("DF_LEDGER_TOKEN"\)/);
+  assert.match(source, /ledgerToken === token/);
+  assert.match(source, /publishDoctorReport\(github, options\.ledgerGithub/);
+  assert.match(source, /writeDoctorLedger\(ledgerGithub/);
+  assert.doesNotMatch(source, /writeDoctorLedger\((?:github|options\.github)/);
+  assert.doesNotMatch(source, /ensureLabels/);
+  assert.match(source, /repair mode is not implemented/);
   assert.match(source, /writeRunLedger/);
-  assert.match(source, /codex_calls:\s*0/);
-  assert.match(source, /listActiveManagedRepos\(gh, controlRepo, \{ registry \}\)/);
+  assert.match(source, /model_calls:\s*0/);
+  assert.match(source, /listActiveManagedRepos/);
   assert.match(source, /auditSubmoduleState/);
   assert.doesNotMatch(source, /\bcodex\s+exec\b|CODEX_AUTH_JSON|DF_WORKER_IMAGE|docker\s+run/);
 });
 
-test("df-audit workflow schedules trusted managed-repo audits", async () => {
+test("repository doctor workflow schedules trusted diagnosis with explicit report authority", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-audit.yml", import.meta.url), "utf8");
+  const parsed = loadYaml(workflow);
+  const steps = parsed.jobs["repository-doctor"].steps;
+  const targetToken = steps.find((step: any) => step.name === "Mint least-privilege target doctor token");
+  const ledgerToken = steps.find((step: any) => step.name === "Mint repository-scoped ledger token");
+  const doctorStep = steps.find((step: any) => step.name === "Run deterministic repository doctor");
   const gate = workflow.indexOf("Validate trusted control ref");
-  const checkout = workflow.indexOf("Checkout DarkFactory control scripts");
-  const token = workflow.indexOf("Mint mp-agents installation token");
+  const checkout = workflow.indexOf("Checkout trusted doctor source");
+  const token = workflow.indexOf("Mint least-privilege target doctor token");
 
+  assert.match(workflow, /name: DarkFactory Repository Doctor/);
   assert.match(workflow, /^\s+schedule:\s*$/m);
   assert.match(workflow, /^\s+workflow_dispatch:\s*$/m);
   assert.match(workflow, /github\.repository == 'marius-patrik\/DarkFactory'/);
@@ -677,19 +760,38 @@ test("df-audit workflow schedules trusted managed-repo audits", async () => {
   assert.ok(checkout < token);
   assert.match(workflow, /GITHUB_REF.*refs\/heads\/main/);
   assert.doesNotMatch(workflow, /GITHUB_REF.*refs\/heads\/dev/);
-  assert.match(workflow, /Validate manual audit target repository/);
-  assert.match(workflow, /marius-patrik\/fabrica/);
-  assert.match(workflow, /must be a marius-patrik repository/);
-  assert.match(workflow, /DF_MANUAL_AUDIT_REPO: \$\{\{ inputs\.repo \}\}/);
-  assert.match(workflow, /repo="\$\{DF_MANUAL_AUDIT_REPO\}"/);
-  assert.doesNotMatch(workflow, /repo="\$\{\{ inputs\.repo \}\}"/);
-  assert.match(workflow, /path=\.github\/scripts\/df-audit\.mjs/);
-  assert.match(workflow, /permission-actions:\s+read/);
-  assert.match(workflow, /permission-contents:\s+write/);
-  assert.match(workflow, /permission-issues:\s+write/);
-  assert.doesNotMatch(workflow, /permission-pull-requests:\s+write/);
-  assert.match(workflow, /DF_AUDIT_ALL/);
+  assert.match(workflow, /Validate manual target/);
+  assert.match(workflow, /DF_MANUAL_DOCTOR_REPO: \$\{\{ inputs\.repo \}\}/);
+  assert.match(workflow, /write_issues:/);
+  assert.equal(targetToken.with["permission-administration"], "read");
+  assert.equal(targetToken.with["permission-actions"], "read");
+  assert.equal(targetToken.with["permission-checks"], "read");
+  assert.equal(targetToken.with["permission-contents"], "read");
+  assert.match(targetToken.with["permission-issues"], /write.*read/);
+  assert.equal(targetToken.with["permission-pull-requests"], "read");
+  assert.equal(targetToken.with["permission-secrets"], "read");
+  assert.equal(targetToken.with["permission-statuses"], "read");
+  assert.equal(ledgerToken.with.repositories, "darkfactory-data");
+  assert.equal(ledgerToken.with["permission-contents"], "write");
+  assert.match(ledgerToken.if, /schedule.*write_issues/);
+  assert.match(doctorStep.env.DF_LEDGER_TOKEN, /ledger-token\.outputs\.token/);
+  assert.equal(steps.some((step: any) => /label/i.test(step.name || "") && /POST|PATCH/.test(step.run || "")), false);
+  assert.match(workflow, /DF_DOCTOR_ALL/);
+  assert.match(workflow, /DF_DOCTOR_MODE/);
+  assert.match(workflow, /repository-doctor-report\.json/);
+  assert.match(workflow, /model_calls=0/);
   assert.doesNotMatch(workflow, /DF_DATA_REPO/);
+});
+
+test("managed repository sync binds the canonical Andromeda-data checkout to AGENTS_HOME", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/sync-managed-repos.yml", import.meta.url), "utf8");
+
+  assert.match(workflow, /repository:\s+marius-patrik\/Andromeda-data\b/);
+  assert.match(workflow, /AGENTS_HOME:\s+\$\{\{ github\.workspace \}\}\/\.andromeda-data/);
+  assert.match(workflow, /repo:'marius-patrik\/Andromeda-data'/);
+  assert.match(workflow, /path:process\.env\.AGENTS_HOME/);
+  assert.doesNotMatch(workflow, /repository:\s+marius-patrik\/agents-data\b/);
+  assert.doesNotMatch(workflow, /process\.env\.AGENTS_ROOT\s*\+\s*['"]\/data\/agent-os/);
 });
 
 test("df-follow-through workflow validates trusted refs before privileged tokens", async () => {

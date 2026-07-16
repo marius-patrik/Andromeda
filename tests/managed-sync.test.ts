@@ -42,7 +42,7 @@ const PACKAGE_MANAGED_PATHS = new Set([
 ]);
 
 async function seedCanonicalManagedSource(root: string): Promise<{ managedRoot: string; registryPath: string }> {
-  const dataRoot = join(root, "data", "agent-os");
+  const dataRoot = root;
   const managedRoot = join(dataRoot, "managed-repository");
   const registryPath = join(root, "data-repos.json");
   const requiredFiles = requiredManagedFilePaths();
@@ -67,7 +67,7 @@ async function seedCanonicalManagedSource(root: string): Promise<{ managedRoot: 
   }
   await writeFile(
     registryPath,
-    JSON.stringify([{ id: "agent-os-data", repo: "marius-patrik/agents-data", path: dataRoot }])
+    JSON.stringify([{ id: "agent-os-data", repo: "marius-patrik/Andromeda-data", path: dataRoot }])
   );
   return { managedRoot, registryPath };
 }
@@ -83,7 +83,7 @@ test("managedSetupPullRequestBody lists changed files and documents Agent OS-own
   assert.doesNotMatch(body, /\.agents\/\.global/);
   assert.match(body, /\.github\/workflows\/ci\.yml/);
   assert.match(body, /\.github\/workflows\/dark-factory-bootstrap\.yml/);
-  assert.match(body, /\.agents\/.project` is managed only when a repo-specific `agents-data` overlay exists/);
+  assert.match(body, /\.agents\/.project` is managed only when a repo-specific Andromeda-data overlay exists/);
   assert.match(body, /Shared Agent OS identity/);
   assert.match(body, /labels, branching, installer, and orchestration behavior/);
   assert.match(body, /dark-factory-autoupdate\.yml/);
@@ -250,11 +250,11 @@ test("orderManagedRepositoriesForSync deduplicates repository entries case-insen
 test("readManagedFiles supplies every required package-managed payload", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
   const previousRegistry = process.env.AGENTS_DATA_REPOS;
-  const previousAgentsRoot = process.env.AGENTS_ROOT;
+  const previousAgentsHome = process.env.AGENTS_HOME;
 
   try {
     const { registryPath } = await seedCanonicalManagedSource(root);
-    process.env.AGENTS_ROOT = root;
+    process.env.AGENTS_HOME = root;
     process.env.AGENTS_DATA_REPOS = registryPath;
     const requiredPaths = requiredManagedFilePaths();
     assert.equal(requiredPaths.some((path) => path.startsWith(".agents/.global")), false);
@@ -267,8 +267,8 @@ test("readManagedFiles supplies every required package-managed payload", async (
   } finally {
     if (previousRegistry === undefined) delete process.env.AGENTS_DATA_REPOS;
     else process.env.AGENTS_DATA_REPOS = previousRegistry;
-    if (previousAgentsRoot === undefined) delete process.env.AGENTS_ROOT;
-    else process.env.AGENTS_ROOT = previousAgentsRoot;
+    if (previousAgentsHome === undefined) delete process.env.AGENTS_HOME;
+    else process.env.AGENTS_HOME = previousAgentsHome;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -276,11 +276,11 @@ test("readManagedFiles supplies every required package-managed payload", async (
 test("readManagedFiles does not ship the control-only event forward workflow", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
   const previousRegistry = process.env.AGENTS_DATA_REPOS;
-  const previousAgentsRoot = process.env.AGENTS_ROOT;
+  const previousAgentsHome = process.env.AGENTS_HOME;
 
   try {
     const { managedRoot, registryPath } = await seedCanonicalManagedSource(root);
-    process.env.AGENTS_ROOT = root;
+    process.env.AGENTS_HOME = root;
     process.env.AGENTS_DATA_REPOS = registryPath;
     const eventForwardPath = join(managedRoot, ".github", "workflows", "df-event-forward.yml");
     await mkdir(dirname(eventForwardPath), { recursive: true });
@@ -295,8 +295,8 @@ test("readManagedFiles does not ship the control-only event forward workflow", a
   } finally {
     if (previousRegistry === undefined) delete process.env.AGENTS_DATA_REPOS;
     else process.env.AGENTS_DATA_REPOS = previousRegistry;
-    if (previousAgentsRoot === undefined) delete process.env.AGENTS_ROOT;
-    else process.env.AGENTS_ROOT = previousAgentsRoot;
+    if (previousAgentsHome === undefined) delete process.env.AGENTS_HOME;
+    else process.env.AGENTS_HOME = previousAgentsHome;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -304,10 +304,10 @@ test("readManagedFiles does not ship the control-only event forward workflow", a
 test("readManagedFiles rejects duplicate package-owned payloads in managed data", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-managed-root-"));
   const previousRegistry = process.env.AGENTS_DATA_REPOS;
-  const previousAgentsRoot = process.env.AGENTS_ROOT;
+  const previousAgentsHome = process.env.AGENTS_HOME;
   try {
     const { managedRoot, registryPath } = await seedCanonicalManagedSource(root);
-    process.env.AGENTS_ROOT = root;
+    process.env.AGENTS_HOME = root;
     process.env.AGENTS_DATA_REPOS = registryPath;
     const duplicatePath = join(managedRoot, ...DARK_FACTORY_PLAN_WORKFLOW_PATH.split("/"));
     await mkdir(dirname(duplicatePath), { recursive: true });
@@ -317,20 +317,20 @@ test("readManagedFiles rejects duplicate package-owned payloads in managed data"
   } finally {
     if (previousRegistry === undefined) delete process.env.AGENTS_DATA_REPOS;
     else process.env.AGENTS_DATA_REPOS = previousRegistry;
-    if (previousAgentsRoot === undefined) delete process.env.AGENTS_ROOT;
-    else process.env.AGENTS_ROOT = previousAgentsRoot;
+    if (previousAgentsHome === undefined) delete process.env.AGENTS_HOME;
+    else process.env.AGENTS_HOME = previousAgentsHome;
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("readManagedFiles resolves only the canonical Agent OS data registry record", async () => {
+test("readManagedFiles resolves exactly one canonical Agent OS data authority while allowing unrelated registrations", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-agent-os-data-"));
   const previousRegistry = process.env.AGENTS_DATA_REPOS;
-  const previousAgentsRoot = process.env.AGENTS_ROOT;
+  const previousAgentsHome = process.env.AGENTS_HOME;
 
   try {
     const { registryPath } = await seedCanonicalManagedSource(root);
-    process.env.AGENTS_ROOT = root;
+    process.env.AGENTS_HOME = root;
     process.env.AGENTS_DATA_REPOS = registryPath;
 
     const files = readManagedFiles();
@@ -338,32 +338,44 @@ test("readManagedFiles resolves only the canonical Agent OS data registry record
 
     await writeFile(
       registryPath,
-      JSON.stringify([{ id: "agent-os-data", repo: "marius-patrik/agents-data", path: join(root, "different") }])
+      JSON.stringify([{ id: "agent-os-data", repo: "marius-patrik/Andromeda-data", path: join(root, "different") }])
     );
     assert.throws(() => readManagedFiles(), /agent-os-data path must be/);
 
     await writeFile(
       registryPath,
-      JSON.stringify([{ id: "agent-os-data", repo: "wrong/data", path: join(root, "data", "agent-os") }])
+      JSON.stringify([{ id: "agent-os-data", repo: "wrong/data", path: root }])
     );
-    assert.throws(() => readManagedFiles(), /must use repository marius-patrik\/agents-data/);
+    assert.throws(() => readManagedFiles(), /must use repository marius-patrik\/Andromeda-data/);
 
     await writeFile(registryPath, JSON.stringify([]));
-    assert.throws(() => readManagedFiles(), /only the agent-os-data record/);
+    assert.throws(() => readManagedFiles(), /exactly one agent-os-data record/);
 
     await writeFile(
       registryPath,
       JSON.stringify([
-        { id: "agent-os-data", repo: "marius-patrik/agents-data", path: join(root, "data", "agent-os") },
-        { id: "other-data", repo: "marius-patrik/other", path: join(root, "data", "other") }
+        { id: "agent-os-data", repo: "marius-patrik/Andromeda-data", path: root },
+        { id: "other-data", repo: "marius-patrik/other", path: join(root, "other") }
       ])
     );
-    assert.throws(() => readManagedFiles(), /only the agent-os-data record/);
+    assert.ok(readManagedFiles().some((file) => file.path === "AGENTS.md"));
+
+    await writeFile(
+      registryPath,
+      JSON.stringify([
+        { id: "agent-os-data", repo: "marius-patrik/Andromeda-data", path: root },
+        { id: "agent-os-data", repo: "marius-patrik/Andromeda-data", path: root }
+      ])
+    );
+    assert.throws(() => readManagedFiles(), /exactly one agent-os-data record/);
+
+    await writeFile(registryPath, JSON.stringify([null]));
+    assert.throws(() => readManagedFiles(), /Invalid Agent OS data repository registry record/);
   } finally {
     if (previousRegistry === undefined) delete process.env.AGENTS_DATA_REPOS;
     else process.env.AGENTS_DATA_REPOS = previousRegistry;
-    if (previousAgentsRoot === undefined) delete process.env.AGENTS_ROOT;
-    else process.env.AGENTS_ROOT = previousAgentsRoot;
+    if (previousAgentsHome === undefined) delete process.env.AGENTS_HOME;
+    else process.env.AGENTS_HOME = previousAgentsHome;
     await rm(root, { recursive: true, force: true });
   }
 });
