@@ -105,6 +105,9 @@ export async function runComposedTurn({
     throw stableError("target_policy_blocked", "Autoreview requires an exact trusted control revision");
   }
   const workItemKind = snapshot.kind === "pull_request" ? "pr" : "issue";
+  // Protocol phases use underscores; the canonical model-turn seam admits only
+  // hyphenated turn names, so normalize exactly that separator.
+  const seamTurnName = turnName.replaceAll("_", "-");
   const versionDigest = sha256(snapshot.version).slice(0, 12);
   const contextComments = findings.length > 0
     ? [`Complete current findings: ${JSON.stringify(findings)}`]
@@ -114,7 +117,7 @@ export async function runComposedTurn({
     turn = await executeModelTurn(
       {
         intent: {
-          runId: `autoreview-${workItemKind}-${snapshot.number}-${turnName}-${versionDigest}`,
+          runId: `autoreview-${workItemKind}-${snapshot.number}-${seamTurnName}-${versionDigest}`,
           triggeredBy: "workflow",
           profile,
           repository: { owner, repo, defaultBranch: snapshot.defaultBranch },
@@ -150,7 +153,7 @@ export async function runComposedTurn({
         request,
         promptsRoot: path.join(CONTROL_ROOT, "prompts"),
         tempRoot: path.join(tempRoot, "model-turns"),
-        turnName,
+        turnName: seamTurnName,
         cwd: tempRoot,
         executionPolicy: "read-only",
         environment
