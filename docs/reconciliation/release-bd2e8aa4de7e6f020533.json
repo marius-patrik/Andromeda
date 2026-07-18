@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "planId": "release-bd2e8aa4de7e6f020533",
+  "issue": 366,
+  "repository": "marius-patrik/DarkFactory",
+  "protectedBase": "dev",
+  "baseSha": "13c4b96d16410dfb6cf108f50c32bce763540d91",
+  "incorporatedMainSha": "6cf08fc896b39249be8295be66809f1ce9b48587",
+  "reconciliationCommit": "6776b7b2cc815ec33f9094f95eefbb960d60bf1c",
+  "resolution": "The current dev tree is the semantic superset; conflicting Autoreview hunks retain dev while the merge commit preserves both histories.",
+  "treeProof": {
+    "baseTree": "8bfa377804252df266444b1b1440d6736b59e07e",
+    "reconciliationTreeBeforeReceipt": "8bfa377804252df266444b1b1440d6736b59e07e",
+    "identical": true
+  },
+  "validation": {
+    "command": "npm run check",
+    "testsPassed": 642,
+    "testsSkipped": 1,
+    "typecheck": "passed",
+    "actions": "passed",
+    "templates": "passed",
+    "build": "passed"
+  }
+}
