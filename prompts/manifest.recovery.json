@@ -412,7 +412,7 @@
       "kind": "role",
       "path": "roles/pr-fixer.md",
       "version": "0.2.0",
-      "checksum": "sha256:9ec7b85f345f807eb916976163cd012df8ca918987c4fc49781e2de0ed5b89c0",
+      "checksum": "sha256:a1b45c631f8b42fc7ccdf57bdbd8d111dedf5d9b3a29fa3aade86861eeffc588",
       "variables": [
         "repository.fullName",
         "workItem.number"
@@ -1465,7 +1465,7 @@
       "snapshot": "fixtures/snapshots/pr-fixer.snapshot.md",
       "version": "0.3.0",
       "checksum": "sha256:add53083ecf202affdd8b80690bbdf884d9218c4a596d769694bad5579c90052",
-      "snapshotChecksum": "sha256:3f8637162c33ee57031b19cbb39ff48f67b1b7044c6c7c0035b250e6c13e2615",
+      "snapshotChecksum": "sha256:a3b29b2924a3338472cbc56be59d5ccb47e3e36005ed8830fc445e18af7df09f",
       "covers": [
         "output/pr-fixer",
         "overlay/agent-os-boundary",
