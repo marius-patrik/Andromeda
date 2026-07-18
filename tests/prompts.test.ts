@@ -1325,6 +1325,7 @@ test("Autoreview leaves execution evidence to the independent Validate gate", ()
 
   const fixer = composePrompt(loadFixture(realRoot, "fixtures/compose/pr-fixer.fixture.json"), realRoot);
   assert.match(fixer, /read-only fixers propose bounded changes\s+without claiming or rerunning validation commands/);
+  assert.match(fixer, /reviewer and\s+read-only fixer profiles never execute validation commands/);
   assert.match(fixer, /Do not write, commit, push, merge, execute validation commands/);
   assert.match(fixer, /trusted runtime re-verifies the open same-repository head/);
   assert.match(fixer, /it alone admits and applies\s+the proposal, creates a normal follow-up commit, and pushes the existing head/);
