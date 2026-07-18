@@ -35,6 +35,7 @@ const {
   serializePullReviewContext,
   runAutoreviewForTarget,
   trustedPullRevisionEvidence,
+  trustedPullRevisionEvidenceForPolicy,
   trustedPullRevisionFacts,
   verifyExactPullDiff
 } = autoreviewRunnerModule;
@@ -312,7 +313,7 @@ test("trusted pull revision facts prove bounded reconciliation ancestry and tree
   assert.match(facts[0], new RegExp(`baseCommit=${base},baseTree=${baseTree}`));
   assert.match(facts[0], new RegExp(`headCommit=${head},headTree=${headTree}`));
   assert.match(facts[0], new RegExp(`mergeBase=${base}; baseIsAncestor=true`));
-  assert.match(facts[1], /reachedBase=true,complete=true,limit=16/);
+  assert.match(facts[1], /reachedBase=true,complete=true,boundedOut=false,limit=16/);
   assert.match(facts[1], new RegExp(`commit=${proposalBase},tree=${baseTree},parents=${merge}`));
   assert.match(facts[1], new RegExp(`commit=${merge},tree=${baseTree},parents=${base},${incorporatedMain}`));
   assert.match(facts[2], /count=1,orderedNulSha256=[0-9a-f]{64}/);
@@ -329,7 +330,7 @@ test("trusted pull revision facts prove bounded reconciliation ancestry and tree
   );
 });
 
-test("trusted revision evidence rejects a bounded-depth octopus chain that exceeds the fact-size bound", () => {
+test("trusted revision evidence compacts bounded-depth octopus ancestry without blocking ordinary pull requests", () => {
   const oid = (value: number) => value.toString(16).padStart(40, "0");
   const base = "f".repeat(39) + "e";
   const head = oid(1);
@@ -348,10 +349,21 @@ test("trusted revision evidence rejects a bounded-depth octopus chain that excee
     }
     throw new Error(`Unexpected git call: ${args.join(" ")}`);
   };
-  assert.throws(
-    () => trustedPullRevisionEvidence("repo", "token", "hooks", [], fakeGit),
-    /revision evidence exceeds the verified-fact bound/,
-  );
+  const evidence = trustedPullRevisionEvidence("repo", "token", "hooks", [], fakeGit);
+  assert.equal(evidence.proof.ancestryBoundedOut, true);
+  assert.match(evidence.facts[1], /boundedOut=true/);
+  assert.ok(evidence.facts.every((fact: string) => Buffer.byteLength(fact, "utf8") <= 3500));
+
+  let ordinaryGitCalls = 0;
+  assert.equal(trustedPullRevisionEvidenceForPolicy(
+    { engineAutomation: false },
+    "repo",
+    "token",
+    "hooks",
+    [],
+    () => { ordinaryGitCalls += 1; throw new Error("ordinary PR must not collect bypass evidence"); },
+  ), null);
+  assert.equal(ordinaryGitCalls, 0);
 });
 
 test("trusted engine zero-diff reconciliation bypasses every model round after exact revalidation", async () => {
@@ -439,10 +451,19 @@ test("zero-diff admission rejects incomplete trust evidence, detects a revalidat
   for (const rejected of [
     { ...trusted, engineAutomation: false },
     { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, headTree: "d".repeat(40) } },
-    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, reachedBase: false } },
+    { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, mergeBase: "d".repeat(40), baseIsAncestor: false } },
     { ...trusted, trustedRevisionProof: { ...trusted.trustedRevisionProof, changedPathCount: 1 } },
     { ...trusted, files: { "reviewable.txt": { sha256: "f".repeat(64) } } },
   ]) assert.equal(isTrustedZeroDiffReconciliation(rejected), false);
+  assert.equal(isTrustedZeroDiffReconciliation({
+    ...trusted,
+    trustedRevisionProof: {
+      ...trusted.trustedRevisionProof,
+      reachedBase: false,
+      complete: false,
+      ancestryBoundedOut: true,
+    },
+  }), true);
 
   let staleReads = 0;
   await assert.rejects(

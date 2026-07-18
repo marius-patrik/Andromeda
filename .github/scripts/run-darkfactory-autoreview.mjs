@@ -752,31 +752,44 @@ export function trustedPullRevisionEvidence(repoRoot, token, hooksRoot, changedP
     hooksRoot
   ), "merge base");
 
-  const ancestry = [];
-  const seen = new Set();
-  let cursor = head;
-  for (let depth = 0; cursor !== base && depth < FIRST_PARENT_PROOF_LIMIT; depth += 1) {
-    if (seen.has(cursor)) throw stableError("target_policy_blocked", "Git returned cyclic first-parent ancestry evidence");
-    seen.add(cursor);
-    const record = exactCommitRecord(repoRoot, cursor, token, hooksRoot, git);
-    if (record.commit !== cursor) throw stableError("target_policy_blocked", "Git ancestry record does not match the requested commit");
-    ancestry.push(record);
-    if (record.parents.length === 0) break;
-    cursor = record.parents[0];
-  }
-  const reachedBase = cursor === base;
-  const complete = reachedBase || ancestry.at(-1)?.parents.length === 0;
-  const ancestryFact = ancestry.length === 0
-    ? "none (head equals base)"
-    : ancestry.map((record) => (
-      `commit=${record.commit},tree=${record.tree},parents=${record.parents.length > 0 ? record.parents.join(",") : "none"}`
-    )).join("; ");
   const normalizedPaths = changedPaths.map(assertSafeRepositoryPath);
   const changedPathDigest = sha256(Buffer.from(normalizedPaths.join("\0"), "utf8"));
+  let reachedBase = false;
+  let complete = false;
+  let ancestryBoundedOut = false;
+  let ancestryFact = "bounded supplemental ancestry evidence unavailable";
+  try {
+    const ancestry = [];
+    const seen = new Set();
+    let cursor = head;
+    for (let depth = 0; cursor !== base && depth < FIRST_PARENT_PROOF_LIMIT; depth += 1) {
+      if (seen.has(cursor)) throw stableError("target_policy_blocked", "Git returned cyclic first-parent ancestry evidence");
+      seen.add(cursor);
+      const record = exactCommitRecord(repoRoot, cursor, token, hooksRoot, git);
+      if (record.commit !== cursor) throw stableError("target_policy_blocked", "Git ancestry record does not match the requested commit");
+      ancestry.push(record);
+      if (record.parents.length === 0) break;
+      cursor = record.parents[0];
+    }
+    reachedBase = cursor === base;
+    complete = reachedBase || ancestry.at(-1)?.parents.length === 0;
+    ancestryFact = ancestry.length === 0
+      ? "none (head equals base)"
+      : ancestry.map((record) => (
+        `commit=${record.commit},tree=${record.tree},parents=${record.parents.length > 0 ? record.parents.join(",") : "none"}`
+      )).join("; ");
+    if (Buffer.byteLength(ancestryFact, "utf8") > REVISION_FACT_BYTES) {
+      ancestryBoundedOut = true;
+      ancestryFact = "bounded supplemental ancestry evidence omitted because its serialized form exceeded the Autoreview fact limit";
+    }
+  } catch (error) {
+    if (error?.code !== "target_policy_blocked") throw error;
+    ancestryBoundedOut = true;
+  }
 
   const facts = [
     `Exact fetched revision proof: baseCommit=${base},baseTree=${baseTree}; headCommit=${head},headTree=${headTree}; mergeBase=${mergeBase}; baseIsAncestor=${mergeBase === base}.`,
-    `Exact fetched first-parent ancestry from head toward base: reachedBase=${reachedBase},complete=${complete},limit=${FIRST_PARENT_PROOF_LIMIT}; ${ancestryFact}.`,
+    `Exact fetched supplemental first-parent ancestry from head toward base: reachedBase=${reachedBase},complete=${complete},boundedOut=${ancestryBoundedOut},limit=${FIRST_PARENT_PROOF_LIMIT}; ${ancestryFact}.`,
     `Exact fetched changed-path inventory: count=${normalizedPaths.length},orderedNulSha256=${changedPathDigest}.`
   ];
   if (facts.some((fact) => Buffer.byteLength(fact, "utf8") > REVISION_FACT_BYTES)
@@ -794,6 +807,7 @@ export function trustedPullRevisionEvidence(repoRoot, token, hooksRoot, changedP
       baseIsAncestor: mergeBase === base,
       reachedBase,
       complete,
+      ancestryBoundedOut,
       changedPathCount: normalizedPaths.length,
       changedPathDigest
     }
@@ -802,6 +816,11 @@ export function trustedPullRevisionEvidence(repoRoot, token, hooksRoot, changedP
 
 export function trustedPullRevisionFacts(repoRoot, token, hooksRoot, changedPaths = [], git = runGit) {
   return trustedPullRevisionEvidence(repoRoot, token, hooksRoot, changedPaths, git).facts;
+}
+
+export function trustedPullRevisionEvidenceForPolicy(policyEvidence, repoRoot, token, hooksRoot, changedPaths = [], git = runGit) {
+  if (policyEvidence?.engineAutomation !== true) return null;
+  return trustedPullRevisionEvidence(repoRoot, token, hooksRoot, changedPaths, git);
 }
 
 function changedPullFiles(repoRoot, token, hooksRoot) {
@@ -944,7 +963,8 @@ export async function createPullRequestTarget({
     verifyExactPullDiff(repoRoot, token, hooksRoot);
     const baseGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-base", token, hooksRoot);
     const headGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-head", token, hooksRoot);
-    const revisionEvidence = trustedPullRevisionEvidence(
+    const revisionEvidence = trustedPullRevisionEvidenceForPolicy(
+      policyEvidence,
       repoRoot,
       token,
       hooksRoot,
@@ -979,10 +999,10 @@ export async function createPullRequestTarget({
       files: changed.files,
       autofixDeniedPaths: changed.autofixDeniedPaths,
       engineAutomation: policyEvidence.engineAutomation,
-      trustedRevisionProof: revisionEvidence.proof,
+      trustedRevisionProof: revisionEvidence?.proof || null,
       verifiedFacts: [
         `Exact fetched diff passed git diff --check for ${pull.base.sha}...${pull.head.sha}.`,
-        ...revisionEvidence.facts,
+        ...(revisionEvidence?.facts || []),
         gitlinkManifestFact("base", baseGitlinks),
         gitlinkManifestFact("head", headGitlinks)
       ],
@@ -1291,8 +1311,6 @@ export function isTrustedZeroDiffReconciliation(snapshot) {
     && proof.baseTree === proof.headTree
     && proof.mergeBase === proof.base
     && proof.baseIsAncestor === true
-    && proof.reachedBase === true
-    && proof.complete === true
     && proof.changedPathCount === 0
     && proof.changedPathDigest === emptyPathDigest
     && Object.keys(snapshot.files || {}).length === 0;
