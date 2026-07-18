@@ -13,6 +13,19 @@
     "reconciliationTreeBeforeReceipt": "8bfa377804252df266444b1b1440d6736b59e07e",
     "identical": true
   },
+  "trustedEvidenceRequirement": {
+    "findingId": "df-569fae03067b4dff3d14",
+    "status": "requires-exact-head-runtime-verification",
+    "reconciliationParents": [
+      "13c4b96d16410dfb6cf108f50c32bce763540d91",
+      "6cf08fc896b39249be8295be66809f1ce9b48587"
+    ],
+    "requiredTreeIdentity": {
+      "leftCommit": "13c4b96d16410dfb6cf108f50c32bce763540d91",
+      "rightCommit": "6776b7b2cc815ec33f9094f95eefbb960d60bf1c",
+      "expectedTree": "8bfa377804252df266444b1b1440d6736b59e07e"
+    }
+  },
   "validation": {
     "command": "npm run check",
     "testsPassed": 642,
