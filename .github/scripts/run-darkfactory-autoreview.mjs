@@ -244,8 +244,9 @@ function ownerHistory(title, body) {
   ].join("\n");
 }
 
-function pullVersion(pull) {
-  return `${pull.base?.sha || "missing"}:${pull.head?.sha || "missing"}`;
+function pullVersion(pull, linkedIssues = []) {
+  const issueContextDigest = sha256(JSON.stringify(linkedIssues));
+  return `${pull.base?.sha || "missing"}:${pull.head?.sha || "missing"}:${issueContextDigest}`;
 }
 
 function issueLabels(issue) {
@@ -958,6 +959,26 @@ export async function createPullRequestTarget({
     return gh.request("GET", `/repos/${repoName(repository)}/pulls/${number}`);
   }
 
+  async function fetchLinkedIssues(policyEvidence) {
+    const linkedIssues = [];
+    for (const issueNumber of policyEvidence.linked.slice(0, 50)) {
+      const issue = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
+      if (issue.pull_request || issue.state !== "open") {
+        throw stableError("target_policy_blocked", `Linked execution issue #${issueNumber} must be open`);
+      }
+      linkedIssues.push({
+        number: issue.number,
+        title: issue.title || "",
+        body: issue.body || "",
+        labels: (issue.labels || [])
+          .map((label) => label.name || label)
+          .filter((label) => typeof label === "string" && label)
+          .sort()
+      });
+    }
+    return linkedIssues;
+  }
+
   async function read() {
     const pull = await fetchPull();
     if (initialRead && expectedBaseSha && pull.base?.sha !== expectedBaseSha) {
@@ -973,14 +994,7 @@ export async function createPullRequestTarget({
     initialRead = false;
     await refreshPullRepository({ repoRoot, hooksRoot, repository, pull, token });
 
-    const linkedIssues = [];
-    for (const issueNumber of policyEvidence.linked.slice(0, 50)) {
-      const issue = await gh.request("GET", `/repos/${repoName(repository)}/issues/${issueNumber}`);
-      if (issue.pull_request || issue.state !== "open") {
-        throw stableError("target_policy_blocked", `Linked execution issue #${issueNumber} must be open`);
-      }
-      linkedIssues.push({ number: issue.number, title: issue.title || "", body: issue.body || "", labels: (issue.labels || []).map((label) => label.name || label) });
-    }
+    const linkedIssues = await fetchLinkedIssues(policyEvidence);
     const changed = changedPullFiles(repoRoot, token, hooksRoot);
     verifyExactPullDiff(repoRoot, token, hooksRoot);
     const baseGitlinks = exactGitlinkManifest(repoRoot, "refs/remotes/origin/df-base", token, hooksRoot);
@@ -1011,7 +1025,7 @@ export async function createPullRequestTarget({
       kind: "pull_request",
       repository: repoName(repository),
       number,
-      version: pullVersion(pull),
+      version: pullVersion(pull, linkedIssues),
       defaultBranch,
       repositoryPaths: gitRepositoryInventory(repoRoot, token, hooksRoot),
       title: pull.title || "",
@@ -1080,16 +1094,19 @@ export async function createPullRequestTarget({
       const newHead = runGit(["rev-parse", "HEAD"], repoRoot, token, hooksRoot);
 
       const beforePush = await fetchPull();
-      assertPullPolicy(beforePush, repository, { base: authorizedBase, branch: authorizedBranch });
-      if (pullVersion(beforePush) !== snapshot.version) throw stableError("stale_target", "Pull request changed immediately before autofix push");
+      const beforePushPolicy = assertPullPolicy(beforePush, repository, { base: authorizedBase, branch: authorizedBranch });
+      const beforePushIssues = await fetchLinkedIssues(beforePushPolicy);
+      if (pullVersion(beforePush, beforePushIssues) !== snapshot.version) throw stableError("stale_target", "Pull request changed immediately before autofix push");
       runGit(["push", "origin", `HEAD:refs/heads/${authorizedBranch}`], repoRoot, token, hooksRoot);
       const afterPush = await fetchPull();
       if (afterPush.head?.sha !== newHead || afterPush.base?.ref !== authorizedBase) {
         throw stableError("stale_target", "GitHub did not confirm the exact autofix commit on the authorized pull request");
       }
+      const afterPushPolicy = assertPullPolicy(afterPush, repository, { base: authorizedBase, branch: authorizedBranch });
+      const afterPushIssues = await fetchLinkedIssues(afterPushPolicy);
       return {
         beforeVersion: snapshot.version,
-        afterVersion: pullVersion(afterPush),
+        afterVersion: pullVersion(afterPush, afterPushIssues),
         changeRef: newHead,
         receipt: turn.receipt,
         prompt: turn.prompt
