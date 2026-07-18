@@ -467,14 +467,16 @@ export function assertPullPolicy(pull, repository, expectations = {}) {
   if (!engineAutomation && !ALLOWED_ASSOCIATIONS.has(pull.author_association) && !workerMarker) {
     throw stableError("target_policy_blocked", "Pull request author provenance is not authorized for autofix");
   }
+  const declaredReleaseIssues = releaseIssueNumbers(pull.body || "");
+  if (!(engineAutomation && branch.startsWith("release/")) && declaredReleaseIssues.length > 0) {
+    throw stableError("target_policy_blocked", "Only a trusted App-authored release branch may declare release issue context");
+  }
   let linked = extractClosingIssueNumbers(pull.body || "", repository.repo);
   if (engineAutomation && branch.startsWith("release/")) {
-    linked = releaseIssueNumbers(pull.body || "");
+    linked = declaredReleaseIssues;
     if (linked.length === 0) {
       throw stableError("target_policy_blocked", "Release pull request must declare its bounded release issue context");
     }
-  } else if (engineAutomation && releaseIssueNumbers(pull.body || "").length > 0) {
-    throw stableError("target_policy_blocked", "Only a release branch may declare release issue context");
   }
   if (!engineAutomation && linked.length === 0) {
     throw stableError("target_policy_blocked", "Pull request must link an execution issue");

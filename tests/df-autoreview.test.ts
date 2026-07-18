@@ -743,8 +743,25 @@ test("release-engine automation PRs are admitted on exact App provenance and own
   );
   assert.throws(
     () => assertPullPolicy(enginePull("reconcile/87502d30-dd6ab2a6", { body: "<!-- darkfactory:release-issues 280 -->" }), repository),
-    /Only a release branch/
+    /Only a trusted App-authored release branch/
   );
+
+  const ordinaryPull = (body: string) => enginePull("fix/ordinary-owner-change", {
+    author_association: "OWNER",
+    user: { login: "marius-patrik", type: "User" },
+    body,
+    base: { ref: "dev", sha: "b".repeat(40) }
+  });
+  for (const body of [
+    "Closes #42\n<!-- darkfactory:release-issues 280 -->",
+    "Closes #42\n<!-- darkfactory:release-issues 280,280 -->",
+    "Closes #42\n<!-- darkfactory:release-issues malformed -->"
+  ]) {
+    assert.throws(
+      () => assertPullPolicy(ordinaryPull(body), repository),
+      /trusted App-authored release branch|release.issue|release-issues/i
+    );
+  }
 
   // Same branch shape without the trusted App actor stays blocked.
   assert.throws(
