@@ -77,7 +77,7 @@ export const CI_SUITE_NAMES = Object.freeze([
   "harness",
   "inference",
   "manager",
-  "memory",
+  "memory-plugin",
   "darkfactory",
   "memory",
   "release",
@@ -163,7 +163,7 @@ const suites = {
       "skills/compact/scripts/test_write_compaction_capsule.ps1",
     ]);
   },
-  memory() {
+  "memory-plugin"() {
     run("memory plugin types", "bun", ["./node_modules/typescript/bin/tsc", "--noEmit", "-p", "plugins/memory/tsconfig.json"]);
     run("memory plugin tests", "bun", [
       "test",

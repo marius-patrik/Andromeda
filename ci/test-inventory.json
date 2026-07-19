@@ -59,9 +59,9 @@
       ]
     },
     {
-      "id": "memory",
+      "id": "memory-plugin",
       "path": "plugins/memory",
-      "suite": "memory",
+      "suite": "memory-plugin",
       "platforms": ["ubuntu-latest", "windows-latest"],
       "requiredPaths": [
         "plugins/memory/test/memory-plugin.test.ts",

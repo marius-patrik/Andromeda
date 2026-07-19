@@ -50,10 +50,10 @@ jobs:
           - suite: manager
             runner: windows-latest
             label: manager platform
-          - suite: memory
+          - suite: memory-plugin
             runner: ubuntu-latest
             label: memory plugin
-          - suite: memory
+          - suite: memory-plugin
             runner: windows-latest
             label: memory plugin platform
           - suite: darkfactory
