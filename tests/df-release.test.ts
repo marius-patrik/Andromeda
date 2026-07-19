@@ -166,7 +166,10 @@ test("release check evidence is complete and bound to the exact trusted workflow
       if (path.includes("/check-suites?")) {
         return {
           total_count: 1,
-          check_suites: [{ id: 900, head_sha: SHA.main, app: { id: 15368 }, status: "completed", conclusion: "success" }]
+          check_suites: [{
+            id: 900, head_sha: SHA.main, app: { id: 15368 }, status: "completed", conclusion: "success",
+            latest_check_runs_count: 101
+          }]
         };
       }
       if (path.includes("/check-suites/900/check-runs?") && path.endsWith("page=1")) {
@@ -213,9 +216,18 @@ test("release check evidence is complete and bound to the exact trusted workflow
   const trusted = await release.bindTrustedPolicyCheckRuns(repo(), SHA.main, complete, ["Validate"]);
   assert.equal(trusted.check_runs.find((run: any) => run.id === finalCheck.id)?._trustedPolicyWorkflow, true);
 
-  const spoof = { ...finalCheck, id: 501, check_suite: { id: 901 } };
+  const trustedFinal = trusted.check_runs.find((run: any) => run.id === finalCheck.id);
+  const spoof = {
+    ...trustedFinal,
+    id: 501,
+    check_suite: { id: 901 },
+    _checkSuiteEvidence: {
+      id: 901, appId: 15368, status: "completed", conclusion: "success",
+      latestCheckRunsCount: 1, enumeratedCheckRunsCount: 1
+    }
+  };
   const collision = await release.bindTrustedPolicyCheckRuns(
-    repo(), SHA.main, { total_count: 2, check_runs: [finalCheck, spoof] }, ["Validate"]
+    repo(), SHA.main, { total_count: 2, check_runs: [trustedFinal, spoof] }, ["Validate"]
   );
   assert.equal(collision.check_runs.length, 2);
   const rejected = release.evaluatePolicySelectedChecks(collision, { statuses: [] }, ["Validate"]);
@@ -342,11 +354,19 @@ test("standard policy gates require exact and unambiguous workflow provenance", 
   const checks = [
     {
       id: 601, name: "Validate", head_sha: SHA.main, status: "completed", conclusion: "success",
-      app: { id: 15368 }, check_suite: { id: 910 }
+      app: { id: 15368 }, check_suite: { id: 910 },
+      _checkSuiteEvidence: {
+        id: 910, appId: 15368, status: "completed", conclusion: "success",
+        latestCheckRunsCount: 1, enumeratedCheckRunsCount: 1
+      }
     },
     {
       id: 602, name: "DarkFactory Autoreview", head_sha: SHA.main, status: "completed", conclusion: "success",
-      app: { id: 15368 }, check_suite: { id: 911 }
+      app: { id: 15368 }, check_suite: { id: 911 },
+      _checkSuiteEvidence: {
+        id: 911, appId: 15368, status: "completed", conclusion: "success",
+        latestCheckRunsCount: 1, enumeratedCheckRunsCount: 1
+      }
     }
   ];
   const workflowRun = (suiteId: number) => ({
@@ -399,6 +419,26 @@ test("standard policy gates require exact and unambiguous workflow provenance", 
     runs = new Map([[910, [scenario.run]]]);
     const bound = await release.bindTrustedPolicyCheckRuns(
       repo(), SHA.main, { total_count: 1, check_runs: [checks[0]] }, ["Validate"]
+    );
+    assert.equal(bound.check_runs[0]._trustedPolicyWorkflow, false, scenario.name);
+    assert.deepEqual(
+      release.evaluatePolicySelectedChecks(bound, { statuses: [] }, ["Validate"]).red,
+      ["Validate"],
+      scenario.name
+    );
+  }
+
+  runs = new Map([[910, [workflowRun(910)]]]);
+  const invalidSuites = [
+    { name: "suite wrong app", evidence: { ...checks[0]._checkSuiteEvidence, appId: 1 } },
+    { name: "suite wrong state", evidence: { ...checks[0]._checkSuiteEvidence, status: "in_progress", conclusion: null } },
+    { name: "suite wrong conclusion", evidence: { ...checks[0]._checkSuiteEvidence, conclusion: "failure" } },
+    { name: "suite count mismatch", evidence: { ...checks[0]._checkSuiteEvidence, latestCheckRunsCount: 2 } }
+  ];
+  for (const scenario of invalidSuites) {
+    const check = { ...checks[0], _checkSuiteEvidence: scenario.evidence };
+    const bound = await release.bindTrustedPolicyCheckRuns(
+      repo(), SHA.main, { total_count: 1, check_runs: [check] }, ["Validate"]
     );
     assert.equal(bound.check_runs[0]._trustedPolicyWorkflow, false, scenario.name);
     assert.deepEqual(

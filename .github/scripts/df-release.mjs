@@ -240,7 +240,17 @@ async function scanCompleteCheckRuns(repository, sha) {
     for (const run of payload.check_runs) {
       if (seen.has(run.id)) throw new Error("release check-run inventory contains duplicate evidence across suites");
       seen.add(run.id);
-      checkRuns.push(run);
+      checkRuns.push({
+        ...run,
+        _checkSuiteEvidence: {
+          id: suite.id,
+          appId: suite.app.id,
+          status: suite.status ?? null,
+          conclusion: suite.conclusion ?? null,
+          latestCheckRunsCount: suite.latest_check_runs_count ?? null,
+          enumeratedCheckRunsCount: payload.check_runs.length
+        }
+      });
       if (checkRuns.length > MAX_CHECK_RUNS) {
         throw new Error("release check-run inventory exceeds the bounded limit");
       }
@@ -780,6 +790,7 @@ async function checksFor(repository, sha, protection, policy, options = {}) {
 async function isTrustedPolicyWorkflowRun(repository, sha, checkRun, binding) {
   const suiteId = checkRun?.check_suite?.id;
   if (!Number.isSafeInteger(suiteId) || suiteId < 1 || checkRun.head_sha !== sha) return false;
+  if (!hasConsistentTrustedCheckSuite(checkRun, suiteId)) return false;
   const runs = await listCompleteWorkflowRuns(repository, suiteId);
   if (runs.length !== 1) return false;
   const [run] = runs;
@@ -794,6 +805,19 @@ async function isTrustedPolicyWorkflowRun(repository, sha, checkRun, binding) {
     return run.status === "completed" && run.conclusion === checkRun.conclusion;
   }
   return run.status !== "completed" && run.conclusion === null;
+}
+
+function hasConsistentTrustedCheckSuite(checkRun, suiteId) {
+  const suite = checkRun?._checkSuiteEvidence;
+  if (!isRecord(suite)
+      || suite.id !== suiteId
+      || suite.appId !== checkRun?.app?.id
+      || !Number.isSafeInteger(suite.latestCheckRunsCount) || suite.latestCheckRunsCount < 1
+      || suite.latestCheckRunsCount !== suite.enumeratedCheckRunsCount) return false;
+  if (checkRun.status === "completed") {
+    return suite.status === "completed" && suite.conclusion === checkRun.conclusion;
+  }
+  return suite.status !== "completed" && suite.conclusion === null;
 }
 
 async function listCompleteWorkflowRuns(repository, suiteId) {
