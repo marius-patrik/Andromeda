@@ -24,7 +24,9 @@ import {
 } from "../src/index";
 
 async function fixture(): Promise<{ root: string; state: SharedState }> {
-  const root = await mkdtemp(path.join(os.tmpdir(), "andromeda-memory-plugin-"));
+  // Keep the fixture segment lexical and short: fixture paths roam inside
+  // evidence URIs, and longer prefixes cross the opaque-path-token threshold.
+  const root = await mkdtemp(path.join(os.tmpdir(), "dream-mem-"));
   const state = sharedStateAt(root, path.join(root, ".agents"), path.join(root, "user"));
   await ensureSharedState(state);
   return { root, state };

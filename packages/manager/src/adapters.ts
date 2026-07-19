@@ -298,14 +298,18 @@ export async function pinAdapter(
 }
 
 async function writeGlobalWrapper(state: SharedState, id: CliId, binary: string) {
+  // The launcher contract reserves state bin/ for the agents launcher alone;
+  // pinned-CLI wrappers live under runtime/. Exposing them on PATH is the
+  // #217 global-entrypoint lane's decision.
   const binDir = path.join(state.stateDir, "bin");
-  if (!fs.existsSync(binDir)) {
-    await fs.promises.mkdir(binDir, { recursive: true });
+  const wrapperDir = path.join(state.stateDir, "runtime", "wrappers");
+  if (!fs.existsSync(wrapperDir)) {
+    await fs.promises.mkdir(wrapperDir, { recursive: true });
   }
 
   if (process.platform === "win32") {
     const agentsScript = path.join(binDir, "agents.ps1");
-    const wrapperPath = path.join(binDir, `${id}.ps1`);
+    const wrapperPath = path.join(wrapperDir, `${id}.ps1`);
     const wrapperContent = [
       `$ErrorActionPreference = 'Stop'`,
       `$envOutput = & "${agentsScript}" cli env ${id}`,
@@ -326,7 +330,7 @@ async function writeGlobalWrapper(state: SharedState, id: CliId, binary: string)
     await fs.promises.writeFile(wrapperPath, wrapperContent, "utf8");
   } else {
     const agentsScript = path.join(binDir, "agents");
-    const wrapperPath = path.join(binDir, id);
+    const wrapperPath = path.join(wrapperDir, id);
     const wrapperContent = [
       `#!/usr/bin/env bash`,
       `set -e`,

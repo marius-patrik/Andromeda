@@ -41,6 +41,10 @@ const MAX_DREAM_CURSOR_SOURCE_BYTES = 1024 * 1024;
 const MAX_DREAM_CURSOR_DECODE_WORK_BYTES = 4 * MAX_DREAM_CURSOR_SOURCE_BYTES;
 const DREAM_SESSION_ARTIFACT =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(?:jsonl|json)$/i;
+// The trailing quote admission only covers JSON-serialized URI leaves; quotes
+// are not valid path-leaf bytes on the platforms the cursor admits.
+const DREAM_SESSION_ARTIFACT_REF =
+  /(^|[\\/])[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(?:jsonl|json)(?=$|[\\/"])/gi;
 const SECRET_FIELD_NAME =
   /(?:password|passwd|pwd|secret|token|api.?key|credential|authorization|private.?key|connection.?string|dsn)/i;
 
@@ -190,7 +194,7 @@ function assistantTexts(events: SessionEvent[]): string[] {
 function validateCandidate(candidate: MemoryCandidate): MemoryCandidate {
   if (candidate.schemaVersion !== MEMORY_PLUGIN_SCHEMA_VERSION) throw new Error("unsupported memory candidate schema");
   if (!SHA256.test(candidate.evidence.contentHash)) throw new Error("candidate evidence hash must be lowercase SHA-256");
-  if (findSecretLikePath(candidate.value) || candidate.sensitivity === ("secret" as MemorySensitivity)) {
+  if (findSecretLikePath(maskSessionArtifactRefs(candidate.value)) || candidate.sensitivity === ("secret" as MemorySensitivity)) {
     throw new Error("secret-like values cannot cross the memory plugin boundary");
   }
   requiredTimestamp(candidate.observedAt, "candidate observedAt");
@@ -756,16 +760,17 @@ function assertAdmittedCursorText(
   });
 }
 
+function maskSessionArtifactRefs(value: string): string {
+  return value.replace(DREAM_SESSION_ARTIFACT_REF, "$1session-artifact.jsonl");
+}
+
 function assertAdmittedCursorPath(rawPath: string): void {
   visitDecodedTextVariants(rawPath, "last_processed_file.path", (variant) => {
     const segments = variant.split(/[\\/]/).filter(Boolean);
     for (const [index, segment] of segments.entries()) {
       assertAdmittedCursorText(segment, `last_processed_file.path[${index}]`, { allowSessionArtifact: true });
     }
-    const withoutSessionArtifacts = variant.replace(
-      /(^|[\\/])[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.(?:jsonl|json)(?=$|[\\/])/gi,
-      "$1session-artifact.jsonl",
-    );
+    const withoutSessionArtifacts = maskSessionArtifactRefs(variant);
     if (findSecretLikePath(withoutSessionArtifacts)) {
       throw new Error("Dream cursor contains secret-like content at last_processed_file.path");
     }
@@ -818,7 +823,17 @@ function authorityFromCursor(cursor: DreamV13Cursor): DreamCursorAuthority {
     sourceCounts: { ...cursor.source_counts },
     providerCounts: { ...cursor.provider_counts },
   };
-  const plantedSecret = findSecretLikePath(authority);
+  // Session-artifact filenames are the one admitted opaque-token shape; mask
+  // them the same way the path admission does before the fail-closed sweep.
+  const scanned: DreamCursorAuthority = {
+    ...authority,
+    lastProcessed: {
+      ...authority.lastProcessed,
+      pathUri: maskSessionArtifactRefs(authority.lastProcessed.pathUri),
+    },
+    lastSessionTitleUri: maskSessionArtifactRefs(authority.lastSessionTitleUri),
+  };
+  const plantedSecret = findSecretLikePath(scanned);
   if (plantedSecret) throw new Error(`Dream cursor contains secret-like content at ${plantedSecret}`);
   return authority;
 }
