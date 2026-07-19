@@ -458,8 +458,11 @@ async function corpusFiles(
 ): Promise<string[]> {
   const rootInfo = await lstat(root);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error("corpus root must be a regular directory");
+  // The declared root may spell ancestors with 8.3 short names (runner temp
+  // dirs); realpath canonicalizes them, so declared-vs-physical containment is
+  // a false escape there. Root symlinks are already rejected above; every
+  // traversal step below is contained against the canonical physicalRoot.
   const physicalRoot = await realpath(root);
-  assertContainedPath(root, physicalRoot, "corpus root");
   const files: string[] = [];
   let directories = 0;
   const visit = async (directory: string, depth: number): Promise<void> => {
