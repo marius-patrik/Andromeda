@@ -139,3 +139,26 @@ def test_lineage_refuses_to_promote_tampered_release(tmp_path):
             certificate.release.release_id,
             reason={"test": "tampering"},
         )
+
+
+def test_cli_auto_lineage_resolution(tmp_path):
+    from genesis_os.cli import _resolve_lineage
+    import pytest
+    from typer import BadParameter
+
+    # 1. No lineages in workspace -> raises BadParameter
+    with pytest.raises(BadParameter, match="No lineages found"):
+        _resolve_lineage(tmp_path, None)
+
+    # 2. Birth an organism -> auto-resolves promoted lineage
+    certificate = BirthRunner(tmp_path).run(minimal_birth_spec())
+    resolved = _resolve_lineage(tmp_path, None)
+    assert resolved == certificate.lineage_id
+
+    # 3. Explicit valid lineage -> resolves properly
+    assert _resolve_lineage(tmp_path, certificate.lineage_id) == certificate.lineage_id
+
+    # 4. Invalid lineage -> raises BadParameter with helpful message
+    with pytest.raises(BadParameter, match="has no promoted release"):
+        _resolve_lineage(tmp_path, "invalid_lineage_xyz")
+

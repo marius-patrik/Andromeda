@@ -134,6 +134,53 @@ def init(
     console.print(f"Initialized Genesis workspace: [bold]{paths.root}[/bold]")
 
 
+def _resolve_lineage(workspace: Path, lineage: str | None) -> str:
+    store = LineageStore(WorkspacePaths.from_root(workspace).lineages)
+    lineages = store.list_lineages()
+    promoted = [info for info in lineages if info.get("current_release_id")]
+
+    if lineage is not None:
+        try:
+            store.current(lineage)
+            return lineage
+        except FileNotFoundError:
+            if promoted:
+                available = ", ".join(info["lineage_id"] for info in promoted)
+                raise typer.BadParameter(
+                    f"Lineage '{lineage}' has no promoted release in workspace '{workspace.resolve()}'. "
+                    f"Available promoted lineages: {available}"
+                ) from None
+            elif lineages:
+                available = ", ".join(info["lineage_id"] for info in lineages)
+                raise typer.BadParameter(
+                    f"Lineage '{lineage}' has no promoted release in workspace '{workspace.resolve()}'. "
+                    f"Unpromoted lineages: {available}. Use 'genesis lineage promote' to promote a release."
+                ) from None
+            else:
+                raise typer.BadParameter(
+                    f"Workspace '{workspace.resolve()}' contains no lineages. Run 'genesis birth' first."
+                ) from None
+
+    if promoted:
+        sorted_promoted = sorted(
+            promoted, key=lambda info: info.get("promoted_at") or "", reverse=True
+        )
+        selected = str(sorted_promoted[0]["lineage_id"])
+        console.print(f"[dim]Auto-selected active lineage: [bold]{selected}[/bold][/dim]")
+        return selected
+
+    if lineages:
+        available = ", ".join(info["lineage_id"] for info in lineages)
+        raise typer.BadParameter(
+            f"No lineage in workspace '{workspace.resolve()}' has a promoted release yet. "
+            f"Unpromoted lineages: {available}. Use 'genesis lineage promote' to promote a release."
+        )
+
+    raise typer.BadParameter(
+        f"No lineages found in workspace '{workspace.resolve()}'. Run 'genesis birth' first."
+    )
+
+
 @app.command()
 def birth(
     workspace: Annotated[Path, typer.Option("--workspace", "-w")],
@@ -141,6 +188,10 @@ def birth(
     tiny: Annotated[
         bool, typer.Option("--tiny", help="Use a CPU-scale developmental birth")
     ] = False,
+    lineage: Annotated[
+        str | None,
+        typer.Option("--lineage", "-l", help="Target lineage ID (auto-created if omitted)"),
+    ] = None,
 ) -> None:
     if config is None and not tiny:
         raise typer.BadParameter("Provide --config or --tiny")
@@ -152,18 +203,27 @@ def birth(
         assert config is not None
         spec = BirthSpec.model_validate(_yaml(config))
         spec = _resolve_config_paths(spec, config.resolve())
+    if lineage is not None:
+        spec = spec.model_copy(update={"lineage_id": lineage})
     console.print(
         f"Birthing [bold]{spec.name}[/bold] from {spec.initialization.mode.value} weights "
         f"with {sum(stage.examples for stage in spec.curriculum.stages):,} generated lessons."
     )
     certificate = BirthRunner(workspace).run(spec)
     console.print_json(certificate.model_dump_json(indent=2))
+    console.print(
+        f"[green]Birth complete.[/green] To wake this organism, run:\n"
+        f"  [bold]genesis wake --workspace {workspace} --lineage {certificate.lineage_id}[/bold]"
+    )
 
 
 @app.command()
 def wake(
     workspace: Annotated[Path, typer.Option("--workspace", "-w")],
-    lineage: Annotated[str, typer.Option("--lineage", "-l")],
+    lineage: Annotated[
+        str | None,
+        typer.Option("--lineage", "-l", help="Lineage ID (auto-selected if omitted)"),
+    ] = None,
     message: Annotated[str | None, typer.Option("--message", "-m")] = None,
     session: Annotated[str | None, typer.Option("--session")] = None,
     device: Annotated[str, typer.Option("--device")] = "auto",
@@ -171,9 +231,10 @@ def wake(
     max_tool_steps: Annotated[int, typer.Option("--max-tool-steps")] = 8,
     temperature: Annotated[float, typer.Option("--temperature")] = 0.0,
 ) -> None:
+    target_lineage = _resolve_lineage(workspace, lineage)
     runtime = load_runtime(
         workspace,
-        lineage_id=lineage,
+        lineage_id=target_lineage,
         device=device,
         settings=RuntimeSettings(
             max_tool_steps=max_tool_steps,
@@ -211,18 +272,25 @@ def wake(
 @app.command()
 def sleep(
     workspace: Annotated[Path, typer.Option("--workspace", "-w")],
-    lineage: Annotated[str, typer.Option("--lineage", "-l")],
+    lineage: Annotated[
+        str | None,
+        typer.Option("--lineage", "-l", help="Lineage ID (auto-selected if omitted)"),
+    ] = None,
     config: Annotated[Path | None, typer.Option("--config", "-c")] = None,
 ) -> None:
+    target_lineage = _resolve_lineage(workspace, lineage)
     spec = SleepSpec.model_validate(_yaml(config)) if config else SleepSpec()
-    result = SleepProgram(workspace).run(lineage, spec)
+    result = SleepProgram(workspace).run(target_lineage, spec)
     console.print_json(result.model_dump_json(indent=2))
 
 
 @app.command()
 def serve(
     workspace: Annotated[Path, typer.Option("--workspace", "-w")],
-    lineage: Annotated[str, typer.Option("--lineage", "-l")],
+    lineage: Annotated[
+        str | None,
+        typer.Option("--lineage", "-l", help="Lineage ID (auto-selected if omitted)"),
+    ] = None,
     host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port")] = 8787,
     device: Annotated[str, typer.Option("--device")] = "auto",
@@ -230,6 +298,7 @@ def serve(
     allow_process_tools: Annotated[bool, typer.Option("--allow-process-tools")] = False,
     allow_network_tools: Annotated[bool, typer.Option("--allow-network-tools")] = False,
 ) -> None:
+    target_lineage = _resolve_lineage(workspace, lineage)
     settings = RuntimeSettings(
         allow_python_tools=allow_python_tools,
         allow_process_tools=allow_process_tools,
@@ -238,7 +307,7 @@ def serve(
     uvicorn.run(
         create_app(
             workspace=workspace,
-            lineage_id=lineage,
+            lineage_id=target_lineage,
             device=device,
             settings=settings,
         ),
@@ -338,16 +407,24 @@ def lineage_list(
 @lineage_app.command("releases")
 def lineage_releases(
     workspace: Annotated[Path, typer.Option("--workspace", "-w")],
-    lineage: Annotated[str, typer.Option("--lineage", "-l")],
+    lineage: Annotated[
+        str | None,
+        typer.Option("--lineage", "-l", help="Lineage ID (auto-selected if omitted)"),
+    ] = None,
 ) -> None:
     store = LineageStore(WorkspacePaths.from_root(workspace).lineages)
-    current = store.current(lineage)
+    lineage_id = _resolve_lineage(workspace, lineage)
+    try:
+        current_ref = store.current(lineage_id)
+        current_release_id = current_ref.release_id
+    except FileNotFoundError:
+        current_release_id = None
     table = Table("Release", "Current", "Parent", "Created", "Validation loss")
-    for value in store.list_releases(lineage):
+    for value in store.list_releases(lineage_id):
         metrics = value.get("metrics", {})
         table.add_row(
             str(value["release_id"]),
-            "yes" if value["release_id"] == current.release_id else "",
+            "yes" if value["release_id"] == current_release_id else "",
             str(value.get("parent_release_id") or "—"),
             str(value.get("created_at") or "—"),
             str(metrics.get("validation_loss", "—")) if isinstance(metrics, dict) else "—",
