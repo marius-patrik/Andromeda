@@ -124,7 +124,7 @@ class ExperienceLedger:
                     timestamp,
                     draft.kind.value,
                     draft.actor.value,
-                    payload_json,
+                    sqlite3.Binary(payload_json),
                     draft.session_id,
                     draft.causation_id,
                     draft.correlation_id,
