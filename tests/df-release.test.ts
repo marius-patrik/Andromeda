@@ -164,6 +164,7 @@ test("release check evidence is complete and bound to the exact trusted workflow
   const gh = {
     request: async (_method: string, path: string) => {
       if (path.includes("/check-suites?")) {
+        assert.match(path, /[?&]filter=all(?:&|$)/);
         return {
           total_count: 1,
           check_suites: [{

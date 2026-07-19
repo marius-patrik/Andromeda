@@ -287,7 +287,7 @@ async function listCompleteCheckSuitesOnce(repository, sha) {
   for (let page = 1; page <= MAX_PAGINATION_PAGES; page += 1) {
     const payload = await gh.request(
       "GET",
-      `/repos/${repoName(repository)}/commits/${sha}/check-suites?per_page=100&page=${page}`
+      `/repos/${repoName(repository)}/commits/${sha}/check-suites?filter=all&per_page=100&page=${page}`
     );
     if (!isRecord(payload)
         || !Number.isSafeInteger(payload.total_count) || payload.total_count < 0 || payload.total_count > MAX_CHECK_SUITES
