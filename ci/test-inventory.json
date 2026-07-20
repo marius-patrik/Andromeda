@@ -72,15 +72,15 @@
     },
     {
       "id": "memory-plugin",
-      "path": "plugins/memory",
+      "path": "packages/migrate/memory",
       "suite": "memory-plugin",
       "platforms": [
         "ubuntu-latest",
         "windows-latest"
       ],
       "requiredPaths": [
-        "plugins/memory/test/memory-plugin.test.ts",
-        "plugins/memory/src/index.ts"
+        "packages/migrate/memory/test/memory-plugin.test.ts",
+        "packages/migrate/memory/src/index.ts"
       ]
     },
     {
@@ -178,7 +178,6 @@
     "packages/migrate/experience",
     "packages/migrate/genesis-os",
     "packages/migrate/llm-gateway",
-    "packages/migrate/memory",
     "packages/protocol",
     "packages/sdk",
     "packages/server",
