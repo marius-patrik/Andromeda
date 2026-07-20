@@ -75,9 +75,9 @@ function workflowHasLeg(workflow, suite, runner) {
 
 export function inventoryIssues(root = repositoryRoot) {
   const issues = [];
-  const inventoryPath = path.join(root, "ci", "test-inventory.json");
+  const inventoryPath = path.join(root, ".github", "ci", "test-inventory.json");
   const inventory = JSON.parse(fs.readFileSync(inventoryPath, "utf8"));
-  if (inventory.schemaVersion !== 1) issues.push("ci/test-inventory.json must use schemaVersion 1");
+  if (inventory.schemaVersion !== 1) issues.push(".github/ci/test-inventory.json must use schemaVersion 1");
 
   const groups = [
     ...(Array.isArray(inventory.activeComponents) ? inventory.activeComponents : []),

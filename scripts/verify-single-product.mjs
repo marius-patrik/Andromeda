@@ -113,7 +113,7 @@ const retiredVariableRejectionFiles = new Set([
 // The CI inventory necessarily names the frozen src/migrate directories,
 // which keep the original repository names they were retired under. Its schema,
 // paths, suites, and gitlinks are enforced by verify-test-inventory instead.
-const policyFiles = new Set(["scripts/verify-single-product.mjs", "ci/test-inventory.json"]);
+const policyFiles = new Set(["scripts/verify-single-product.mjs", ".github/ci/test-inventory.json"]);
 
 for (const relative of tracked) {
   if (policyFiles.has(relative)) continue;

@@ -24,10 +24,10 @@ function fixture() {
   for (const relative of ["ci", "scripts", ".github/workflows", "src"]) {
     mkdirSync(path.join(target, relative), { recursive: true });
   }
-  cpSync(path.join(root, "ci", "test-inventory.json"), path.join(target, "ci", "test-inventory.json"));
+  cpSync(path.join(root, ".github", "ci", "test-inventory.json"), path.join(target, ".github", "ci", "test-inventory.json"));
   cpSync(path.join(root, ".gitmodules"), path.join(target, ".gitmodules"));
   cpSync(path.join(root, ".github", "workflows", "ci.yml"), path.join(target, ".github", "workflows", "ci.yml"));
-  const inventory = JSON.parse(requireText(path.join(target, "ci", "test-inventory.json")));
+  const inventory = JSON.parse(requireText(path.join(target, ".github", "ci", "test-inventory.json")));
   for (const entry of inventory.activeComponents) {
     if (!entry.submodule) mkdirSync(path.join(target, entry.path), { recursive: true });
   }
@@ -148,7 +148,7 @@ test("denied failure: Validate cannot omit fresh-clone evidence for the moved pu
 test("denied failure: managed package classifications must be unique and mutually exclusive", () => {
   const target = fixture();
   try {
-    const inventoryPath = path.join(target, "ci", "test-inventory.json");
+    const inventoryPath = path.join(target, ".github", "ci", "test-inventory.json");
     seedGitlink(target, "src/seeded");
     const inventory = JSON.parse(requireText(inventoryPath));
     inventory.activeComponents.push({
@@ -202,7 +202,7 @@ test("denied failure: a classified managed package declaration without an index 
   try {
     // Declared and classified, but never staged as a gitlink.
     seedGitlink(target, "src/seeded", { index: false });
-    const inventoryPath = path.join(target, "ci", "test-inventory.json");
+    const inventoryPath = path.join(target, ".github", "ci", "test-inventory.json");
     const inventory = JSON.parse(requireText(inventoryPath));
     inventory.parkedApps.push("src/seeded");
     writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`);

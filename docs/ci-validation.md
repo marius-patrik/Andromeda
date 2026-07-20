@@ -1,7 +1,7 @@
 # CI Validation
 
 `Validate` is a fail-closed aggregate, not a single optimistic test command.
-It succeeds only when every matrix leg declared in `ci/test-inventory.json`
+It succeeds only when every matrix leg declared in `.github/ci/test-inventory.json`
 succeeds. The same commands run locally through
 `node scripts/run-ci-suite.mjs <suite>`; `bun run ci` runs every unique suite.
 
