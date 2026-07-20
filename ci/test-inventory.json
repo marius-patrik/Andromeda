@@ -148,29 +148,39 @@
         "ubuntu-latest"
       ],
       "requiredPaths": [
-        ".github/scripts/managed-enforcement.test.mjs"
+        "scripts/managed-enforcement.test.mjs"
       ]
     }
   ],
   "parkedPlugins": [],
   "parkedApps": [],
   "scaffoldedComponents": [
+    "agents",
+    "agents/darkfactory",
+    "clients",
+    "clients/app",
+    "clients/cli",
+    "clients/web",
     "hooks",
     "mcp",
+    "plugins",
     "roles",
     "sdk",
+    "server",
     "skills",
-    "src/app",
-    "src/cli",
     "src/migrate",
     "src/migrate/agents-manager-legacy",
-    "src/migrate/darkfactory",
     "src/migrate/dream",
     "src/migrate/experience",
     "src/migrate/genesis-os",
     "src/migrate/llm-gateway",
     "src/migrate/singularity",
-    "src/server"
+    "templates",
+    "templates/bot",
+    "templates/cli",
+    "templates/darkfactory-templates",
+    "templates/repo",
+    "templates/web"
   ],
   "requiredPaths": []
 }

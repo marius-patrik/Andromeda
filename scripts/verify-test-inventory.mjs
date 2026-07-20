@@ -113,7 +113,7 @@ export function inventoryIssues(root = repositoryRoot) {
     ...parkedApps,
     ...scaffoldedComponents,
   ]
-    .filter((entry) => typeof entry === "string" && (["sdk", "mcp", "hooks", "roles", "skills"].includes(entry) || entry.startsWith("src/")))
+    .filter((entry) => typeof entry === "string" && (["sdk", "mcp", "hooks", "roles", "skills", "server", "plugins", "agents", "clients", "templates"].includes(entry) || entry.startsWith("src/") || entry.startsWith("clients/") || entry.startsWith("agents/") || entry.startsWith("templates/")))
     .sort();
   // src/migrate nests one level deeper: its children are frozen former
   // components, each still individually declared in the inventory.
@@ -121,6 +121,14 @@ export function inventoryIssues(root = repositoryRoot) {
     ...sortedDirectories(root, "src"),
     ...sortedDirectories(root, "src/migrate"),
     ...(fs.existsSync(path.join(root, "sdk")) ? ["sdk"] : []),
+    ...(fs.existsSync(path.join(root, "server")) ? ["server"] : []),
+    ...(fs.existsSync(path.join(root, "plugins")) ? ["plugins"] : []),
+    ...(fs.existsSync(path.join(root, "agents")) ? ["agents"] : []),
+    ...(fs.existsSync(path.join(root, "clients")) ? ["clients"] : []),
+    ...sortedDirectories(root, "clients"),
+    ...sortedDirectories(root, "agents"),
+    ...(fs.existsSync(path.join(root, "templates")) ? ["templates"] : []),
+    ...sortedDirectories(root, "templates"),
     ...(fs.existsSync(path.join(root, "mcp")) ? ["mcp"] : []),
     ...(fs.existsSync(path.join(root, "hooks")) ? ["hooks"] : []),
     ...(fs.existsSync(path.join(root, "roles")) ? ["roles"] : []),
