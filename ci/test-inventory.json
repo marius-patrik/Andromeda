@@ -174,7 +174,13 @@
     "src/migrate/experience",
     "src/migrate/genesis-os",
     "src/migrate/llm-gateway",
-    "src/migrate/singularity"
+    "src/migrate/singularity",
+    "templates",
+    "templates/bot",
+    "templates/cli",
+    "templates/darkfactory-templates",
+    "templates/repo",
+    "templates/web"
   ],
   "requiredPaths": []
 }

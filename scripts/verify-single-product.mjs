@@ -51,11 +51,11 @@ const nestedRepositoryMetadata = [
 // migration. Their original metadata is evidence and is not rewritten here;
 // code leaves migrate by reimplementation against the sdk.
 const migrateTree = /^(?:src\/migrate|(?:hooks|roles|skills)(?:\/|$))/;
-// agents/ holds agent projects folded in with their own repository identity,
+// agents/ holds agent projects, and templates/ holds folded template repositories,
 // versioning, and project docs. Like migrate, they are carried rather than
 // built as part of this product, so the single-product interior rules do not
 // apply inside them. Every live surface remains fully scanned.
-const agentsTree = /^agents\/[^/]+\//;
+const agentsTree = /^(?:agents|templates)\/[^/]+\//;
 const carriedTree = (relative) => migrateTree.test(relative) || agentsTree.test(relative);
 for (const relative of tracked) {
   if (carriedTree(relative)) continue;
