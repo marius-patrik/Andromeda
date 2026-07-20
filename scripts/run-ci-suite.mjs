@@ -179,7 +179,7 @@ const suites = {
   review() {
     run("review workflow regressions", process.execPath, [
       "--test",
-      ".github/scripts/managed-enforcement.test.mjs",
+      "scripts/managed-enforcement.test.mjs",
     ]);
   },
 };

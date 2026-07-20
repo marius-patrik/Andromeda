@@ -866,7 +866,7 @@ async function detectPrdArtifactDrift(repository, ref, itemText) {
           ]
         },
         {
-          path: ".github/scripts/df-plan.mjs",
+          path: "scripts/df-plan.mjs",
           checks: [
             { snippet: "parsePrdItems", reason: "parse PRD items deterministically" },
             { snippet: "prdIssueBody", reason: "write PRD-backed issue bodies" },
@@ -881,7 +881,7 @@ async function detectPrdArtifactDrift(repository, ref, itemText) {
       pattern: /\b(drift report|prd drift|code contradicts prd|contradicts the prd|not tracked by any prd item|not linked to a prd-tracked issue)\b/i,
       artifacts: [
         {
-          path: ".github/scripts/df-plan.mjs",
+          path: "scripts/df-plan.mjs",
           checks: [
             { snippet: "detectCodeDrift", reason: "detect PRD contradictions" },
             { snippet: "upsertDriftIssue", reason: "file or update a drift report issue" },
@@ -913,7 +913,7 @@ async function detectPrdArtifactDrift(repository, ref, itemText) {
 }
 
 function artifactContentForChecks(filePath, content) {
-  if (filePath !== ".github/scripts/df-plan.mjs") return content;
+  if (filePath !== "scripts/df-plan.mjs") return content;
   return content.replace(
     /\nasync function detectPrdArtifactDrift[\s\S]*?\nfunction isDarkFactoryManagedIssue/,
     "\nfunction isDarkFactoryManagedIssue"

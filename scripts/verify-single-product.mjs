@@ -51,8 +51,14 @@ const nestedRepositoryMetadata = [
 // migration. Their original metadata is evidence and is not rewritten here;
 // code leaves migrate by reimplementation against the sdk.
 const migrateTree = /^(?:src\/migrate|(?:hooks|roles|skills)(?:\/|$))/;
+// agents/ holds agent projects folded in with their own repository identity,
+// versioning, and project docs. Like migrate, they are carried rather than
+// built as part of this product, so the single-product interior rules do not
+// apply inside them. Every live surface remains fully scanned.
+const agentsTree = /^agents\/[^/]+\//;
+const carriedTree = (relative) => migrateTree.test(relative) || agentsTree.test(relative);
 for (const relative of tracked) {
-  if (migrateTree.test(relative)) continue;
+  if (carriedTree(relative)) continue;
   if (nestedRepositoryMetadata.some((pattern) => pattern.test(relative))) {
     issues.push(`package-local repository metadata or documentation is tracked: ${relative}`);
   }
@@ -73,7 +79,7 @@ const forbiddenPaths = [
   [/(^|\/)rommie\/v1(\/|$)/, "retired wire namespace"],
 ];
 for (const relative of tracked) {
-  if (migrateTree.test(relative)) continue;
+  if (carriedTree(relative)) continue;
   for (const [pattern, label] of forbiddenPaths) {
     if (pattern.test(relative)) issues.push(`${label} is tracked: ${relative}`);
   }
@@ -115,7 +121,7 @@ for (const relative of tracked) {
   // evidence, and those histories necessarily spell the names they were retired
   // for. Retired-name enforcement stays fully active on every surface that is
   // still built, imported, or shipped; nothing imports migrate.
-  if (migrateTree.test(relative)) continue;
+  if (carriedTree(relative)) continue;
   const absolute = path.join(root, relative);
   const content = fs.readFileSync(absolute);
   if (content.includes(0)) continue;
@@ -159,7 +165,7 @@ for (const [relative, expectedName] of expectedJavaScriptWorkspaces) {
 for (const relative of tracked.filter(
   (name) =>
     name.startsWith("src/") &&
-    !migrateTree.test(name) &&
+    !carriedTree(name) &&
     name.endsWith("package.json") &&
     !name.endsWith("agent.package.json"),
 )) {
@@ -182,7 +188,7 @@ for (const retired of [
 }
 
 const manifests = [];
-for (const relative of tracked.filter((name) => name.endsWith("agent.package.json") && !migrateTree.test(name))) {
+for (const relative of tracked.filter((name) => name.endsWith("agent.package.json") && !carriedTree(name))) {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, relative), "utf8"));
   manifests.push({ relative, manifest });
   if (manifest.schemaVersion !== 1 || typeof manifest.id !== "string" || !manifest.id || manifest.kind === "agent") {
@@ -198,7 +204,7 @@ for (const { relative, manifest } of manifests) {
 
 // Frozen former repositories keep the versions they were released at; the
 // single-product version contract governs what is still built and shipped.
-const versionedTracked = tracked.filter((name) => !migrateTree.test(name));
+const versionedTracked = tracked.filter((name) => !carriedTree(name));
 issues.push(...javascriptPackageVersionIssues(root, versionedTracked, productVersion));
 for (const relative of versionedTracked.filter((name) => name.endsWith("pyproject.toml"))) {
   const text = fs.readFileSync(path.join(root, relative), "utf8");
