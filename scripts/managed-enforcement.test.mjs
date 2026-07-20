@@ -22,7 +22,7 @@ test("managed Validate provisions Go and uv before dependency installation", asy
 });
 
 test("monorepo validation uses the uv CLI without a cross-repository go.work", async () => {
-  const commands = await readFile(".agents/.project/COMMANDS.md", "utf8");
+  const commands = await readFile("docs/.agents/.project/COMMANDS.md", "utf8");
   assert.doesNotMatch(commands, /python(?:3)?\s+-m\s+uv/);
   assert.match(commands, /\buv sync --frozen\b/);
   assert.equal(existsSync("go.work"), false);
@@ -57,9 +57,9 @@ test("legacy provider-specific review assets are absent and no longer required",
     ".github/workflows/codex-review.yml",
     ".github/codex-review.Dockerfile",
     ".github/codex-review.schema.json",
-    ".github/scripts/run-codex-review.sh",
-    ".github/scripts/run-kimi-review.mjs",
-    ".github/scripts/run-kimi-review.test.mjs",
+    "scripts/run-codex-review.sh",
+    "scripts/run-kimi-review.mjs",
+    "scripts/run-kimi-review.test.mjs",
   ];
   for (const legacyPath of legacyPaths) assert.equal(existsSync(legacyPath), false, legacyPath);
 
