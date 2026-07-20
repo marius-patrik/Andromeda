@@ -75,6 +75,7 @@ const forbiddenPaths = [
   [/(^|\/)rommie\/v1(\/|$)/, "retired wire namespace"],
 ];
 for (const relative of tracked) {
+  if (migrateTree.test(relative)) continue;
   for (const [pattern, label] of forbiddenPaths) {
     if (pattern.test(relative)) issues.push(`${label} is tracked: ${relative}`);
   }
@@ -105,10 +106,18 @@ const retiredVariableRejectionFiles = new Set([
 
 // This policy file necessarily spells the retired identifiers it rejects.
 // Product source, manifests, scripts, and documentation remain fully scanned.
-const policyFiles = new Set(["scripts/verify-single-product.mjs"]);
+// The CI inventory necessarily names the frozen packages/migrate directories,
+// which keep the original repository names they were retired under. Its schema,
+// paths, suites, and gitlinks are enforced by verify-test-inventory instead.
+const policyFiles = new Set(["scripts/verify-single-product.mjs", "ci/test-inventory.json"]);
 
 for (const relative of tracked) {
   if (policyFiles.has(relative)) continue;
+  // packages/migrate holds former standalone repositories verbatim as frozen
+  // evidence, and those histories necessarily spell the names they were retired
+  // for. Retired-name enforcement stays fully active on every surface that is
+  // still built, imported, or shipped; nothing imports migrate.
+  if (migrateTree.test(relative)) continue;
   const absolute = path.join(root, relative);
   const content = fs.readFileSync(absolute);
   if (content.includes(0)) continue;
@@ -150,7 +159,11 @@ for (const [relative, expectedName] of expectedJavaScriptWorkspaces) {
   if (manifest.name !== expectedName) issues.push(`JavaScript package name drift in ${relative}: ${manifest.name} != ${expectedName}`);
 }
 for (const relative of tracked.filter(
-  (name) => name.startsWith("packages/") && name.endsWith("package.json") && !name.endsWith("agent.package.json"),
+  (name) =>
+    name.startsWith("packages/") &&
+    !migrateTree.test(name) &&
+    name.endsWith("package.json") &&
+    !name.endsWith("agent.package.json"),
 )) {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, relative), "utf8"));
   if (manifest.private !== true) issues.push(`nested JavaScript package must be private implementation metadata: ${relative}`);
@@ -185,8 +198,11 @@ for (const { relative, manifest } of manifests) {
   ids.set(manifest.id, relative);
 }
 
-issues.push(...javascriptPackageVersionIssues(root, tracked, productVersion));
-for (const relative of tracked.filter((name) => name.endsWith("pyproject.toml"))) {
+// Frozen former repositories keep the versions they were released at; the
+// single-product version contract governs what is still built and shipped.
+const versionedTracked = tracked.filter((name) => !migrateTree.test(name));
+issues.push(...javascriptPackageVersionIssues(root, versionedTracked, productVersion));
+for (const relative of versionedTracked.filter((name) => name.endsWith("pyproject.toml"))) {
   const text = fs.readFileSync(path.join(root, relative), "utf8");
   const version = text.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
   if (version && version !== productVersion) issues.push(`Python package version drift in ${relative}: ${version} != ${productVersion}`);
