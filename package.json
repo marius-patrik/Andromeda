@@ -6,7 +6,7 @@
   "workspaces": [
     "packages/migrate/manager",
     "packages/migrate/core/clients/*",
-    "plugins/memory"
+    "packages/migrate/memory"
   ],
   "bin": {
     "agents": "./packages/migrate/manager/src/cli.ts"

@@ -41,9 +41,12 @@
         "typescript": "5.9.3",
       },
     },
-    "plugins/memory": {
+    "packages/migrate/memory": {
       "name": "@marius-patrik/andromeda-memory-plugin",
       "version": "0.1.0",
+      "bin": {
+        "andromeda-memory": "./src/cli.ts",
+      },
     },
   },
   "packages": {
@@ -77,7 +80,7 @@
 
     "@marius-patrik/andromeda-manager": ["@marius-patrik/andromeda-manager@workspace:packages/migrate/manager"],
 
-    "@marius-patrik/andromeda-memory-plugin": ["@marius-patrik/andromeda-memory-plugin@workspace:plugins/memory"],
+    "@marius-patrik/andromeda-memory-plugin": ["@marius-patrik/andromeda-memory-plugin@workspace:packages/migrate/memory"],
 
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 

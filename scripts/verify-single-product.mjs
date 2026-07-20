@@ -17,7 +17,6 @@ const issues = [];
 issues.push(...inventoryIssues(root));
 const requiredLayout = [
   "data",
-  "plugins",
   "packages/migrate/core",
   "packages/migrate/gateway",
   "packages/migrate/harness",
