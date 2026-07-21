@@ -55,11 +55,11 @@ mkdir -p "$STUB_ROOT"
 data_stub="$STUB_ROOT/data"
 mkdir -p "$data_stub"
 git -C "$data_stub" init -q -b main
-git -C "$data_stub" config user.name "Agent OS smoke"
-git -C "$data_stub" config user.email "agent-os-smoke@invalid"
+git -C "$data_stub" config user.name "Andromeda smoke"
+git -C "$data_stub" config user.email "andromeda-smoke@invalid"
 printf '%s\n' '/bin/' '/clis/' '/memory/' '/runtime/' '/secrets/' '/sessions/' '/sync/' >"$data_stub/.gitignore"
-printf '%s\n' '{"schemaVersion":1,"id":"agent-os-data","kind":"data"}' >"$data_stub/agent.package.json"
-printf '%s\n' '# Agent OS Data smoke fixture' >"$data_stub/README.md"
+printf '%s\n' '{"schemaVersion":1,"id":"andromeda-data","kind":"data"}' >"$data_stub/agent.package.json"
+printf '%s\n' '# Andromeda Data smoke fixture' >"$data_stub/README.md"
 mkdir -p "$data_stub/scripts"
 printf '%s\n' '// smoke fixture' >"$data_stub/scripts/validate.mjs"
 git -C "$data_stub" add .
@@ -71,8 +71,8 @@ while read -r _key component_name; do
   stub_repo="$STUB_ROOT/$component_name"
   mkdir -p "$stub_repo"
   git -C "$stub_repo" init -q -b main
-  git -C "$stub_repo" config user.name "Agent OS smoke"
-  git -C "$stub_repo" config user.email "agent-os-smoke@invalid"
+  git -C "$stub_repo" config user.name "Andromeda smoke"
+  git -C "$stub_repo" config user.email "andromeda-smoke@invalid"
   printf '%s\n' "$component_path" >"$stub_repo/COMPONENT"
   git -C "$stub_repo" add .
   git -C "$stub_repo" commit -q -m "stub $component_name"
@@ -81,8 +81,8 @@ while read -r _key component_name; do
   git -C "$SOURCE_DIR" update-index --add --cacheinfo "160000,$stub_commit,$component_path"
 done < <(git -C "$SOURCE_DIR" config --file .gitmodules --name-only --get-regexp '^submodule\..*\.path$' 2>/dev/null | sed -E 's/^submodule\.([^.]*)\.path$/path \1/')
 
-git -C "$SOURCE_DIR" config user.name "Agent OS smoke"
-git -C "$SOURCE_DIR" config user.email "agent-os-smoke@invalid"
+git -C "$SOURCE_DIR" config user.name "Andromeda smoke"
+git -C "$SOURCE_DIR" config user.email "andromeda-smoke@invalid"
 git -C "$SOURCE_DIR" add .gitmodules
 git -C "$SOURCE_DIR" commit -q --allow-empty -m "smoke source snapshot"
 
