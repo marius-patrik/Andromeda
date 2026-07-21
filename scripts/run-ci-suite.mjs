@@ -91,8 +91,8 @@ const suites = {
   inventory() {
     run("product contract regression tests", process.execPath, [
       "--test",
-      "scripts/verify-single-product.test.mjs",
-      "scripts/verify-test-inventory.test.mjs",
+      "tests/verify-single-product.test.mjs",
+      "tests/verify-test-inventory.test.mjs",
     ]);
     run("repository layout and suite inventory", "bun", ["run", "layout:check"]);
   },
@@ -179,7 +179,7 @@ const suites = {
   review() {
     run("review workflow regressions", process.execPath, [
       "--test",
-      "scripts/managed-enforcement.test.mjs",
+      "tests/managed-enforcement.test.mjs",
     ]);
   },
 };
