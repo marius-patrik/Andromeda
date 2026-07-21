@@ -112,13 +112,13 @@ const suites = {
     const cwd = path.join(root, "packages", "server", "gateway");
     const sandbox = mkdtempSync(path.join(tmpdir(), "andromeda-gateway-ci-"));
     const userHome = path.join(sandbox, "user");
-    const stateHome = path.join(userHome, ".agents");
+    const stateHome = path.join(userHome, ".andromeda");
     mkdirSync(stateHome, { recursive: true });
     const env = {
       ...process.env,
-      AGENTS_HOME: stateHome,
-      AGENTS_USER_HOME: userHome,
-      AGENTS_ROOT: root,
+      ANDROMEDA_HOME: stateHome,
+      ANDROMEDA_USER_HOME: userHome,
+      ANDROMEDA_ROOT: root,
     };
     try {
       run("gateway dependency sync", uv, ["sync", "--frozen"], { cwd, env });
@@ -158,7 +158,7 @@ const suites = {
       "-ExecutionPolicy",
       "Bypass",
       "-File",
-      ".agents/.global/skills/compact/scripts/test_write_compaction_capsule.ps1",
+      "capabilities/.global/skills/compact/scripts/test_write_compaction_capsule.ps1",
     ]);
   },
   "memory-plugin"() {
