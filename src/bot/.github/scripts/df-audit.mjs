@@ -1952,7 +1952,7 @@ export async function auditRetiredAuthorityNames(github, repository, ref) {
     ".darkfactory/installer-policy.json",
     ".darkfactory/managed-repository.json",
     ".github/workflows/sync-managed-repos.yml",
-    "src/managed-files.ts"
+    "src/bot/managed-files.ts"
   ];
   const documents = [];
   for (const filePath of authorityPaths) {

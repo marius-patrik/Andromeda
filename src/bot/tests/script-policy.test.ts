@@ -2194,7 +2194,7 @@ test("parseWorkerClaim normalizes provider ledger fields", () => {
       primary: { provider: "fixture-primary", model: "fixture/primary-model", agentPreset: "Fixture-Primary", providerVersion: "1.0.0" },
       skipped: []
     },
-    resolved: { provider: "codex", model: "gpt-5.5", agentPreset: "Sol", providerVersion: "1.2.3" },
+    resolved: { provider: "codex", model: "gpt-5.5", agentPreset: "Sol", providerVersion: "1.2.3", toolPolicy: "standard" },
     attempts: [{ number: 1, outcome: "success", reason: null }],
     usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
     outcome: "success",

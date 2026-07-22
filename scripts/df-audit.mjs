@@ -1945,18 +1945,18 @@ export async function auditRetiredAuthorityNames(github, repository, ref) {
     "README.md",
     "PRD.md",
     "AGENTS.md",
-    ".agents/capabilities/project/AGENTS.md",
-    ".agents/capabilities/project/COMMANDS.md",
-    ".agents/capabilities/project/DECISIONS.md",
-    ".agents/capabilities/project/HANDOFF.md",
-    ".agents/capabilities/project/PROJECT.md",
-    ".agents/capabilities/project/STATUS.md",
-    ".agents/capabilities/project/STRUCTURE.md",
+    ".agents/.project/AGENTS.md",
+    ".agents/.project/COMMANDS.md",
+    ".agents/.project/DECISIONS.md",
+    ".agents/.project/HANDOFF.md",
+    ".agents/.project/PROJECT.md",
+    ".agents/.project/STATUS.md",
+    ".agents/.project/STRUCTURE.md",
     ".agents/branching-policy.md",
     ".agents/installer-policy.json",
     ".agents/managed-repository.json",
     ".github/workflows/sync-managed-repos.yml",
-    "src/managed-files.ts"
+    "src/bot/managed-files.ts"
   ];
   const documents = [];
   for (const filePath of authorityPaths) {
