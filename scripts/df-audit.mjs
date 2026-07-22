@@ -937,7 +937,7 @@ export async function auditManagedFileDrift(github, repository, targetRef, contr
   const controlRevision = assertExactCommit(options.controlRevision, "trusted control");
   const agentOsDataRevision = assertExactCommit(options.agentOsDataRevision, "canonical private-data");
   const findings = [];
-  const manifestText = await getOptionalFileContent(github, controlRepo, ".darkfactory/managed-repository.json", controlRevision);
+  const manifestText = await getOptionalFileContent(github, controlRepo, ".agents/managed-repository.json", controlRevision);
   const manifest = parseManagedManifest(manifestText);
   if (!manifest.ok) {
     return [doctorFinding("managed-baseline-invalid", "managed file drift", manifest.error, {
@@ -1188,7 +1188,7 @@ export async function auditRuntimeAuthority(github, repository, ref, controlRepo
   if (!/\$ANDROMEDA_HOME|ANDROMEDA_HOME/.test(agents || "")) {
     findings.push(doctorFinding("agents-home-authority-undocumented", "runtime authority", "AGENTS.md does not point to canonical ANDROMEDA_HOME authority.", { severity: "error" }));
   }
-  const enforcementText = await getOptionalFileContent(github, repository, ".darkfactory/enforcement-rules.json", ref);
+  const enforcementText = await getOptionalFileContent(github, repository, ".agents/enforcement-rules.json", ref);
   try {
     const rules = JSON.parse(enforcementText || "{}");
     const noBypass = Array.isArray(rules.rules) && rules.rules.some((rule) => rule?.id === "no-admin-bypass" && rule.enabled !== false && rule.severity === "block");
@@ -1204,7 +1204,7 @@ export async function auditRuntimeAuthority(github, repository, ref, controlRepo
 export async function auditPrerequisites(github, repository, ref, options = {}) {
   const findings = [];
   if (!ref) return findings;
-  const manifestText = await getOptionalFileContent(github, repository, ".darkfactory/managed-repository.json", ref);
+  const manifestText = await getOptionalFileContent(github, repository, ".agents/managed-repository.json", ref);
   let requiredSecrets = [];
   try {
     const manifest = JSON.parse(manifestText || "{}");
@@ -1387,8 +1387,8 @@ function emptyMachineRuntimeEvidence(overrides = {}) {
 
 export async function auditLabelTaxonomy(github, repository, controlRepo = CONTROL_REPO, controlRevision) {
   const exactControlRevision = assertExactCommit(controlRevision, "trusted control");
-  const source = await getOptionalFileContent(github, controlRepo, "managed-repository/.darkfactory/labels.json", exactControlRevision)
-    ?? await getOptionalFileContent(github, controlRepo, ".darkfactory/labels.json", exactControlRevision);
+  const source = await getOptionalFileContent(github, controlRepo, "managed-repository/.agents/labels.json", exactControlRevision)
+    ?? await getOptionalFileContent(github, controlRepo, ".agents/labels.json", exactControlRevision);
   if (!source) {
     return [doctorFinding("label-taxonomy-source-missing", "configuration prerequisites", "Canonical label taxonomy is missing or inaccessible.", { severity: "critical" })];
   }

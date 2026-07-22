@@ -19,7 +19,7 @@ const MANAGED_FILES: ManagedFile[] = [
   { path: "AGENTS.md", content: "# Agent Entry Point\n" },
   { path: ".github/workflows/ci.yml", content: "name: CI\n" },
   {
-    path: ".darkfactory/managed-repository.json",
+    path: ".agents/managed-repository.json",
     content: JSON.stringify({
       schemaVersion: 1,
       dataRepo: "marius-patrik/Andromeda-data",

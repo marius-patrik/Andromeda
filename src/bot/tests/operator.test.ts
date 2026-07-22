@@ -364,7 +364,7 @@ test("clean plan consumes artifact and label findings only through typed exact r
   const plan = buildCleanPlan(evidence([], {
     reviewFindings: [artifactFinding, labelFinding],
     artifactRepairs: [{ findingId: artifactFinding.id, findingFingerprint: artifactFinding.fingerprint, path: "debug.log", blobSha: "1".repeat(40), mode: "100644", base: "dev", baseSha: "2".repeat(40), branch: "darkfactory/clean-artifact-test", state: "needed" }],
-    managedLabels: [{ findingId: labelFinding.id, findingFingerprint: labelFinding.fingerprint, name: "df:old", color: "abcdef", description: "old", policyPath: ".darkfactory/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: "2".repeat(40) }]
+    managedLabels: [{ findingId: labelFinding.id, findingFingerprint: labelFinding.fingerprint, name: "df:old", color: "abcdef", description: "old", policyPath: ".agents/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: "2".repeat(40) }]
   }));
 
   assert.equal(plan.entries.find((entry) => entry.kind === "artifact")?.action, "repair-artifact");

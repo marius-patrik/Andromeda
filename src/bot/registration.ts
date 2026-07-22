@@ -4,7 +4,7 @@ import type { OperatorGitHubRequester } from "./clean-evidence.js";
 import type { SetupReceipt } from "./setup.js";
 
 export const MANAGED_REGISTRY_REPOSITORY = "marius-patrik/Andromeda-data";
-export const MANAGED_REGISTRY_PATH = "managed-repository/.darkfactory/managed-repos.json";
+export const MANAGED_REGISTRY_PATH = "managed-repository/.agents/managed-repos.json";
 const REGISTRATION_PR_MARKER = "<!-- darkfactory:managed-registration-pr -->";
 const REGISTRATION_PROVENANCE_PREFIX = "<!-- darkfactory:managed-registration";
 const REGISTRATION_GATE_APP_ID = 15368;

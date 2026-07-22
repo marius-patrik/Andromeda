@@ -1972,7 +1972,7 @@ test("df-sweep blocks when exact managed branch protection is not provisioned", 
             error.status = 404;
             throw error;
           }
-          if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+          if (method === "GET" && pathName.includes("/contents/.agents/managed-repository.json")) {
             const error: Error & { status?: number } = new Error("Missing managed config");
             error.status = 404;
             throw error;
@@ -2027,7 +2027,7 @@ test("df-sweep holds worker PRs when managed config declares DarkFactory Autorev
         if (method === "GET" && pathName.endsWith("/protection")) {
           return managedProtection();
         }
-        if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+        if (method === "GET" && pathName.includes("/contents/.agents/managed-repository.json")) {
           return {
             type: "file",
             encoding: "base64",
@@ -2319,7 +2319,7 @@ test("df-sweep blocks protected branches that have no required checks", async ()
         if (method === "GET" && pathName.endsWith("/protection")) {
           return { required_status_checks: null };
         }
-        if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+        if (method === "GET" && pathName.includes("/contents/.agents/managed-repository.json")) {
           const error: Error & { status?: number } = new Error("Missing managed config");
           error.status = 404;
           throw error;

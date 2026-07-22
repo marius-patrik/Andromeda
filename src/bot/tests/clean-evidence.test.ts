@@ -1417,7 +1417,7 @@ function managedLabelEvidence(): CleanEvidence {
   return {
     repository: "marius-patrik/example", defaultBranch: "main", observedRefs: { dev: ARTIFACT_BASE }, branches: [], localBranches: [], orphanRefs: [], detachedWorktrees: [], pullRequests: [], issues: [],
     reviewFindings: [finding], pullRequestFingerprint: "prs-label-v1", issueLaneFingerprint: "issues-label-v1", prdFingerprint: "prd-v1",
-    managedLabels: [{ findingId: finding.id, findingFingerprint: finding.fingerprint, name: "df:old", color: "abcdef", description: "old label", policyPath: ".darkfactory/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: ARTIFACT_BASE }]
+    managedLabels: [{ findingId: finding.id, findingFingerprint: finding.fingerprint, name: "df:old", color: "abcdef", description: "old label", policyPath: ".agents/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: ARTIFACT_BASE }]
   };
 }
 

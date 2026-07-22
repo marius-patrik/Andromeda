@@ -43,20 +43,20 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".github/scripts/df-release.mjs": "import './df-lib.mjs';\n",
       ".github/scripts/df-submodule-autoupdate.mjs": "import './df-lib.mjs';\n",
       ".github/scripts/df-submodule-checkout.mjs": "import './df-lib.mjs';\n",
-      ".darkfactory/branching-policy.md": "# Branching\n",
-      ".darkfactory/autoreview-policy.json": "{}\n",
-      ".darkfactory/data-repository-policy.json": "{}\n",
-      ".darkfactory/issue-draft-policy.json": "{}\n",
-      ".darkfactory/enforcement-rules.json": "{}\n",
-      ".darkfactory/labels.json": "{}\n",
-      ".darkfactory/managed-repos.json": "{}\n",
-      ".darkfactory/managed-repository.json": "{}\n",
-      ".darkfactory/model-policy.json": "{}\n",
-      ".darkfactory/orchestration.json": "{}\n",
-      ".darkfactory/trigger-policy.json": "{}\n",
-      ".darkfactory/installer-policy.json": "{}\n",
-      ".darkfactory/release-policy.json": "{}\n",
-      ".darkfactory/submodule-policy.json": "{}\n"
+      ".agents/branching-policy.md": "# Branching\n",
+      ".agents/autoreview-policy.json": "{}\n",
+      ".agents/data-repository-policy.json": "{}\n",
+      ".agents/issue-draft-policy.json": "{}\n",
+      ".agents/enforcement-rules.json": "{}\n",
+      ".agents/labels.json": "{}\n",
+      ".agents/managed-repos.json": "{}\n",
+      ".agents/managed-repository.json": "{}\n",
+      ".agents/model-policy.json": "{}\n",
+      ".agents/orchestration.json": "{}\n",
+      ".agents/trigger-policy.json": "{}\n",
+      ".agents/installer-policy.json": "{}\n",
+      ".agents/release-policy.json": "{}\n",
+      ".agents/submodule-policy.json": "{}\n"
     }),
     { owner: "marius-patrik", repo: "example", ref: "abc123" }
   );
@@ -87,12 +87,12 @@ test("checkRepositorySetup reports missing repository policy without a version m
   assert.ok(comment?.includes(".github/workflows/df-release.yml"));
   assert.ok(comment?.includes(".github/workflows/df-submodule-autoupdate.yml"));
   assert.ok(comment?.includes(".github/workflows/darkfactory-autoreview.yml"));
-  assert.ok(comment?.includes(".darkfactory/enforcement-rules.json"));
-  assert.ok(comment?.includes(".darkfactory/managed-repository.json"));
-  assert.ok(comment?.includes(".darkfactory/trigger-policy.json"));
-  assert.ok(comment?.includes(".darkfactory/release-policy.json"));
-  assert.ok(comment?.includes(".darkfactory/data-repository-policy.json"));
-  assert.ok(comment?.includes(".darkfactory/submodule-policy.json"));
+  assert.ok(comment?.includes(".agents/enforcement-rules.json"));
+  assert.ok(comment?.includes(".agents/managed-repository.json"));
+  assert.ok(comment?.includes(".agents/trigger-policy.json"));
+  assert.ok(comment?.includes(".agents/release-policy.json"));
+  assert.ok(comment?.includes(".agents/data-repository-policy.json"));
+  assert.ok(comment?.includes(".agents/submodule-policy.json"));
   assert.ok(comment?.includes("canonical Andromeda-data"));
   assert.ok(!comment?.includes("agents-data"));
 });

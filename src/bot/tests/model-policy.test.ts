@@ -58,7 +58,7 @@ test("all four logical tiers produce only canonical agents CLI arguments", async
     modelRequestForPurpose(policy, "planning"),
     modelRequestForPurpose(policy, "explicitMaximum", { ownerAuthorized: true, authorizationRef: "issue:35#owner" })
   ];
-  const receiptPath = path.resolve(controlRoot, ".darkfactory", "test-receipt.json");
+  const receiptPath = path.resolve(controlRoot, ".agents", "test-receipt.json");
   assert.deepEqual(requests.map((request: any) => request.modelTier), ["low", "medium", "high", "max"]);
   for (const request of requests) {
     const args = agentRunArguments(request, {
@@ -74,7 +74,7 @@ test("all four logical tiers produce only canonical agents CLI arguments", async
     assert.doesNotMatch(args.join(" "), /(?:^|\s)(?:kimi|agy|codex|claude)(?:\s|$)|auth\.json|credentials/i);
   }
 
-  const promptFile = path.resolve(controlRoot, ".darkfactory", "bounded-review-prompt.txt");
+  const promptFile = path.resolve(controlRoot, ".agents", "bounded-review-prompt.txt");
   const fileArgs = agentRunArguments(requests[1], {
     promptFile,
     receiptPath,

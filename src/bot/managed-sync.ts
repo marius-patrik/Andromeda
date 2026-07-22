@@ -17,7 +17,7 @@ export const DARK_FACTORY_CONTROL_REPOSITORY = {
   repo: "DarkFactory"
 } as const;
 export const REPOSITORY_OWNED_RELEASE_CONTROLS = new Set([
-  ".darkfactory/release-policy.json",
+  ".agents/release-policy.json",
   ".github/scripts/df-release.mjs",
   ".github/workflows/df-release.yml"
 ]);

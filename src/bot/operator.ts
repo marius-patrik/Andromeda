@@ -300,7 +300,7 @@ export interface CleanEvidence {
     name: string;
     color: string;
     description: string;
-    policyPath: ".darkfactory/labels.json";
+    policyPath: ".agents/labels.json";
     policyBlob: string;
     policyRef: "dev";
     policyRevision: string;

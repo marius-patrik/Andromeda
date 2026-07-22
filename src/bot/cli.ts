@@ -586,7 +586,7 @@ async function executeSetupPlan(
     if (operations.has("converge-settings")) {
       try {
         const files = readManagedFiles({ owner, repo });
-        const labels = parseLabelDefinitions(files.find((file) => file.path === ".darkfactory/labels.json")?.content || "");
+        const labels = parseLabelDefinitions(files.find((file) => file.path === ".agents/labels.json")?.content || "");
         const workflows = files.map((file) => file.path).filter((path) => path.startsWith(".github/workflows/") && path.endsWith(".yml"));
         receipts.push(...await convergeRepositorySettings(github, { owner, repo }, labels, workflows));
       } catch (error) {

@@ -315,7 +315,7 @@ async function seedCanonicalManagedSource(root: string): Promise<{ managedRoot: 
         packageFiles: [...PACKAGE_MANAGED_PATHS],
         requiredFiles,
         removedFiles: [
-          ".darkfactory/release-conventions.md",
+          ".agents/release-conventions.md",
           ".github/scripts/dark-factory-release-check.mjs",
           ".github/workflows/dark-factory-release.yml"
         ]

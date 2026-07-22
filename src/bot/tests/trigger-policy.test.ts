@@ -60,7 +60,7 @@ test("issue draft hygiene is trusted-main, df-local, zero-token, sanitized, and 
   const [workflow, source, managed] = await Promise.all([
     readFile(path.join(root, ".github/workflows/df-issue-draft-hygiene.yml"), "utf8"),
     readFile(path.join(root, ".github/scripts/df-issue-draft-hygiene.mjs"), "utf8"),
-    readFile(path.join(root, ".darkfactory/managed-repository.json"), "utf8")
+    readFile(path.join(root, ".agents/managed-repository.json"), "utf8")
   ]);
   assert.match(workflow, /cron: "19 \*\/6 \* \* \*"/);
   assert.match(workflow, /runs-on: \[self-hosted, df-local\]/);
@@ -73,7 +73,7 @@ test("issue draft hygiene is trusted-main, df-local, zero-token, sanitized, and 
   assert.match(source, /sanitized: true/);
   const manifest = JSON.parse(managed);
   for (const required of [
-    ".darkfactory/issue-draft-policy.json",
+    ".agents/issue-draft-policy.json",
     ".github/workflows/df-issue-draft-hygiene.yml",
     ".github/scripts/df-issue-draft-hygiene.mjs"
   ]) {
@@ -876,7 +876,7 @@ test("active recovery workflows bind trusted main, Agent OS, scoped tokens, exac
   const [recovery, clean, managed] = await Promise.all([
     readFile(path.join(root, ".github/workflows/df-autoreview-recovery.yml"), "utf8"),
     readFile(path.join(root, ".github/workflows/df-clean.yml"), "utf8"),
-    readFile(path.join(root, ".darkfactory/managed-repository.json"), "utf8")
+    readFile(path.join(root, ".agents/managed-repository.json"), "utf8")
   ]);
   assert.match(recovery, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(recovery, /bin\\agents\.ps1/);

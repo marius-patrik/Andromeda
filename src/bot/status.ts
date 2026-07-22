@@ -87,7 +87,7 @@ export interface StatusReport {
   backlogCoverage: BacklogCoverage[];
 }
 
-const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
+const MANAGED_REPOS_PATH = ".agents/managed-repos.json";
 
 export function parseManagedReposJson(raw: unknown, owner: string): ManagedRepo[] {
   if (!isRecord(raw) || !isRecord(raw.repositories)) {

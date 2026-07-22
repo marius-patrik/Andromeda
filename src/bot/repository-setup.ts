@@ -9,7 +9,7 @@ export const REPOSITORY_SETUP_COMMENT_MARKER = "<!-- dark-factory:repository-set
 
 const BOOTSTRAP_PATHS = requiredManagedFilePaths()
   .map((path) => ({
-    displayPath: path === "AGENTS.md" ? "repository" : path.startsWith(".github/") ? ".github" : ".darkfactory",
+    displayPath: path === "AGENTS.md" ? "repository" : path.startsWith(".github/") ? ".github" : ".agents",
     requiredPath: path,
     reason: managedPathReason(path)
   })) as Array<{ displayPath: string; requiredPath: string; reason: string }>;
@@ -86,7 +86,7 @@ function managedPathReason(path: string): string {
   if (path === DARK_FACTORY_AUTOREVIEW_WORKFLOW_PATH) return "DarkFactory Autoreview workflow";
   if (path === GITHUB_BOOTSTRAP_WORKFLOW_PATH) return "DarkFactory installer workflow";
   if (path === DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH) return "DarkFactory auto-update sentinel workflow";
-  if (path.startsWith(".darkfactory/")) return "DarkFactory managed policy";
+  if (path.startsWith(".agents/")) return "DarkFactory managed policy";
   return "DarkFactory managed workflow support";
 }
 

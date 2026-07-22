@@ -1086,7 +1086,7 @@ test("label taxonomy audit accepts exact state and reports missing or drifted la
     { name: "df:no-dispatch", color: "6E7781", description: "Categorical hold" }
   ] });
   const exact = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(policy);
     if (requestPath.includes("/labels?")) return [
       { name: "df:ready", color: "0e8a16", description: "Machine-evaluated" },
       { name: "df:no-dispatch", color: "6E7781", description: "Categorical hold" },
@@ -1098,7 +1098,7 @@ test("label taxonomy audit accepts exact state and reports missing or drifted la
   assert.deepEqual(await doctor.auditLabelTaxonomy(exact.gh, repo, repo, controlRevision), []);
 
   const drift = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(policy);
     if (requestPath.includes("/labels?")) return [{ name: "df:ready", color: "ffffff", description: "wrong" }];
     throw new Error(`unexpected ${requestPath}`);
   });
@@ -1112,7 +1112,7 @@ test("label taxonomy surfaces only exact orphan df namespace labels as reviewed 
     { name: "df:ready", color: "0E8A16", description: "Machine-evaluated" }
   ] });
   const { gh } = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(policy);
     if (requestPath.includes("/labels?")) return [
       { name: "df:ready", color: "0E8A16", description: "Machine-evaluated" },
       { name: "df:retired", color: "111111", description: "Old managed state" },
@@ -1134,7 +1134,7 @@ test("label taxonomy denies orphan cleanup when current or canonical label ident
     { name: "df:ready", color: "0E8A16", description: "Machine-evaluated" }
   ] });
   const duplicateCurrent = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(policy);
     if (requestPath.includes("/labels?")) return [
       { name: "df:orphan", color: "111111", description: "one" },
       { name: "DF:ORPHAN", color: "222222", description: "two" }
@@ -1150,7 +1150,7 @@ test("label taxonomy denies orphan cleanup when current or canonical label ident
     { name: "DF:READY", color: "0E8A16", description: "two" }
   ] });
   const ambiguousPolicy = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(duplicatePolicy);
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(duplicatePolicy);
     throw new Error(`current labels must not be read after ambiguous source policy: ${requestPath}`);
   });
   const policyFindings = await doctor.auditLabelTaxonomy(ambiguousPolicy.gh, repo, repo, controlRevision);
@@ -1163,7 +1163,7 @@ test("label taxonomy denies orphan cleanup when current or canonical label ident
     description: "bounded page"
   }));
   const cappedCurrent = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(policy);
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(policy);
     if (requestPath.includes("/labels?")) return cappedLabels;
     throw new Error(`unexpected ${requestPath}`);
   });
@@ -1180,8 +1180,8 @@ test("repository tree permits root policy authority but rejects nested copies", 
       { path: ".agents", type: "tree" },
       { path: ".agents/.project", type: "tree" },
       { path: ".agents/.project/STATUS.md", type: "blob" },
-      { path: ".darkfactory", type: "tree" },
-      { path: ".darkfactory/branching-policy.md", type: "blob" },
+      { path: ".agents", type: "tree" },
+      { path: ".agents/branching-policy.md", type: "blob" },
       { path: "src/example/.agents/private.json", type: "blob" }
     ]
   });
@@ -1237,7 +1237,7 @@ test("managed baseline audit detects drift and files that must be removed", asyn
     removedFiles: ["retired.txt"]
   });
   const { gh, calls } = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/managed-repository.json")) return content(manifest);
+    if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.agents/managed-repository.json")) return content(manifest);
     if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/managed.txt")) return content("expected\n");
     if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/managed.txt")) return content("actual\n");
     if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/retired.txt")) return content("remove me\n");
@@ -1266,7 +1266,7 @@ test("managed project overlay enumeration fails closed on malformed or disappear
 
   for (const [label, rootResponse, expected] of cases) {
     const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/managed-repository.json")) return content(manifest);
+      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.agents/managed-repository.json")) return content(manifest);
       if (requestPath.includes(`/contents/${prefix}/nested?`)) throw notFound();
       if (requestPath.includes(`/contents/${prefix}?`)) return rootResponse;
       throw new Error(`unexpected ${requestPath}`);
@@ -1288,7 +1288,7 @@ test("managed project overlay re-attests every listed file before comparing targ
   const listedSha = "a".repeat(40);
 
   const { gh: validGh } = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/managed-repository.json")) return content(manifest);
+    if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.agents/managed-repository.json")) return content(manifest);
     if (requestPath.includes(`/contents/${sourcePath}?`)) return { ...content("expected\n"), sha: listedSha };
     if (requestPath.includes(`/contents/${prefix}?`)) return [{ type: "file", path: sourcePath, sha: listedSha }];
     if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.agents/.project/STATUS.md")) return content("expected\n");
@@ -1304,7 +1304,7 @@ test("managed project overlay re-attests every listed file before comparing targ
     ["listed file identity changes", { ...content("expected\n"), sha: "b".repeat(40) }]
   ] as const) {
     const { gh } = mockGh((_method, requestPath) => {
-      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/managed-repository.json")) return content(manifest);
+      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.agents/managed-repository.json")) return content(manifest);
       if (requestPath.includes(`/contents/${sourcePath}?`)) {
         if (sourceResponse instanceof Error) throw sourceResponse;
         return sourceResponse;
@@ -1334,7 +1334,7 @@ test("managed baseline reports a release-control source contradiction without au
     html_url: "https://github.com/marius-patrik/DarkFactory/issues/41"
   };
   const { gh } = mockGh((_method, requestPath) => {
-    if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/managed-repository.json")) return content(manifest);
+    if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.agents/managed-repository.json")) return content(manifest);
     if (requestPath.includes("/repos/marius-patrik/Andromeda-data/contents/managed-repository/repositories/")) throw notFound();
     throw new Error(`release-control target must not be read while source policy contradicts #41: ${requestPath}`);
   });
@@ -1642,8 +1642,8 @@ test("runtime authority and prerequisites fail closed on direct providers, missi
   const { gh } = mockGh((_method, requestPath) => {
     if (requestPath.includes("/.github/workflows/df-work.yml")) return content("codex exec --dangerously-bypass");
     if (requestPath.includes("/contents/AGENTS.md")) return content("No shared authority documented.");
-    if (requestPath.includes("/contents/.darkfactory/enforcement-rules.json")) return content("{");
-    if (requestPath.includes("/contents/.darkfactory/managed-repository.json")) return content('{"requiredSecrets":["REQUIRED_TOKEN"]}');
+    if (requestPath.includes("/contents/.agents/enforcement-rules.json")) return content("{");
+    if (requestPath.includes("/contents/.agents/managed-repository.json")) return content('{"requiredSecrets":["REQUIRED_TOKEN"]}');
     if (requestPath.includes("/actions/secrets")) return { secrets: [] };
     if (requestPath.includes("/actions/runners")) return { runners: [{ status: "offline", labels: [{ name: "df-local" }] }] };
     throw new Error(`unexpected ${requestPath}`);
@@ -1871,10 +1871,10 @@ test("diagnose mode performs no GitHub writes and pins target reads when a branc
     if (requestPath.includes("/contents/README.md")) return content("# DarkFactory\n");
     if (requestPath.includes("/contents/package.json")) return content('{"name":"@agent-os/darkfactory"}');
     if (requestPath.includes("/contents/PRD.md")) return content("# PRD\n");
-    if (requestPath.includes("/contents/.darkfactory/enforcement-rules.json")) return content('{"rules":[{"id":"no-admin-bypass","enabled":true,"severity":"block"}]}');
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(LABEL_POLICY);
+    if (requestPath.includes("/contents/.agents/enforcement-rules.json")) return content('{"rules":[{"id":"no-admin-bypass","enabled":true,"severity":"block"}]}');
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(LABEL_POLICY);
     if (requestPath.includes("/labels?") && requestPath.endsWith("page=1")) return JSON.parse(LABEL_POLICY).labels;
-    if (requestPath.includes("/contents/.darkfactory/") || requestPath.includes("/contents/.gitmodules") || requestPath.includes("/contents/.github/workflows/sync-managed-repos.yml") || requestPath.includes("/contents/.agents/") || requestPath.includes("/contents/src/managed-files.ts")) throw notFound();
+    if (requestPath.includes("/contents/.agents/") || requestPath.includes("/contents/.gitmodules") || requestPath.includes("/contents/.github/workflows/sync-managed-repos.yml") || requestPath.includes("/contents/.agents/") || requestPath.includes("/contents/src/managed-files.ts")) throw notFound();
     throw new Error(`unexpected ${method} ${requestPath}`);
   });
   const reports = await doctor.runRepositoryDoctor(gh, {
@@ -1953,10 +1953,10 @@ test("report mode routes issue writes to target authority and contents writes on
     if (requestPath.includes("/contents/README.md")) return content("# DarkFactory\n");
     if (requestPath.includes("/contents/package.json")) return content('{"name":"@agent-os/darkfactory"}');
     if (requestPath.includes("/contents/PRD.md")) return content("# PRD\n");
-    if (requestPath.includes("/contents/.darkfactory/enforcement-rules.json")) return content('{"rules":[{"id":"no-admin-bypass","enabled":true,"severity":"block"}]}');
-    if (requestPath.includes("/contents/managed-repository/.darkfactory/labels.json")) return content(LABEL_POLICY);
+    if (requestPath.includes("/contents/.agents/enforcement-rules.json")) return content('{"rules":[{"id":"no-admin-bypass","enabled":true,"severity":"block"}]}');
+    if (requestPath.includes("/contents/managed-repository/.agents/labels.json")) return content(LABEL_POLICY);
     if (requestPath.includes("/labels?") && requestPath.endsWith("page=1")) return JSON.parse(LABEL_POLICY).labels;
-    if (requestPath.includes("/contents/.darkfactory/") || requestPath.includes("/contents/.gitmodules") || requestPath.includes("/contents/.github/workflows/sync-managed-repos.yml") || requestPath.includes("/contents/.agents/") || requestPath.includes("/contents/src/managed-files.ts")) throw notFound();
+    if (requestPath.includes("/contents/.agents/") || requestPath.includes("/contents/.gitmodules") || requestPath.includes("/contents/.github/workflows/sync-managed-repos.yml") || requestPath.includes("/contents/.agents/") || requestPath.includes("/contents/src/managed-files.ts")) throw notFound();
     throw new Error(`unexpected target ${method} ${requestPath}`);
   });
   const { gh: ledgerGh, calls: ledgerCalls } = mockGh((method, requestPath) => {

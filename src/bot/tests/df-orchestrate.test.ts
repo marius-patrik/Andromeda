@@ -125,10 +125,10 @@ test("orchestration policy loading fails closed and accepts only the canonical s
   // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
   const { readOrchestrationPolicy } = await import("../../../scripts/df-orchestrate.mjs?unit=df-orchestrate-policy-test");
   const root = await mkdtemp(join(tmpdir(), "df-orchestration-policy-"));
-  const policyPath = join(root, ".darkfactory", "orchestration.json");
+  const policyPath = join(root, ".agents", "orchestration.json");
   try {
     await assert.rejects(readOrchestrationPolicy(root), /Failed to read required JSON file/);
-    await mkdir(join(root, ".darkfactory"), { recursive: true });
+    await mkdir(join(root, ".agents"), { recursive: true });
     await writeFile(policyPath, "{");
     await assert.rejects(readOrchestrationPolicy(root), /Invalid JSON/);
     await writeFile(policyPath, JSON.stringify({ schemaVersion: 2 }));
