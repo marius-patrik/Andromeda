@@ -16,7 +16,7 @@
   },
   "protectedAutofixPaths": [
     ".agents/",
-    ".darkfactory/",
+    ".agents/",
     ".github/",
     "AGENTS.md",
     "bun.lock",

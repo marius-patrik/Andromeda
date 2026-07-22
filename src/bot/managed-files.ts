@@ -14,12 +14,12 @@ export const DARK_FACTORY_AUTOREVIEW_WORKFLOW_PATH = ".github/workflows/darkfact
 export const DARK_FACTORY_AUTOREVIEW_SCHEMA_PATH = ".github/darkfactory-autoreview.schema.json";
 export const DARK_FACTORY_AUTOREVIEW_PROTOCOL_PATH = ".github/scripts/df-autoreview.mjs";
 export const DARK_FACTORY_AUTOREVIEW_SCRIPT_PATH = ".github/scripts/run-darkfactory-autoreview.mjs";
-export const DARK_FACTORY_AUTOREVIEW_POLICY_PATH = ".darkfactory/autoreview-policy.json";
-export const DARK_FACTORY_DATA_REPOSITORY_POLICY_PATH = ".darkfactory/data-repository-policy.json";
-export const DARK_FACTORY_MODEL_POLICY_PATH = ".darkfactory/model-policy.json";
-export const DARK_FACTORY_TRIGGER_POLICY_PATH = ".darkfactory/trigger-policy.json";
-export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
-export const DARK_FACTORY_SUBMODULE_POLICY_PATH = ".darkfactory/submodule-policy.json";
+export const DARK_FACTORY_AUTOREVIEW_POLICY_PATH = ".agents/autoreview-policy.json";
+export const DARK_FACTORY_DATA_REPOSITORY_POLICY_PATH = ".agents/data-repository-policy.json";
+export const DARK_FACTORY_MODEL_POLICY_PATH = ".agents/model-policy.json";
+export const DARK_FACTORY_TRIGGER_POLICY_PATH = ".agents/trigger-policy.json";
+export const DARK_FACTORY_RELEASE_POLICY_PATH = ".agents/release-policy.json";
+export const DARK_FACTORY_SUBMODULE_POLICY_PATH = ".agents/submodule-policy.json";
 export const DARK_FACTORY_MANAGED_CHECK_SCRIPT_PATH = ".github/scripts/dark-factory-managed-check.mjs";
 export const DARK_FACTORY_SCRIPT_LIB_PATH = ".github/scripts/df-lib.mjs";
 export const DARK_FACTORY_ENFORCEMENT_SCRIPT_PATH = ".github/scripts/df-enforcement.mjs";
@@ -34,11 +34,11 @@ export const DARK_FACTORY_SWEEP_SCRIPT_PATH = ".github/scripts/df-sweep.mjs";
 export const DARK_FACTORY_WORK_SCRIPT_PATH = ".github/scripts/df-work.mjs";
 export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/df-release.yml";
 export const DARK_FACTORY_SUBMODULE_WORKFLOW_PATH = ".github/workflows/df-submodule-autoupdate.yml";
-export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository.json";
-export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
-export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".darkfactory/branching-policy.md";
-export const DARK_FACTORY_ENFORCEMENT_RULES_PATH = ".darkfactory/enforcement-rules.json";
-export const DARK_FACTORY_LABELS_PATH = ".darkfactory/labels.json";
+export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".agents/managed-repository.json";
+export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".agents/installer-policy.json";
+export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".agents/branching-policy.md";
+export const DARK_FACTORY_ENFORCEMENT_RULES_PATH = ".agents/enforcement-rules.json";
+export const DARK_FACTORY_LABELS_PATH = ".agents/labels.json";
 
 export interface ManagedFile {
   path: string;
@@ -50,7 +50,7 @@ export interface ManagedRepositoryRef {
   repo: string;
 }
 
-const MANAGED_COMMON_DIRS = [".github", ".darkfactory"] as const;
+const MANAGED_COMMON_DIRS = [".github", ".agents"] as const;
 const MANAGED_COMMON_FILES = [ANDROMEDA_ENTRYPOINT_PATH] as const;
 const EXCLUDED_MANAGED_FILE_PATHS = new Set([".github/workflows/df-event-forward.yml"]);
 export function readManagedFiles(repository?: ManagedRepositoryRef): ManagedFile[] {
