@@ -97,7 +97,7 @@ export function validateModelPolicy(raw) {
   }
 
   return Object.freeze({
-    schemaVersion: 3,
+    schemaVersion: 1,
     description: raw.description.trim(),
     purposes: Object.freeze(normalizedPurposes)
   });
@@ -125,7 +125,7 @@ export function modelRequestForPurpose(policy, purpose, options = {}) {
     request = validated.purposes[purpose];
   }
   return Object.freeze({
-    schemaVersion: 3,
+    schemaVersion: 1,
     purpose,
     modelTier: request.modelTier,
     effort: request.effort,
