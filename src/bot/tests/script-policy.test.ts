@@ -115,7 +115,7 @@ test("parsePrdItems includes nested PRD paths in stable markers", () => {
   const [packageItem] = parsePrdItems("## Milestones\n\n- **M2 — Planning**: Reconcile.", "src/example/PRD.md");
 
   assert.equal(rootItem.marker, "df-prd:milestones-m2");
-  assert.equal(packageItem.marker, "df-prd:packages-example-prd-md-milestones-m2");
+  assert.equal(packageItem.marker, "df-prd:src-example-prd-md-milestones-m2");
   assert.equal(packageItem.sourcePath, "src/example/PRD.md");
 });
 

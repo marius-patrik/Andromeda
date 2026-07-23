@@ -1185,7 +1185,7 @@ test("repository tree permits root policy authority but rejects nested copies", 
       { path: "src/example/.agents/private.json", type: "blob" }
     ]
   });
-  assert.deepEqual(findings.map((finding) => finding.id), ["state-boundary-packages-example-agents-private-json"]);
+  assert.deepEqual(findings.map((finding) => finding.id), ["state-boundary-src-example-agents-private-json"]);
 });
 
 test("repository tree reports malformed entries without leaking their payload", async () => {
@@ -1437,7 +1437,7 @@ test("PRD cross-review includes product PRDs and excludes template sources", asy
   const issues = [{
     number: 11,
     state: "open",
-    body: "<!-- df-prd:packages-core-prd-md-milestones-m1 -->",
+    body: "<!-- df-prd:src-core-prd-md-milestones-m1 -->",
     labels: []
   }];
   const { gh, calls } = mockGh((_method, requestPath) => {

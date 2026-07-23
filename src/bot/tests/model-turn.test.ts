@@ -114,7 +114,7 @@ test("every current model-backed entrypoint converges on the shared composition 
   const root = path.resolve(import.meta.dirname, "..");
   const worker = await readFile(path.join(root, ".github", "scripts", "df-work.mjs"), "utf8");
   const autoreview = await readFile(path.join(root, ".github", "scripts", "run-darkfactory-autoreview.mjs"), "utf8");
-  const boundary = await readFile(path.join(root, "src", "model-turn.ts"), "utf8");
+  const boundary = await readFile(path.join(root, "model-turn.ts"), "utf8");
   assert.match(worker, /executeModelTurn/);
   assert.match(autoreview, /executeModelTurn/);
   assert.match(boundary, /adapters\.agentRunArguments/);
