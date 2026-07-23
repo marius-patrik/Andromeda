@@ -258,7 +258,7 @@ agents os exec <name> -- <args...>
 agents os terminal <name> [--shell bash]
 agents os remove <name> [--prune-data] [--dry-run]
 agents os deploy <profile> [--image andromeda-os] [--env andromeda-os] [--channel dev] [--dry-run]
-agents runner install|enable|disable|status|repair [--json]
+andromeda runner install|enable|disable|status|repair [--json]
 ```
 
 `--tool-policy none` is an independent confidentiality boundary for fresh,
@@ -373,12 +373,12 @@ Memory mutations require `--source`, `--hash`, `--source-class`, and
 `agents secrets github sync` is an external mutation and requires an explicit
 repository or owner target; use `--dry-run` to validate command construction.
 
-`agents runner ...` manages the persistent lifecycle of the trusted DarkFactory
+`andromeda runner ...` manages the persistent lifecycle of the trusted DarkFactory
 `df-local` GitHub Actions runner (`df-darkfactory-agent`): it provisions and
 registers the runner with the `self-hosted, Windows, X64, df-local` labels,
 persists it across reboot/logon through a least-privilege per-user scheduled
 task bound through an absolute inbox Windows PowerShell path to the canonical
-`bin\agents.ps1` launcher, starts only after a healthy `agents state doctor`,
+`bin\andromeda.ps1` launcher, starts only after a healthy `andromeda state doctor`,
 never persists a registration token, reconciles stale/duplicate registrations
 and processes, and reports redacted health via `status --json`. The
 checksum-verified runner build is version-pinned with its upstream self-updater
@@ -422,7 +422,7 @@ reported separately by `readiness.enabled`. Canonical constants and state paths
 are always the observation targets; a persisted runner record is comparison
 evidence and never redirects status.
 
-`readiness.launcherBinding` exclusively owns the canonical `bin\agents.ps1`
+`readiness.launcherBinding` exclusively owns the canonical `bin\andromeda.ps1`
 launcher and the scheduled-task action's correctness and cardinality. It does
 not prove that the DarkFactory package build, `dist/cli.js`, global `df`
 command, or TUI is runnable; DarkFactory #263 must test those surfaces

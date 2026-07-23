@@ -72,8 +72,8 @@ jobs:
           # Manual planning can only target protected/default branch refs so a
           # non-canonical tag or PRD snapshot cannot drive issue creation/closure.
           ref="${DF_INPUT_REF}"
-          if [[ "${ref}" != "main" && "${ref}" != "dev" ]]; then
-            echo "::error::DarkFactory manual planning can only target refs/heads/main or refs/heads/dev."
+          if [[ "${ref}" != "main" ]]; then
+            echo "::error::DarkFactory manual planning can only target refs/heads/main."
             exit 1
           fi
 

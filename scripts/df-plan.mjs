@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   PLANNING_LABELS,
   WORK_LABELS,
   assertAllowedRepo,
@@ -47,7 +46,6 @@ const SHA = /^[0-9a-f]{40}$/i;
 const REQUIRED_SCAFFOLD_CHECKS = ["Validate", "DarkFactory Autoreview"];
 const ACTIONS_APP_ID = 15368;
 
-const DATA_REPO = DARK_FACTORY_DATA_REPO;
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
 const TARGET_REF = process.env.DF_TARGET_REF?.trim() || "";
 const PLAN_ALL = process.env.DF_PLAN_ALL === "true";
@@ -105,9 +103,11 @@ async function reconcileTargetRepository(repo, controlRepo) {
   }
 
   await ensureLabels(gh, TARGET_REPO, [...PLANNING_LABELS, ...WORK_LABELS]);
-  // Setup dispatches an exact dev source. Scheduled/default and push planning
-  // may still observe their normal refs, but only admitted dev can authorize a
-  // scaffold PR below.
+  if (repo.default_branch !== "main") {
+    throw new Error(`DarkFactory planning requires main as the target repository default branch; received '${repo.default_branch || "missing"}'.`);
+  }
+  // Planning and scaffold mutations share one source of truth: the immutable
+  // main branch selected by the trunk-based repository contract.
   const sourceRef = PLAN_ALL ? repo.default_branch : TARGET_REF || repo.default_branch;
   const ledger = {
     trigger: TRIGGER,
@@ -393,7 +393,7 @@ async function ensurePrdPresence(repository, repo, sourceRef) {
     };
   }
 
-  if (sourceRef !== "dev") {
+  if (sourceRef !== "main") {
     return {
       rootPresent,
       tree,
@@ -406,10 +406,10 @@ async function ensurePrdPresence(repository, repo, sourceRef) {
   }
 
   const files = await buildScaffoldFiles(repository, sourceRef, missingPaths);
-  const source = await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/dev`);
+  const source = await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/main`);
   const sourceSha = source?.object?.sha;
-  if (!SHA.test(sourceSha || "")) throw new Error("GitHub returned invalid admitted dev evidence for PRD scaffolding.");
-  const expected = { baseRef: "dev", sourceSha: sourceSha.toLowerCase(), files };
+  if (!SHA.test(sourceSha || "")) throw new Error("GitHub returned invalid admitted main evidence for PRD scaffolding.");
+  const expected = { baseRef: "main", sourceSha: sourceSha.toLowerCase(), files };
   const existingPr = await findOpenPrdScaffoldPullRequest(gh, repository, expected);
   if (existingPr) {
     const merge = await armPrdScaffoldAutoMerge(gh, repository, existingPr, expected);
@@ -424,7 +424,7 @@ async function ensurePrdPresence(repository, repo, sourceRef) {
     };
   }
 
-  const pr = await createPrdScaffoldPullRequest(gh, repository, "dev", sourceSha.toLowerCase(), files);
+  const pr = await createPrdScaffoldPullRequest(gh, repository, "main", sourceSha.toLowerCase(), files);
   const merge = await armPrdScaffoldAutoMerge(gh, repository, pr, expected);
   return {
     rootPresent,
@@ -491,13 +491,13 @@ async function buildScaffoldFiles(repository, ref, missingPaths) {
 }
 
 async function createPrdScaffoldPullRequest(github, repository, baseBranch, sourceSha, files) {
-  if (baseBranch !== "dev") throw new Error("PRD scaffolding is restricted to the admitted dev source and base.");
+  if (baseBranch !== "main") throw new Error("PRD scaffolding is restricted to the admitted main source and base.");
   if (!SHA.test(sourceSha || "")) throw new Error("PRD scaffold source SHA is invalid.");
   const timestamp = Date.now();
   const branch = `dark-factory/prd-scaffold-${timestamp}`;
   const baseRef = await github.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(baseBranch)}`);
   const baseSha = baseRef?.object?.sha;
-  if (!SHA.test(baseSha || "") || baseSha.toLowerCase() !== sourceSha.toLowerCase()) throw new Error("Admitted dev changed before PRD scaffold tree creation.");
+  if (!SHA.test(baseSha || "") || baseSha.toLowerCase() !== sourceSha.toLowerCase()) throw new Error("Admitted main changed before PRD scaffold tree creation.");
 
   const baseCommit = await github.request("GET", `/repos/${repoName(repository)}/git/commits/${encodeURIComponent(baseSha)}`);
   const baseTreeSha = baseCommit?.tree?.sha;
@@ -523,7 +523,7 @@ async function createPrdScaffoldPullRequest(github, repository, baseBranch, sour
 
   if (!SHA.test(newCommit?.sha || "")) throw new Error("GitHub returned an invalid PRD scaffold commit identity.");
   const currentBase = await github.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(baseBranch)}`);
-  if (String(currentBase?.object?.sha || "").toLowerCase() !== sourceSha.toLowerCase()) throw new Error("Admitted dev changed before PRD scaffold branch creation.");
+  if (String(currentBase?.object?.sha || "").toLowerCase() !== sourceSha.toLowerCase()) throw new Error("Admitted main changed before PRD scaffold branch creation.");
   await github.request("POST", `/repos/${repoName(repository)}/git/refs`, {
     ref: `refs/heads/${branch}`,
     sha: newCommit.sha
@@ -554,7 +554,7 @@ function scaffoldContentDigest(files) {
 
 function parsePrdScaffoldMarker(body) {
   const match = String(body || "").match(
-    /<!-- dark-factory:prd-scaffold schema=1 repo=([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+) base=(dev) source=([0-9a-f]{40}) head=([0-9a-f]{40}) content=([0-9a-f]{64}) -->/i
+    /<!-- dark-factory:prd-scaffold schema=1 repo=([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+) base=(main) source=([0-9a-f]{40}) head=([0-9a-f]{40}) content=([0-9a-f]{64}) -->/i
   );
   return match ? { repository: match[1], baseRef: match[2], sourceSha: match[3].toLowerCase(), headSha: match[4].toLowerCase(), contentDigest: match[5].toLowerCase() } : null;
 }
@@ -577,7 +577,7 @@ async function assertTrustedPrdScaffoldPullRequest(github, repository, pull, exp
     || !String(pull?.head?.ref || "").startsWith("dark-factory/prd-scaffold-")
     || String(pull?.head?.sha || "").toLowerCase() !== marker.headSha
     || String(pull?.head?.repo?.full_name || "").toLowerCase() !== expectedRepository) {
-    throw new Error("PRD scaffold pull request does not match its same-repository dev/base/head claim.");
+    throw new Error("PRD scaffold pull request does not match its same-repository main/base/head claim.");
   }
   const [baseRef, headRef, commit] = await Promise.all([
     github.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent(expected.baseRef)}`),
@@ -966,7 +966,7 @@ async function upsertDriftIssue(repository, findings) {
 
 async function writeLedger(ledger) {
   try {
-    const written = await writeRunLedger(gh, DATA_REPO, "df-plan", repoName(TARGET_REPO), ledger);
+    const written = await writeRunLedger(gh, "df-plan", repoName(TARGET_REPO), ledger);
     console.log(`DarkFactory ledger written to ${written.repository}/${written.path}`);
   } catch (error) {
     console.warn(`DarkFactory ledger warning: ${error.message || String(error)}`);

@@ -1,4 +1,4 @@
-# Agent OS repository guidance
+# Andromeda repository guidance
 
 Load the project-local authority before non-trivial work:
 
@@ -9,7 +9,12 @@ Load the project-local authority before non-trivial work:
 5. `.agents/project/HANDOFF.md`
 
 Shared identity, memory, roles, and skills are installed once under
-`$ANDROMEDA_HOME`; this repository does not carry a second global agent floor.
+`$ANDROMEDA_HOME`, the checkout of the repository named by
+`.agents/managed-repository.json.dataRepo`
+(`marius-patrik/private-data`). That manifest is the sole external data-repository
+authority. Its `ledgerPath` (`darkfactory-data/runs`) is a directory in the same
+repository, not a second repository. This repository does not carry a second
+global agent floor.
 
 Andromeda-owned repository policy, agent guidance, and documentation are
 root-owned. Do not add `capabilities`, `.darkfactory`, `docs/`, `AGENTS.md`,
@@ -21,7 +26,7 @@ component-specific validation commands belong in `.agents/project/COMMANDS.md`.
 
 Component boundaries:
 
-- `src/cli` owns the `agents` CLI, canonical state, installs,
+- `src/cli` owns the `andromeda` CLI, canonical state, installs,
   credentials/secrets, providers, sessions, memory, packages, lifecycle
   management, and — until the #218 harness migration is implemented and
   accepted — orchestration.

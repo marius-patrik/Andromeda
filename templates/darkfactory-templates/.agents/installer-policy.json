@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "installer": {
+    "required": false,
+    "paths": ["install/install.sh", "install/install.ps1"],
+    "postInstallChecks": ["state-init", "doctor"],
+    "notes": "This .agents policy requires CLI repos to provide platform installers and smoke them in their authoritative validation gates. Library, app, and documentation repos may leave installers absent."
+  },
+  "autoUpdater": {
+    "centralized": true,
+    "workflow": ".github/workflows/dark-factory-autoupdate.yml",
+    "source": "marius-patrik/private-data",
+    "notes": "DarkFactory performs central managed setup sync through its GitHub App and writes runtime ledgers below the manifest-declared ledgerPath in the same data repository. Per-repo updater workflows verify that managed files are present and current enough to receive updates."
+  }
+}

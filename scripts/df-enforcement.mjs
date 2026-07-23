@@ -14,7 +14,7 @@ export const ENFORCEMENT_RULES_PATH = ".agents/enforcement-rules.json";
 
 export const BUILTIN_RULES = [
   "parked-repos-untouched",
-  "work-PRs-target-dev",
+  "work-PRs-target-main",
   "never-merge-red",
   "no-force-push",
   "no-admin-bypass",
@@ -37,7 +37,7 @@ export function defaultEnforcementRules() {
 function defaultRuleDescription(id) {
   const descriptions = {
     "parked-repos-untouched": "DarkFactory must never dispatch workers or merge follow-through actions into parked repositories.",
-    "work-PRs-target-dev": "Worker pull requests must target the integration branch (dev) per the repo branching model.",
+    "work-PRs-target-main": "Worker pull requests must target the sole long-lived branch (main) per the trunk-based repository model.",
     "never-merge-red": "All required status checks must report success before a worker PR may merge.",
     "no-force-push": "Worker branches must not be force-pushed after the worker PR is opened.",
     "no-admin-bypass": "DarkFactory must never use admin override to merge or push.",
@@ -131,7 +131,7 @@ export async function evaluateEnforcementRules(rules, context) {
 
 const ruleRegistry = {
   "parked-repos-untouched": evaluateParkedReposUntouched,
-  "work-PRs-target-dev": evaluateWorkPrsTargetDev,
+  "work-PRs-target-main": evaluateWorkPrsTargetMain,
   "never-merge-red": evaluateNeverMergeRed,
   "no-force-push": evaluateNoForcePush,
   "no-admin-bypass": evaluateNoAdminBypass,
@@ -173,15 +173,15 @@ function evaluateParkedReposUntouched(rule, context) {
   return null;
 }
 
-function evaluateWorkPrsTargetDev(rule, context) {
+function evaluateWorkPrsTargetMain(rule, context) {
   const baseBranch = context.baseBranch || context.pull?.baseRefName;
   if (!baseBranch) return null;
 
-  const expectedBranch = rule.parameters?.defaultBranch || "dev";
+  const expectedBranch = rule.parameters?.defaultBranch || "main";
   if (baseBranch === expectedBranch) return null;
 
   return {
-    message: `Worker PR targets \`${baseBranch}\`; expected integration branch is \`${expectedBranch}\`.`,
+    message: `Worker PR targets \`${baseBranch}\`; expected trunk branch is \`${expectedBranch}\`.`,
     detail: { expectedBranch, actualBranch: baseBranch }
   };
 }

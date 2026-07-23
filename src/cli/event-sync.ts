@@ -278,6 +278,22 @@ const PUBLIC_OPERATIONAL_IDENTIFIERS = new Set([
   "src/manager/test/session-adapters.test.ts",
   "src/manager/test/adapters.test.ts",
   "src/manager/test/route-probe.test.ts",
+  // Canonical assistant evidence predating the manager fold names these package
+  // paths and public operational references. Keep admission closed over each
+  // complete identifier so descendants and lookalikes still reach the scanner.
+  "packages/manager/src/runner-lifecycle.ts",
+  "packages/manager/test/runner-lifecycle.test.ts",
+  "packages/manager/src/session-adapters.ts",
+  "packages/manager/test/session-adapters.test.ts",
+  "packages/manager/src/adapters.ts",
+  "packages/manager/test/adapters.test.ts",
+  "packages/manager/src/route-probe.ts",
+  "packages/manager/test/route-probe.test.ts",
+  "packages/manager/src/process-command.ts",
+  "//github.com/marius-patrik/Andromeda/issues/253",
+  "//github.com/marius-patrik/Andromeda/pull/259",
+  "//antigravity.google/docs/cli-troubleshooting",
+  "AGENTS_HOME/AGENTS_USER_HOME/AGENTS_ROOT...",
   "manager/test/state-doctor.test.ts",
   "platform/now/doctor/scheduler/github/host",
   "native-kimi-supported-canonical-append",
@@ -328,6 +344,7 @@ const PUBLIC_RELEASE_BRANCH_WORDS = new Set(["after", "main", "reconcile", "rele
 // Keep this closed over complete leaves: a lexical or numeric filename heuristic
 // can accidentally admit passphrase-shaped material inside an absolute path.
 const PUBLIC_ABSOLUTE_PATH_LEAVES = new Set([
+  "andromeda-245-kimi-repair.txt",
   "andromeda-253-kimi-blockers.txt",
   "andromeda-260-kimi-blockers.txt",
 ]);
@@ -341,6 +358,35 @@ const PUBLIC_ABSOLUTE_PATH_LEAF_HASHES = new Set([
   // hygiene-run-20260717.md — canonical hygiene evidence under provenance/ (#294).
   "a766731b018adc8a927e429e6b4c7fd5d9239e161708271ddae78008f071b013",
 ]);
+
+// Authenticated pre-migration evidence names one historical Andromeda worktree
+// under this exact ordinary user folder. Pin both the normalized parent and the
+// undisclosed basename digest: sibling names, other parents, and descendants
+// remain subject to the fail-closed absolute-path scanner.
+const PUBLIC_ABSOLUTE_PATH_PARENT_LEAF_HASHES = new Map([
+  [
+    "c:/users/patrik/worktrees",
+    new Set(["33a700320a0933ebece761f3def303f7b9599934c3210cc56e34b3351ae241c7"]),
+  ],
+]);
+
+export function isPublicAbsoluteArtifactIdentity(normalizedParent: string, leafSha256: string): boolean {
+  const parent = normalizedParent.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return PUBLIC_ABSOLUTE_PATH_PARENT_LEAF_HASHES.get(parent)?.has(leafSha256.toLowerCase()) ?? false;
+}
+
+function isPublicAbsoluteArtifactPath(absolutePath: string): boolean {
+  const normalized = absolutePath.replaceAll("\\", "/").replace(/\/+$/, "");
+  const separator = normalized.lastIndexOf("/");
+  if (separator < 0 || separator === normalized.length - 1) return false;
+  const parent = normalized.slice(0, separator);
+  const rawLeaf = normalized.slice(separator + 1);
+  const leaf = rawLeaf.endsWith(".") ? rawLeaf.slice(0, -1) : rawLeaf;
+  return isPublicAbsoluteArtifactIdentity(
+    parent,
+    createHash("sha256").update(leaf).digest("hex"),
+  );
+}
 
 function isPublicOperationalIdentifier(candidate: string): boolean {
   if (PUBLIC_OPERATIONAL_IDENTIFIERS.has(candidate)) return true;
@@ -449,11 +495,11 @@ function secretLikeText(value: string): boolean {
   const containsOpaquePathToken = (
     segment: string,
     isLeaf: boolean,
-    canonicalCompactionSnapshotLeaf: boolean,
+    canonicalPublicArtifactLeaf: boolean,
   ): boolean => {
     const normalized = segment.trim();
     const inspectedSegment = isLeaf && normalized.endsWith(".") ? normalized.slice(0, -1) : normalized;
-    if (isLeaf && canonicalCompactionSnapshotLeaf) return false;
+    if (isLeaf && canonicalPublicArtifactLeaf) return false;
     if (
       isLeaf &&
       (PUBLIC_ABSOLUTE_PATH_LEAVES.has(inspectedSegment.toLowerCase()) ||
@@ -614,8 +660,10 @@ function secretLikeText(value: string): boolean {
         /\/\.agents\/memory\/snapshots\/compaction\/([^/]+)\.json$/,
       );
       const canonicalCompactionSnapshotLeaf = COMPACTION_SNAPSHOT_STEM.test(compactionSnapshot?.[1] ?? "");
+      const canonicalPublicArtifactLeaf =
+        canonicalCompactionSnapshotLeaf || isPublicAbsoluteArtifactPath(normalizedPath);
       if (pathSegments.some((segment, index) =>
-        containsOpaquePathToken(segment, index === leafIndex, canonicalCompactionSnapshotLeaf)
+        containsOpaquePathToken(segment, index === leafIndex, canonicalPublicArtifactLeaf)
       )) {
         longSegment = true;
       }

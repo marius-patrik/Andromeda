@@ -18,13 +18,13 @@ and is the canonical released product state.
   comparison to maintain.
 - DarkFactory and Andromeda retain their explicit independent product, version,
   tag, and release authority.
-- Only `marius-patrik/private-data` and `marius-patrik/darkfactory-data` use
-  the private, main-only data policy. Their protection remains required. An
+- Only `marius-patrik/private-data` uses the private, main-only data policy.
+  Its protection remains required. An
   exact plan-upgrade HTTP 403 is recorded as `accepted_residue`, not healthy
   protection, with [Andromeda PR #190](https://github.com/marius-patrik/Andromeda/pull/190)
   encrypted-bundle admission and plaintext rejection as the compensating
   control. Every other missing, inaccessible, or unsafe posture fails closed.
 
 DarkFactory owns the executable policy contract. Shared managed-policy source
-is canonical private-data under `$ANDROMEDA_HOME`; runtime ledgers remain in the
-separate darkfactory-data repository.
+is canonical private-data under `$ANDROMEDA_HOME`; runtime ledgers live below
+the manifest-declared `darkfactory-data/runs` path in that repository.

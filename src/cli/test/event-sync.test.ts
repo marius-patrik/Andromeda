@@ -22,6 +22,7 @@ import {
   exportEventBundle,
   findSecretLikePath,
   importEventBundle,
+  isPublicAbsoluteArtifactIdentity,
   recoverPreparedEventImports,
 } from "../event-sync";
 
@@ -113,6 +114,148 @@ describe("encrypted cross-machine event exchange", () => {
     expect(findSecretLikePath("AIzaabcdefghijklmnopqrstuvwxyz1234567890")).not.toBeNull();
     expect(findSecretLikePath("dQwErTyUiOpAsDfGhJkLzXcVbNmQwErTyUiOpAsD")).not.toBeNull();
     expect(findSecretLikePath("A short non-secret reflection.")).toBeNull();
+  });
+
+  test("success: admits the exact legacy manager source and test paths", () => {
+    const paths = [
+      "packages/manager/src/runner-lifecycle.ts",
+      "packages/manager/test/runner-lifecycle.test.ts",
+      "packages/manager/src/session-adapters.ts",
+      "packages/manager/test/session-adapters.test.ts",
+      "packages/manager/src/adapters.ts",
+      "packages/manager/test/adapters.test.ts",
+      "packages/manager/src/route-probe.ts",
+      "packages/manager/test/route-probe.test.ts",
+      "packages/manager/src/process-command.ts",
+    ] as const;
+    for (const legacyPath of paths) {
+      expect(findSecretLikePath(`Reviewed ${legacyPath}.`)).toBeNull();
+    }
+  });
+
+  test("edge input: rejects legacy manager path descendants and lookalikes", () => {
+    const denied = [
+      "packages/manager/src/runner-lifecycle.ts/report.json",
+      "packages/manager/test/runner-lifecycle.test.ts/results.json",
+      "packages/manager/src/runner-lifecycles.ts",
+      "packages/manager/test/runner-lifecycle.tests.ts",
+      "prefix/packages/manager/src/runner-lifecycle.ts",
+      "packages/manager/src/session-adapters.ts/report.json",
+      "packages/manager/test/session-adapters.test.ts/results.json",
+      "packages/manager/src/session-adapter.ts",
+      "packages/manager/test/session-adapters.tests.ts",
+      "prefix/packages/manager/src/session-adapters.ts",
+      "packages/manager/src/adapters.ts/report.json",
+      "packages/manager/test/adapters.test.ts/results.json",
+      "packages/manager/src/adapter.ts",
+      "packages/manager/test/adapters.tests.ts",
+      "prefix/packages/manager/src/adapters.ts",
+      "packages/manager/src/route-probe.ts/report.json",
+      "packages/manager/test/route-probe.test.ts/results.json",
+      "packages/manager/src/route-probes.ts",
+      "packages/manager/test/route-probe.tests.ts",
+      "prefix/packages/manager/src/route-probe.ts",
+      "packages/manager/src/process-command.ts/report.json",
+      "packages/manager/src/process-commands.ts",
+      "prefix/packages/manager/src/process-command.ts",
+    ] as const;
+    for (const candidate of denied) {
+      expect(findSecretLikePath(`Reviewed ${candidate}.`)).not.toBeNull();
+    }
+  });
+
+  test("denied: exact legacy manager paths do not hide secret-shaped content", () => {
+    const githubToken = ["gh", "p_", "ABCDEFGHIJKLMNOPQRSTUV"].join("");
+    const paths = [
+      "packages/manager/src/runner-lifecycle.ts",
+      "packages/manager/test/runner-lifecycle.test.ts",
+      "packages/manager/src/session-adapters.ts",
+      "packages/manager/test/session-adapters.test.ts",
+      "packages/manager/src/adapters.ts",
+      "packages/manager/test/adapters.test.ts",
+      "packages/manager/src/route-probe.ts",
+      "packages/manager/test/route-probe.test.ts",
+      "packages/manager/src/process-command.ts",
+    ] as const;
+    for (const legacyPath of paths) {
+      expect(findSecretLikePath(`Reviewed ${legacyPath}; token=${githubToken}.`)).not.toBeNull();
+    }
+  });
+
+  test("success: admits the exact historical Andromeda worktree identity", () => {
+    expect(isPublicAbsoluteArtifactIdentity(
+      "C:/Users/patrik/worktrees",
+      "33a700320a0933ebece761f3def303f7b9599934c3210cc56e34b3351ae241c7",
+    )).toBe(true);
+  });
+
+  test("edge input: historical worktree admission binds both parent and basename digest", () => {
+    const basenameHash = "33a700320a0933ebece761f3def303f7b9599934c3210cc56e34b3351ae241c7";
+    expect(isPublicAbsoluteArtifactIdentity("C:/Users/patrik/worktrees-copy", basenameHash)).toBe(false);
+    expect(isPublicAbsoluteArtifactIdentity(
+      "C:/Users/patrik/worktrees",
+      `0${basenameHash.slice(1)}`,
+    )).toBe(false);
+  });
+
+  test("denied: historical worktree parent does not hide credential-adjacent paths", () => {
+    expect(findSecretLikePath(
+      "token=C:\\Users\\patrik\\worktrees\\ordinary-public-worktree",
+    )).not.toBeNull();
+  });
+
+  test("success: admits the exact historical scheme-relative GitHub issue URL", () => {
+    expect(findSecretLikePath(
+      "Reviewed //github.com/marius-patrik/Andromeda/issues/253.",
+    )).toBeNull();
+  });
+
+  test("edge input: rejects historical scheme-relative GitHub issue URL lookalikes", () => {
+    expect(findSecretLikePath(
+      "Reviewed //github.com/marius-patrik/Andromeda/issues/2530.",
+    )).not.toBeNull();
+    expect(findSecretLikePath(
+      "Reviewed //github.com/marius-patrik/Andromeda/issues/253/report.json.",
+    )).not.toBeNull();
+  });
+
+  test("denied: historical scheme-relative GitHub issue URL does not mask credential syntax", () => {
+    expect(findSecretLikePath(
+      "token=//github.com/marius-patrik/Andromeda/issues/253",
+    )).not.toBeNull();
+  });
+
+  test("success: admits exact historical public operational identifiers", () => {
+    for (const identifier of [
+      "//github.com/marius-patrik/Andromeda/pull/259",
+      "//antigravity.google/docs/cli-troubleshooting",
+      "AGENTS_HOME/AGENTS_USER_HOME/AGENTS_ROOT...",
+      "/Users/patrik/AppData/Local/Temp/andromeda-245-kimi-repair.txt",
+    ]) {
+      expect(findSecretLikePath(`Reviewed ${identifier}.`)).toBeNull();
+    }
+  });
+
+  test("edge input: rejects historical public operational identifier lookalikes", () => {
+    for (const identifier of [
+      "//github.com/marius-patrik/Andromeda/pull/2590",
+      "//antigravity.google/docs/cli-troubleshootings",
+      "AGENTS_HOME/AGENTS_USER_HOME/AGENTS_ROOT_EXTRA...",
+      "/Users/patrik/AppData/Local/Temp/andromeda-245-kimi-repair-copy.txt",
+    ]) {
+      expect(findSecretLikePath(`Reviewed ${identifier}.`)).not.toBeNull();
+    }
+  });
+
+  test("denied: historical public identifiers do not mask credential syntax", () => {
+    for (const identifier of [
+      "//github.com/marius-patrik/Andromeda/pull/259",
+      "//antigravity.google/docs/cli-troubleshooting",
+      "AGENTS_HOME/AGENTS_USER_HOME/AGENTS_ROOT...",
+      "/Users/patrik/AppData/Local/Temp/andromeda-245-kimi-repair.txt",
+    ]) {
+      expect(findSecretLikePath(`token=${identifier}`)).not.toBeNull();
+    }
   });
 
   test("memory and session authority converge with identical projection hashes", async () => {

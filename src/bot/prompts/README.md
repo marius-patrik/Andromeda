@@ -4,7 +4,7 @@ This directory is the versioned, provider-agnostic prompt/skill library defined
 by parent issue #37 (epic #35) and scaffolded by issue #49. It owns **what** a
 role should do and **what** it should emit — never **how** to run a model.
 Concrete provider, model, auth, and session execution is resolved exclusively by
-the canonical Agent OS runtime through the `agents` launcher (issue #24).
+the canonical Agent OS runtime through the `andromeda` launcher (issue #24).
 
 ## Layout
 

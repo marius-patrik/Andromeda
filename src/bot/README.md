@@ -6,7 +6,7 @@ and runs deterministic planning and orchestration loops. Agent OS is an
 integration dependency for local provider execution and shared personal state,
 not DarkFactory's product or release owner.
 
-The versioned `.darkfactory/trigger-policy.json` is the single cadence and
+The versioned `.agents/trigger-policy.json` is the single cadence and
 idempotency contract for automated development loops. It records each event,
 schedule fallback, maximum detection latency, trusted source ref, stable
 idempotency key, model-token policy, mutation authority, receipt gate, retry
@@ -31,8 +31,8 @@ escalation state from Actions evidence.
   and worker provenance before closing referenced issues, with scheduled recovery.
 - Installs provider-agnostic DarkFactory Autoreview through canonical Agent OS:
   bounded medium review/fix rounds followed by an independent clean high confirmation.
-- Reads repository-local agent context, `.darkfactory`, and `.github` policy
-  from the `managed-repository` child of canonical Andromeda-data authority.
+- Reads repository-local agent context, `.agents`, and `.github` policy
+  from the `managed-repository` child of the manifest-declared data repository.
 - Opens managed setup PRs when the app is installed on a repository or when repositories are added to an installation.
 - Can sync all installed repositories from the `Sync Managed Repositories` workflow.
 
@@ -78,8 +78,8 @@ To install the app on every repository, use the GitHub App installation UI and c
 ```powershell
 npm ci
 npm run build
-agents packages register src/darkfactory
-agents state doctor
+andromeda packages register src/darkfactory
+andromeda state doctor
 ```
 
 Store local secrets through Agent OS. Secret values are not printed by the manager:
@@ -96,7 +96,7 @@ is never copied into DarkFactory secrets or repository configuration.
 Run DarkFactory through Agent OS so it receives the canonical state paths:
 
 ```powershell
-agents packages run darkfactory -- serve
+andromeda packages run darkfactory -- serve
 ```
 
 The bot listens on `http://localhost:3000/webhook`. Point the GitHub App webhook URL at your tunnel URL, for example `https://example.ngrok.app/webhook`.
@@ -210,11 +210,10 @@ only aggregate violation classes and counts.
 Managed `Validate` and `DarkFactory Autoreview` gates
 must use their exact context names and the GitHub Actions producer App ID
 `15368`; a same-name check from any other App is critical drift.
-Only the exact canonical `marius-patrik/Andromeda-data` and
-`marius-patrik/darkfactory-data` repositories use the main-only data policy.
-They are exempt from `dev`, release-lane, and product gate expectations, but
-their `main` branch must still expose protection with administrator bypass,
-force-push, and deletion disabled. For these two private repositories only,
+Only the exact canonical `marius-patrik/private-data` repository uses the
+main-only data policy. It is exempt from `dev`, release-lane, and product gate
+expectations, but its `main` branch must still expose protection with administrator bypass,
+force-push, and deletion disabled. For this private repository only,
 GitHub's exact plan-upgrade HTTP 403 is retained as structured
 `accepted_residue`, never as healthy protection. The compensating admission
 control is [Andromeda PR #190](https://github.com/marius-patrik/Andromeda/pull/190):
@@ -226,7 +225,7 @@ names that merely end in `-data` receive no exemption.
 The doctor target token requests only read access to administration, actions,
 checks, contents, pull requests, secrets, and statuses; issue access becomes
 write only in explicit report mode. Report mode mints a second token restricted
-to `darkfactory-data` with contents write for the ledger. The target token is
+to the manifest-declared `dataRepo` with contents write for the ledger. The target token is
 never a ledger fallback, diagnosis mints no write token, and report mode never
 creates or patches repository labels. Missing required labels fail preflight so
 the managed taxonomy must be provisioned separately. If Administration: Read is
@@ -243,7 +242,8 @@ Only exact DarkFactory App actors (`darkfactory-agent[bot]` and the retained
 
 Diagnosis is the default and makes no GitHub writes or repairs. The explicit
 `--write-issues` mode reconciles one issue per stable `df-doctor:` finding and
-writes a zero-model-token ledger to `marius-patrik/darkfactory-data`. Repair is
+writes a zero-model-token ledger below the manifest-declared `ledgerPath` in
+the manifest-declared `dataRepo`. Repair is
 intentionally a separate reviewed work item; `--repair` is rejected. The
 trusted `DarkFactory Repository Doctor` workflow runs the same engine, uploads
 its JSON evidence, and uses report authority only on the schedule or when the
@@ -265,10 +265,10 @@ runner lifecycle findings execute only through the exact `$ANDROMEDA_HOME`
 launcher, then re-prove the installed command, registration, online state,
 persistence, and launcher binding. Unsafe state-root, launcher, route, or data
 authority findings remain blocked. An observable unregistered repository is
-added only through one reviewed Andromeda-data source-policy PR; parked or
+added only through one reviewed private-data source-policy PR; parked or
 archived entries are immutable brakes, and an absent App installation becomes
 an explicit owner finding with the exact `df install-url` action.
-Because private main-only Andromeda-data has the documented plan-upgrade 403
+Because private main-only `marius-patrik/private-data` has the documented plan-upgrade 403
 instead of enforceable branch protection and repository auto-merge, setup
 completes its exact App-owned registration PR through an application-enforced
 gate: the current provenance-bound head must have no red or pending latest
@@ -335,10 +335,10 @@ absent and never sends a branch-deletion request. `--watch`
 re-observes the same marker-owned lane and adds no force, bypass, or merge power.
 
 `df-work.yml` runs only on a trusted self-hosted runner labeled `df-local`. It
-requires `$ANDROMEDA_HOME` to be an absolute path containing `bin\agents.ps1`,
+requires `$ANDROMEDA_HOME` to be an absolute path containing `bin\andromeda.ps1`,
 invokes that exact launcher for `state doctor --json`, then delegates the worker
 turn through the same launcher without provider or model flags. It never falls
-back to an ambient `agents` command. Provider selection, identity, memory, and
+back to an ambient `andromeda` command. Provider selection, identity, memory, and
 session state therefore come exclusively from `$ANDROMEDA_HOME`.
 
 Every worker turn is assembled by the versioned `prompts/` composer from the
@@ -352,21 +352,21 @@ before DarkFactory publishes a branch.
 `df-local` runner. The base-trusted workflow checks out protected
 `marius-patrik/DarkFactory@main` as its control runtime and records the resolved
 commit before composing a turn; it never loads the composer, prompts, or runner
-from the pull-request head. It invokes `$ANDROMEDA_HOME\bin\agents.ps1`; repository
+from the pull-request head. It invokes `$ANDROMEDA_HOME\bin\andromeda.ps1`; repository
 workflows never select providers, models, homes, or credentials. Pull-request
 and issue content is serialized as bounded untrusted prompt data into an empty
 turn workspace. Review turns are read-only and never checkout or execute target
 hooks, scripts, builds, tests, or image inputs. Autofix turns return strict
 hash-bound whole-file proposals; the trusted runner applies them only after a
 fresh same-repository/provenance/base/head check and a normal non-force push.
-Existing tests and `.agents`, `.darkfactory`, `.github`, `AGENTS.md`, and package
+Existing tests and `.agents`, `.github`, `AGENTS.md`, and package
 control files are protected from autofix. Validation remains a separate gate.
 
 The protocol records the exact control revision, prompt manifest and contract
 version/checksum, composed prompt and input checksums, role, skills, tier,
 effort, overlays, output schema, resolved provider/model/preset, complete
-finding set, usage, and fix version in
-`marius-patrik/darkfactory-data`. Missing/malformed verdicts, stale targets,
+finding set, usage, and fix version below the manifest-declared `ledgerPath` in
+the manifest-declared `dataRepo`. Missing/malformed verdicts, stale targets,
 provider failures, receipt failures, and exhausted medium/high budgets block
 closed. Issue mutation preserves an owner-text/history section and re-fetches
 the selected issue immediately before writing. Only an exact owner-authored
@@ -376,29 +376,28 @@ the selected issue immediately before writing. Only an exact owner-authored
 
 The `df-local` runner is provisioned and supervised by Agent OS, outside this
 component. Its service environment must expose the canonical `$ANDROMEDA_HOME`;
-DarkFactory binds the worker to `$ANDROMEDA_HOME\bin\agents.ps1` instead of PATH
+DarkFactory binds the worker to `$ANDROMEDA_HOME\bin\andromeda.ps1` instead of PATH
 resolution. DarkFactory intentionally carries no host runner installer, PID
 registry, alternate state root, or platform-specific process manager.
 
 ## Service operation
 
 Run the webhook service through Agent OS when using the local managed runtime.
-DarkFactory keeps operational run ledgers in the separate
-`marius-patrik/darkfactory-data` repository; personal memory, sessions,
+DarkFactory keeps operational run ledgers below the manifest-declared
+`ledgerPath` in the manifest-declared `dataRepo`; personal memory, sessions,
 identity, provider state, and secrets remain under Agent OS `.agents`:
 
 ```powershell
-agents state doctor
-agents packages run darkfactory -- serve
+andromeda state doctor
+andromeda packages run darkfactory -- serve
 ```
 
-Canonical policy/state authority is the root `$ANDROMEDA_HOME` checkout of
-`marius-patrik/Andromeda-data`; DarkFactory reads only its
-`managed-repository` child. The managed-sync adapter requires exactly one
-`agent-os-data` registry authority at `$ANDROMEDA_HOME`, bound to
-`marius-patrik/Andromeda-data`; unrelated data-repository registrations remain
-valid and the separate `marius-patrik/darkfactory-data` checkout remains the
-operational ledger authority.
+Canonical policy/state authority is the root `$ANDROMEDA_HOME` checkout.
+DarkFactory reads only the `managed-repository` child of the repository declared
+by `.agents/managed-repository.json.dataRepo`. The managed-sync adapter requires
+exactly one `agent-os-data` registry authority at `$ANDROMEDA_HOME`, bound to
+that same repository. Unrelated data-repository registrations remain valid;
+none can become a second policy, state, or ledger authority.
 
 The service requires these settings or Agent OS-managed secrets:
 
@@ -417,8 +416,8 @@ Dark Factory manages shared setup through pull requests. It does not write direc
 Managed files:
 
 - `.agents/project/**`, only when `$ANDROMEDA_HOME/managed-repository/repositories/<owner>/<repo>/.agents/project/**` exists
-- `.darkfactory/managed-repository.json`
-- `.darkfactory/installer-policy.json`
+- `.agents/managed-repository.json`
+- `.agents/installer-policy.json`
 - `.github/workflows/dark-factory-bootstrap.yml`
 - `.github/workflows/dark-factory-autoupdate.yml`
 - `.github/workflows/df-plan.yml`
@@ -429,7 +428,7 @@ Managed files:
 - `.github/darkfactory-autoreview.schema.json`
 - `.github/scripts/df-autoreview.mjs`
 - `.github/scripts/run-darkfactory-autoreview.mjs`
-- `.darkfactory/autoreview-policy.json`
+- `.agents/autoreview-policy.json`
 - `.github/scripts/dark-factory-managed-check.mjs`
 
 Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workflow uses control-repository app secrets and is kept only in `marius-patrik/DarkFactory`.
@@ -437,9 +436,9 @@ Managed setup does not ship `.github/workflows/df-event-forward.yml`. That workf
 When the DarkFactory webhook server is deployed, machine-applied `df:ready` labels and trusted `/df run` evaluation requests in any installed repository are dispatched immediately to the orchestrator workflow, eliminating the wait for the next scheduled tick. `/df run` performs the deterministic contract evaluation and reports actionable findings; it never writes `df:ready` directly. Dispatch recomputes readiness, so a stale label cannot authorize work. If the webhook server is not deployed or the dispatch fails, the schedule and workflow-run chaining still pick up the issue.
 
 Managed publication has path-level ownership: this package owns executable
-DarkFactory workflows and scripts, while canonical Andromeda-data owns
+DarkFactory workflows and scripts, while the manifest-declared data repository owns
 shared repository policy and context. Duplicate paths fail closed. Keep reusable
-repository policy in `managed-repository/.darkfactory/` and
+repository policy in `managed-repository/.agents/` and
 per-repository context in
 `managed-repository/repositories/<owner>/<repo>/.agents/project/`. Shared Agent
 OS state remains under `$ANDROMEDA_HOME` and is never copied by DarkFactory.
@@ -473,7 +472,7 @@ credentials are repository-managed.
 The local equivalent is:
 
 ```powershell
-agents packages run darkfactory -- sync-managed
+andromeda packages run darkfactory -- sync-managed
 ```
 
 To print the GitHub App installation URL from local credentials:
@@ -492,7 +491,8 @@ release authority away from this repository.
 ## Development notes
 
 - Keep webhook handlers registered in `src/bot.ts`.
-- Keep managed file templates in canonical `$ANDROMEDA_HOME/managed-repository/`; keep runtime ledgers in darkfactory-data.
+- Keep managed file templates in canonical `$ANDROMEDA_HOME/managed-repository/`;
+  keep runtime ledgers below the manifest-declared `ledgerPath` in the same data repository.
 - Keep managed sync logic in `src/managed-sync.ts`.
 - Keep installed-repository setup enforcement in `src/repository-setup.ts`.
 - Keep HTTP routing and signature handoff behavior in `src/server.ts`.

@@ -5,7 +5,6 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   WORK_LABELS,
   assertAllowedRepo,
   cleanupTempRoot,
@@ -37,7 +36,6 @@ const RESUME_PR_NUMBER = process.env.DF_RESUME_PR?.trim() ? Number(process.env.D
 const RESUME_BRANCH = process.env.DF_RESUME_BRANCH?.trim() || "";
 const IS_RESUME = (Number.isInteger(RESUME_PR_NUMBER) && RESUME_PR_NUMBER > 0) || RESUME_BRANCH.length > 0;
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
-const DATA_REPO = DARK_FACTORY_DATA_REPO;
 const GIT_BASIC_AUTH = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
 const gh = createGithubClient(TOKEN, "darkfactory-worker");
 
@@ -328,18 +326,13 @@ async function getIssue(repository, issueNumber) {
 }
 
 async function resolveWorkBaseBranch(repository, defaultBranch, requestedBranch = "") {
-  if (requestedBranch) {
-    await ensureBranchExists(repository, requestedBranch);
-    return requestedBranch;
+  if (defaultBranch !== "main") {
+    throw new Error(`DarkFactory requires main as the target repository default branch; received '${defaultBranch || "missing"}'.`);
   }
-
-  try {
-    await ensureBranchExists(repository, "dev");
-    return "dev";
-  } catch (error) {
-    if (error.status === 404) return defaultBranch;
-    throw error;
-  }
+  const branch = requestedBranch || defaultBranch;
+  if (branch !== "main") throw new Error(`DarkFactory work must target main; received '${branch}'.`);
+  await ensureBranchExists(repository, "main");
+  return "main";
 }
 
 async function ensureBranchExists(repository, branch) {
@@ -591,7 +584,7 @@ function buildResumeContext(resumeInfo, defaultBranch) {
 }
 
 async function writeTaskBrief(worktree, issue, defaultBranch, taskRouting, resumeInfo = null) {
-  const scratchDir = path.join(worktree, ".darkfactory");
+  const scratchDir = path.join(worktree, ".agents");
   await mkdir(scratchDir, { recursive: true });
 
   const agentsContext = await readOptional(path.join(worktree, "AGENTS.md"));
@@ -642,13 +635,13 @@ async function writeTaskBrief(worktree, issue, defaultBranch, taskRouting, resum
 }
 
 async function readWorkerSummary(worktree) {
-  const summary = await readOptional(path.join(worktree, ".darkfactory", "df-worker-summary.md"));
+  const summary = await readOptional(path.join(worktree, ".agents", "df-worker-summary.md"));
   return summary?.trim() || "Worker completed without a written summary.";
 }
 
 async function removeWorkerScratch(worktree) {
-  await rm(path.join(worktree, ".darkfactory", "df-task-brief.md"), { force: true });
-  await rm(path.join(worktree, ".darkfactory", "df-worker-summary.md"), { force: true });
+  await rm(path.join(worktree, ".agents", "df-task-brief.md"), { force: true });
+  await rm(path.join(worktree, ".agents", "df-worker-summary.md"), { force: true });
 }
 
 function verifyAgentOs() {
@@ -657,13 +650,13 @@ function verifyAgentOs() {
 
 async function runAgentWorker(worktree) {
   const prompt = [
-    "Read .darkfactory/df-task-brief.md and implement that task in the current repository.",
+    "Read .agents/df-task-brief.md and implement that task in the current repository.",
     "Use the repository guidance and run its authoritative verification gates.",
     "Do not push, open a pull request, merge, or modify Agent OS state.",
-    "Write a concise final summary to .darkfactory/df-worker-summary.md before finishing."
+    "Write a concise final summary to .agents/df-worker-summary.md before finishing."
   ].join(" ");
   const output = runAgentCommand(["run", "--mode", "default", prompt], worktree).trim();
-  const summaryPath = path.join(worktree, ".darkfactory", "df-worker-summary.md");
+  const summaryPath = path.join(worktree, ".agents", "df-worker-summary.md");
   if (!existsSync(summaryPath)) {
     await writeFile(summaryPath, `${output || "Agent OS worker completed without a written summary."}\n`);
   }
@@ -689,11 +682,11 @@ function runAgentCommand(args, cwd) {
 }
 
 function canonicalAgentsLauncher() {
-  const agentsHome = requiredEnv("AGENTS_HOME");
+  const agentsHome = requiredEnv("ANDROMEDA_HOME");
   if (!path.isAbsolute(agentsHome)) {
-    throw new Error("AGENTS_HOME must be an absolute path");
+    throw new Error("ANDROMEDA_HOME must be an absolute path");
   }
-  const agentsLauncher = path.join(agentsHome, "bin", "agents.ps1");
+  const agentsLauncher = path.join(agentsHome, "bin", "andromeda.ps1");
   if (!existsSync(agentsLauncher)) {
     throw new Error(`Canonical Agent OS launcher is missing at ${agentsLauncher}`);
   }
@@ -791,7 +784,7 @@ function truncate(value, maxLength) {
 
 async function writeLedger(ledger) {
   try {
-    ledger.ledger = await writeRunLedger(gh, DATA_REPO, "df-work", repoName(TARGET_REPO), ledger);
+    ledger.ledger = await writeRunLedger(gh, "df-work", repoName(TARGET_REPO), ledger);
     console.log(`DarkFactory ledger written to ${ledger.ledger.repository}/${ledger.ledger.path}`);
   } catch (error) {
     console.warn(sanitize(`DarkFactory ledger warning: ${error.message || String(error)}`, TOKEN));

@@ -1,12 +1,16 @@
 # Status
 
-- Andromeda v0.9.0 is released on `main`, with `dev` and `main` tree-identical.
-  The release carries the layout refactor and the template consolidation.
+- Andromeda v0.10.0 is released on `main`. `main` is the only long-lived branch;
+  active work branches from it and returns through reviewed pull requests into
+  `main`.
 - The repository is a single monorepo with no submodules. `.gitmodules` is
   empty, and the repository contract fails closed if that changes without the
   CI workflow initializing the declared set.
-- Durable state lives in the separate `private-data` repository, reached
-  through the Agent OS state lane. It is no longer a submodule of this
+- Durable state lives in the repository declared by
+  `.agents/managed-repository.json.dataRepo`
+  (`marius-patrik/private-data`), reached through `$ANDROMEDA_HOME`. It is not a
+  submodule of this repository. DarkFactory runtime ledgers live at the
+  manifest-declared `ledgerPath` (`darkfactory-data/runs`) in the same data
   repository, and `context/TASK.md` there remains the owner-facing task board.
 - Target components are scaffolded and carry their contracts: `sdk`, `mcp`,
   `server`, `clients/{cli,app,web}`, and `plugins`. They hold contract READMEs

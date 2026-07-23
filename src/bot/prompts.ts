@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
  * Composition is deterministic and model-free: this module assembles a prompt
  * from typed inputs without ever invoking a provider. Concrete provider, model,
  * auth, and session execution is resolved exclusively by the canonical Agent OS
- * runtime through the `agents` launcher (issue #24) — never by these artifacts.
+ * runtime through the `andromeda` launcher (issue #24) — never by these artifacts.
  */
 
 export const PROMPT_LIBRARY_SCHEMA_VERSION = 2;
@@ -476,7 +476,7 @@ export const FORBIDDEN_RULES: ForbiddenRule[] = [
   },
   {
     id: "runtime-command",
-    pattern: /(?:(?:&\s*)?["'`]{0,2}\bagents(?:\.(?:exe|cmd|ps1|bat))?["'`]{0,2}\s+(?!launcher(?:\s*(?:[.,;:!?)]|$)|\s+(?:owns|is|resolves|boundary)\b))(?:\/\?|(?:--?[a-z][\w-]*|[a-z][\w-]*)\b)|\bnpx\s+|\bbunx\s+|codex exec|claude -p|--model\b|--provider\b)/i,
+    pattern: /(?:(?:&\s*)?["'`]{0,2}\b(?:andromeda|agents)(?:\.(?:exe|cmd|ps1|bat))?["'`]{0,2}\s+(?!launcher(?:\s*(?:[.,;:!?)]|$)|\s+(?:owns|is|resolves|boundary)\b))(?:\/\?|(?:--?[a-z][\w-]*|[a-z][\w-]*)\b)|\bnpx\s+|\bbunx\s+|codex exec|claude -p|--model\b|--provider\b)/i,
     reason: "embeds a concrete runtime or CLI command"
   }
 ];

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from "node:fs";
 
-const CONFIG_PATH = ".darkfactory/managed-repository.json";
+const CONFIG_PATH = ".agents/managed-repository.json";
 
 function fail(message, file = CONFIG_PATH) {
   console.error(`::error file=${file}::${message}`);
@@ -20,11 +20,14 @@ function readConfig() {
   if (config.schemaVersion !== 1) {
     throw new Error("Managed repository config must use schemaVersion 1.");
   }
-  if (config.dataRepo !== "marius-patrik/Andromeda-data") {
-    throw new Error("Managed repository config must use canonical Andromeda-data as its source authority.");
+  if (typeof config.dataRepo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(config.dataRepo)) {
+    throw new Error("Managed repository config must define one exact dataRepo authority.");
   }
-  if (config.ledgerRepo !== "marius-patrik/darkfactory-data") {
-    throw new Error("Managed repository config must use darkfactory-data as its runtime ledger authority.");
+  if (Object.prototype.hasOwnProperty.call(config, "ledgerRepo")) {
+    throw new Error("Managed repository config must not define retired ledgerRepo authority.");
+  }
+  if (config.ledgerPath !== "darkfactory-data/runs") {
+    throw new Error("Managed repository config must define ledgerPath darkfactory-data/runs.");
   }
   if (!Array.isArray(config.packageFiles) || !config.packageFiles.every(isNonEmptyString)) {
     throw new Error("Managed repository config packageFiles must be an array of paths.");

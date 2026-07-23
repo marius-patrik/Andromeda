@@ -6,7 +6,6 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   assertAllowedRepo,
   createGithubClient,
   extractClosingIssueNumbers,
@@ -51,7 +50,7 @@ const OWNER_HISTORY_MARKER = "<!-- darkfactory:owner-text-history -->";
 const OWNER_OVERRIDE_COMMAND = "/df autoreview override";
 const ZERO_HASH = "0".repeat(64);
 const SAFE_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,254}$/;
-const PROTECTED_BRANCHES = new Set(["main", "dev"]);
+const PROTECTED_BRANCHES = new Set(["main"]);
 const ALLOWED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const TEXT_FILE_BYTES = 1000000;
 const WINDOWS_RESERVED_SEGMENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
@@ -425,23 +424,6 @@ function gitRepositoryInventory(repoRoot, token, hooksRoot) {
   return paths;
 }
 
-export function releaseIssueNumbers(body) {
-  const markerLines = String(body || "").split(/\r?\n/)
-    .filter((line) => /<!--\s*darkfactory:release-issues\b/i.test(line));
-  if (markerLines.length === 0) return [];
-  if (markerLines.length !== 1) throw stableError("target_policy_blocked", "Release pull request must contain exactly one release-issues marker");
-  const match = /^<!-- darkfactory:release-issues ([1-9]\d*(?:,[1-9]\d*)*) -->$/.exec(markerLines[0]);
-  if (!match) throw stableError("target_policy_blocked", "Release pull request contains a malformed release-issues marker");
-  const issues = match[1].split(",").map(Number);
-  if (issues.length > 50 || issues.some((number) => !Number.isSafeInteger(number) || number < 1)) {
-    throw stableError("target_policy_blocked", "Release issue context exceeds its bounded contract");
-  }
-  if (new Set(issues).size !== issues.length) {
-    throw stableError("target_policy_blocked", "Release pull request repeats a release issue");
-  }
-  return issues;
-}
-
 export function assertPullPolicy(pull, repository, expectations = {}) {
   if (!pull || pull.state !== "open" || pull.draft) throw stableError("target_policy_blocked", "Pull request must be open and ready for review");
   if (String(pull.head?.repo?.full_name || "").toLowerCase() !== repoName(repository).toLowerCase()) {
@@ -449,10 +431,13 @@ export function assertPullPolicy(pull, repository, expectations = {}) {
   }
   const branch = pull.head?.ref || "";
   if (!PROTECTED_BRANCHES.has(pull.base?.ref || "")) {
-    throw stableError("target_policy_blocked", "Autoreview requires a protected main or dev base");
+    throw stableError("target_policy_blocked", "Autoreview requires the protected main base");
   }
   if (PROTECTED_BRANCHES.has(branch) || branch === pull.base?.ref) {
     throw stableError("target_policy_blocked", "Autofix cannot write to a protected or base branch");
+  }
+  if (/^(?:release|reconcile)\//.test(branch)) {
+    throw stableError("target_policy_blocked", "Autoreview does not admit retired release or reconciliation branch lanes");
   }
   if (expectations.base && pull.base?.ref !== expectations.base) throw stableError("stale_target", "Pull request base changed");
   if (expectations.branch && branch !== expectations.branch) throw stableError("stale_target", "Pull request head branch changed");
@@ -460,29 +445,17 @@ export function assertPullPolicy(pull, repository, expectations = {}) {
     throw stableError("stale_target", "Pull request head advanced beyond the triggering event");
   }
   const workerMarker = /<!--\s*dark-factory:worker-pr\s+issue=\d+\s*-->/i.test(pull.body || "");
-  // Release-engine automation: the trusted DarkFactory App authors release/ and
-  // reconcile/ convergence PRs with no execution issue; admit them on exact App
-  // actor provenance plus the engine's owned branch prefixes.
-  const engineAutomation = normalizeWorkerPullRequestActor(pull.user) !== null
-    && /^(?:release|reconcile)\//.test(branch);
-  if (!engineAutomation && !ALLOWED_ASSOCIATIONS.has(pull.author_association) && !workerMarker) {
+  if (!ALLOWED_ASSOCIATIONS.has(pull.author_association) && !workerMarker) {
     throw stableError("target_policy_blocked", "Pull request author provenance is not authorized for autofix");
   }
-  const declaredReleaseIssues = releaseIssueNumbers(pull.body || "");
-  if (!(engineAutomation && branch.startsWith("release/")) && declaredReleaseIssues.length > 0) {
-    throw stableError("target_policy_blocked", "Only a trusted App-authored release branch may declare release issue context");
+  if (/<!--\s*darkfactory:release-issues\b/i.test(pull.body || "")) {
+    throw stableError("target_policy_blocked", "Retired release pull request context is not admitted");
   }
-  let linked = extractClosingIssueNumbers(pull.body || "", repository.repo);
-  if (engineAutomation && branch.startsWith("release/")) {
-    linked = declaredReleaseIssues;
-    if (linked.length === 0) {
-      throw stableError("target_policy_blocked", "Release pull request must declare its bounded release issue context");
-    }
-  }
-  if (!engineAutomation && linked.length === 0) {
+  const linked = extractClosingIssueNumbers(pull.body || "", repository.repo);
+  if (linked.length === 0) {
     throw stableError("target_policy_blocked", "Pull request must link an execution issue");
   }
-  return { branch, linked, engineAutomation };
+  return { branch, linked, engineAutomation: false };
 }
 
 async function ensureRepository(root, repository, token, hooksRoot) {
@@ -1469,7 +1442,6 @@ export async function executeAutoreview(environment = process.env) {
   const record = async (round) => {
     await writeRunLedger(
       gh,
-      DARK_FACTORY_DATA_REPO,
       `autoreview-${String(round.sequence || 0).padStart(3, "0")}-${round.phase}`,
       repoName(repository),
       {
@@ -1546,7 +1518,7 @@ export async function executeAutoreview(environment = process.env) {
       record
     });
 
-    await writeRunLedger(gh, DARK_FACTORY_DATA_REPO, "autoreview-result", repoName(repository), {
+    await writeRunLedger(gh, "autoreview-result", repoName(repository), {
       check: AUTOREVIEW_CHECK_NAME,
       target: `${repoName(repository)}#${number}`,
       result: {

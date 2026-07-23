@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   createGithubClient,
   listActiveManagedRepos,
   normalizeWorkerPullRequestActor,
@@ -673,7 +672,7 @@ function publicCandidate(candidate) {
 
 async function recordLedger(kind, target, payload) {
   if (typeof runtimeOptions.writeLedger === "function") return await runtimeOptions.writeLedger(kind, target, payload);
-  return await writeRunLedger(ledgerGh, DARK_FACTORY_DATA_REPO, kind, target, payload);
+  return await writeRunLedger(ledgerGh, kind, target, payload);
 }
 
 async function listAll(requestPath) {

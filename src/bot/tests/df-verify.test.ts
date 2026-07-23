@@ -74,10 +74,10 @@ test("verifyWorkerRun marks issue df:done for an exact App-created worker PR", a
     request: async (method: string, path: string, body?: unknown) => {
       calls.push({ method, path, body });
 
-      if (method === "GET" && path === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/example") {
+      if (method === "GET" && path === "/repos/marius-patrik/private-data/contents/darkfactory-data/runs/marius-patrik/example") {
         return [{ name: "2026-07-07T00-00-00Z-df-work.json", type: "file" }];
       }
-      if (method === "GET" && path === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/example/2026-07-07T00-00-00Z-df-work.json") {
+      if (method === "GET" && path === "/repos/marius-patrik/private-data/contents/darkfactory-data/runs/marius-patrik/example/2026-07-07T00-00-00Z-df-work.json") {
         return {
           type: "file",
           encoding: "base64",
@@ -116,7 +116,6 @@ test("verifyWorkerRun marks issue df:done for an exact App-created worker PR", a
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
     targetRepo: { owner: "marius-patrik", repo: "example" },
     issueNumber: 42,
-    dataRepo: "marius-patrik/darkfactory-data",
     trigger: "workflow_run",
     dryRun: false,
     log: () => {},
@@ -134,10 +133,10 @@ test("verifyWorkerRun blocks issue and files blocker issue when PR is on wrong b
     request: async (method: string, path: string, body?: unknown) => {
       calls.push({ method, path, body });
 
-      if (method === "GET" && path === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/example") {
+      if (method === "GET" && path === "/repos/marius-patrik/private-data/contents/darkfactory-data/runs/marius-patrik/example") {
         return [{ name: "2026-07-07T00-00-00Z-df-work.json", type: "file" }];
       }
-      if (method === "GET" && path === "/repos/marius-patrik/darkfactory-data/contents/runs/marius-patrik/example/2026-07-07T00-00-00Z-df-work.json") {
+      if (method === "GET" && path === "/repos/marius-patrik/private-data/contents/darkfactory-data/runs/marius-patrik/example/2026-07-07T00-00-00Z-df-work.json") {
         return {
           type: "file",
           encoding: "base64",
@@ -178,7 +177,6 @@ test("verifyWorkerRun blocks issue and files blocker issue when PR is on wrong b
     controlRepo: { owner: "marius-patrik", repo: "DarkFactory" },
     targetRepo: { owner: "marius-patrik", repo: "example" },
     issueNumber: 42,
-    dataRepo: "marius-patrik/darkfactory-data",
     trigger: "workflow_run",
     dryRun: false,
     log: () => {},

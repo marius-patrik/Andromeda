@@ -108,16 +108,16 @@ test("parked-repos-untouched blocks parked repositories", async () => {
   assert.deepEqual(allowed.findings, []);
 });
 
-test("work-PRs-target-dev blocks PRs targeting the wrong branch", async () => {
+test("work-PRs-target-main blocks PRs targeting the wrong branch", async () => {
   const rules = normalizeEnforcementRules({
-    rules: [{ id: "work-PRs-target-dev", enabled: true, severity: "block", parameters: { defaultBranch: "dev" } }]
+    rules: [{ id: "work-PRs-target-main", enabled: true, severity: "block", parameters: { defaultBranch: "main" } }]
   });
 
-  const blocked = await evaluateEnforcementRules(rules, { baseBranch: "main" });
+  const blocked = await evaluateEnforcementRules(rules, { baseBranch: "dev" });
   assert.equal(blocked.ok, false);
-  assert.match(blocked.findings[0].message, /main/);
+  assert.match(blocked.findings[0].message, /dev/);
 
-  const allowed = await evaluateEnforcementRules(rules, { baseBranch: "dev" });
+  const allowed = await evaluateEnforcementRules(rules, { baseBranch: "main" });
   assert.equal(allowed.ok, true);
 });
 

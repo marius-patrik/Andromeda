@@ -35,16 +35,13 @@ export async function convergeRepositorySettings(
   const receipts = await convergeRepositoryFoundation(github, repository);
   receipts.push(...await convergeLabels(github, repository, labels));
   receipts.push(...await enableManagedWorkflows(github, repository, managedWorkflowPaths));
-  for (const branch of ["main", "dev"]) {
-    receipts.push(await convergeBranchProtection(github, repository, branch));
-  }
+  receipts.push(await convergeBranchProtection(github, repository, "main"));
   return receipts;
 }
 
 export async function convergeRepositoryFoundation(
   github: OperatorGitHubRequester,
-  repository: RepositoryRef,
-  options: { createDev?: boolean } = {}
+  repository: RepositoryRef
 ): Promise<SetupReceipt[]> {
   if (isMainOnlyDataRepository(`${repository.owner}/${repository.repo}`)) {
     throw new SetupOwnerActionRequired(
@@ -72,7 +69,7 @@ export async function convergeRepositoryFoundation(
     mainHead = defaultHead;
     receipts.push(receipt("ensure-main", "main", "applied", `Created canonical main from the observed ${defaultBranch} head without deleting or rewriting any ref.`));
   } else {
-    receipts.push(receipt("ensure-main", "main", "current", "Canonical release branch exists."));
+    receipts.push(receipt("ensure-main", "main", "current", "Canonical main branch exists."));
   }
   if (!mainHead) throw new SetupOwnerActionRequired("ensure-main", "Canonical main head remains unobservable after bootstrap.");
 
@@ -87,20 +84,6 @@ export async function convergeRepositoryFoundation(
     receipts.push(receipt("default-branch", "main", "applied", "Set main as default after preserving the prior default ref."));
   } else {
     receipts.push(receipt("default-branch", "main", "current", "Main is already the default branch."));
-  }
-
-  if (options.createDev !== false) {
-    const devHead = await optionalRefHead(github, repository, "dev");
-    if (devHead) {
-      receipts.push(receipt("ensure-dev", "dev", "current", "Integration branch exists."));
-    } else {
-      await github.request("POST /repos/{owner}/{repo}/git/refs", {
-        ...repository,
-        ref: "refs/heads/dev",
-        sha: mainHead
-      }).catch((error) => { throw wrapOwnerBoundary("ensure-dev", error); });
-      receipts.push(receipt("ensure-dev", "dev", "applied", "Created dev from the exact observed main head."));
-    }
   }
 
   const autoMerge = await observeAutoMerge(github, repository, metadata.allow_auto_merge);

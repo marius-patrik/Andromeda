@@ -20,6 +20,7 @@ export const DARK_FACTORY_MODEL_POLICY_PATH = ".agents/model-policy.json";
 export const DARK_FACTORY_TRIGGER_POLICY_PATH = ".agents/trigger-policy.json";
 export const DARK_FACTORY_RELEASE_POLICY_PATH = ".agents/release-policy.json";
 export const DARK_FACTORY_SUBMODULE_POLICY_PATH = ".agents/submodule-policy.json";
+export const RELEASE_ON_MERGE_WORKFLOW_PATH = ".github/workflows/release-on-merge.yml";
 export const DARK_FACTORY_MANAGED_CHECK_SCRIPT_PATH = ".github/scripts/dark-factory-managed-check.mjs";
 export const DARK_FACTORY_SCRIPT_LIB_PATH = ".github/scripts/df-lib.mjs";
 export const DARK_FACTORY_ENFORCEMENT_SCRIPT_PATH = ".github/scripts/df-enforcement.mjs";
@@ -27,14 +28,10 @@ export const DARK_FACTORY_PLAN_SCRIPT_PATH = ".github/scripts/df-plan.mjs";
 export const DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH = ".github/scripts/df-orchestrate.mjs";
 export const DARK_FACTORY_MODEL_POLICY_SCRIPT_PATH = ".github/scripts/df-model-policy.mjs";
 export const DARK_FACTORY_TRIGGER_POLICY_SCRIPT_PATH = ".github/scripts/df-trigger-policy.mjs";
-export const DARK_FACTORY_RELEASE_SCRIPT_PATH = ".github/scripts/df-release.mjs";
-export const DARK_FACTORY_SUBMODULE_SCRIPT_PATH = ".github/scripts/df-submodule-autoupdate.mjs";
-export const DARK_FACTORY_SUBMODULE_CHECKOUT_SCRIPT_PATH = ".github/scripts/df-submodule-checkout.mjs";
 export const DARK_FACTORY_SWEEP_SCRIPT_PATH = ".github/scripts/df-sweep.mjs";
 export const DARK_FACTORY_WORK_SCRIPT_PATH = ".github/scripts/df-work.mjs";
-export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/df-release.yml";
-export const DARK_FACTORY_SUBMODULE_WORKFLOW_PATH = ".github/workflows/df-submodule-autoupdate.yml";
 export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".agents/managed-repository.json";
+export const DARK_FACTORY_LEDGER_MIGRATION_PATH = ".agents/ledger-migration.json";
 export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".agents/installer-policy.json";
 export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".agents/branching-policy.md";
 export const DARK_FACTORY_ENFORCEMENT_RULES_PATH = ".agents/enforcement-rules.json";
@@ -48,6 +45,19 @@ export interface ManagedFile {
 export interface ManagedRepositoryRef {
   owner: string;
   repo: string;
+}
+
+export interface ManagedRepositoryAuthority {
+  dataRepo: string;
+  ledgerPath: "darkfactory-data/runs";
+}
+
+export interface LedgerMigrationProof {
+  schemaVersion: 1;
+  sourcePath: "runs";
+  targetPath: "darkfactory-data/runs";
+  foldCommit: string;
+  sourceParent: string;
 }
 
 const MANAGED_COMMON_DIRS = [".github", ".agents"] as const;
@@ -118,7 +128,46 @@ export function requiredManagedFilePaths(files?: readonly ManagedFile[]): string
   return readManagedConfig(files).requiredFiles;
 }
 
+export function readManagedRepositoryAuthority(): ManagedRepositoryAuthority {
+  const { dataRepo, ledgerPath } = readManagedConfig();
+  return Object.freeze({ dataRepo, ledgerPath });
+}
+
+export function readLedgerMigrationProof(): LedgerMigrationProof {
+  const file = readManagedFile(resolveProjectRoot(), DARK_FACTORY_LEDGER_MIGRATION_PATH);
+  if (!file) throw new Error(`Managed package is missing ${DARK_FACTORY_LEDGER_MIGRATION_PATH}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(file.content);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${DARK_FACTORY_LEDGER_MIGRATION_PATH}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const authority = readManagedRepositoryAuthority();
+  const sha = /^[0-9a-f]{40}$/;
+  if (
+    !isRecord(parsed) ||
+    parsed.schemaVersion !== 1 ||
+    parsed.sourcePath !== "runs" ||
+    parsed.targetPath !== authority.ledgerPath ||
+    typeof parsed.foldCommit !== "string" ||
+    !sha.test(parsed.foldCommit) ||
+    typeof parsed.sourceParent !== "string" ||
+    !sha.test(parsed.sourceParent)
+  ) {
+    throw new Error(`${DARK_FACTORY_LEDGER_MIGRATION_PATH} must bind the immutable runs-to-ledgerPath fold and exact source-parent commits`);
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    sourcePath: parsed.sourcePath,
+    targetPath: parsed.targetPath,
+    foldCommit: parsed.foldCommit,
+    sourceParent: parsed.sourceParent
+  });
+}
+
 function readManagedConfig(files?: readonly ManagedFile[]): {
+  dataRepo: string;
+  ledgerPath: "darkfactory-data/runs";
   packageFiles: string[];
   requiredFiles: string[];
   removedFiles: string[];
@@ -136,14 +185,16 @@ function readManagedConfig(files?: readonly ManagedFile[]): {
   if (
     !isRecord(parsed) ||
     parsed.schemaVersion !== 1 ||
-    parsed.dataRepo !== "marius-patrik/private-data" ||
-    parsed.ledgerRepo !== "marius-patrik/darkfactory-data" ||
+    typeof parsed.dataRepo !== "string" ||
+    !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(parsed.dataRepo) ||
+    Object.prototype.hasOwnProperty.call(parsed, "ledgerRepo") ||
+    parsed.ledgerPath !== "darkfactory-data/runs" ||
     !isPathArray(parsed.packageFiles) ||
     !isPathArray(parsed.requiredFiles) ||
     !isPathArray(parsed.removedFiles)
   ) {
     throw new Error(
-      `${DARK_FACTORY_MANAGED_CONFIG_PATH} must define schemaVersion 1, canonical private-data source and darkfactory-data ledger authorities, and packageFiles, requiredFiles, and removedFiles path arrays`
+      `${DARK_FACTORY_MANAGED_CONFIG_PATH} must define schemaVersion 1, one dataRepo authority, ledgerPath darkfactory-data/runs, no ledgerRepo, and packageFiles, requiredFiles, and removedFiles path arrays`
     );
   }
   const packageFiles = [...new Set(parsed.packageFiles)];
@@ -153,6 +204,8 @@ function readManagedConfig(files?: readonly ManagedFile[]): {
     throw new Error(`Managed config packageFiles must also be requiredFiles: ${undeclaredPackagePayloads.join(", ")}`);
   }
   return {
+    dataRepo: parsed.dataRepo,
+    ledgerPath: parsed.ledgerPath,
     packageFiles,
     requiredFiles,
     removedFiles: [...new Set(parsed.removedFiles)]
@@ -227,6 +280,7 @@ function resolveCanonicalDataRepoRoot(): string {
   const agentsHome = process.env.ANDROMEDA_HOME?.trim();
   if (!agentsHome) throw new Error("DarkFactory requires ANDROMEDA_HOME from Agent OS");
   const expectedPath = resolve(agentsHome);
+  const authority = readManagedRepositoryAuthority();
 
   try {
     const parsed = JSON.parse(readFileSync(dataReposFile, "utf8")) as unknown;
@@ -241,8 +295,8 @@ function resolveCanonicalDataRepoRoot(): string {
       throw new Error(`Agent OS data repository registry must contain exactly one andromeda-data authority record: ${dataReposFile}`);
     }
     const dataRepo = authorities[0];
-    if (dataRepo.repo !== "marius-patrik/private-data") {
-      throw new Error(`andromeda-data must use repository marius-patrik/private-data in ${dataReposFile}`);
+    if (dataRepo.repo !== authority.dataRepo) {
+      throw new Error(`andromeda-data must use manifest dataRepo ${authority.dataRepo} in ${dataReposFile}`);
     }
     if (typeof dataRepo.path !== "string" || !dataRepo.path.trim()) {
       throw new Error(`Invalid andromeda-data path in ${dataReposFile}`);
@@ -255,11 +309,11 @@ function resolveCanonicalDataRepoRoot(): string {
       throw new Error(`andromeda-data must register its checkout root without managedPath in ${dataReposFile}`);
     }
     const conflicts = parsed.filter((entry) => isRecord(entry) && entry !== dataRepo && (
-      String(entry.repo || "").toLowerCase() === "marius-patrik/private-data"
+      String(entry.repo || "").toLowerCase() === authority.dataRepo.toLowerCase()
       || (typeof entry.path === "string" && entry.path.trim() && resolve(entry.path) === expectedPath)
     ));
     if (conflicts.length > 0) {
-      throw new Error(`Agent OS data repository registry contains a conflicting private-data authority: ${dataReposFile}`);
+      throw new Error(`Agent OS data repository registry contains a conflicting ${authority.dataRepo} authority: ${dataReposFile}`);
     }
     return registeredPath;
   } catch (error) {

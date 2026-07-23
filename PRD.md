@@ -489,7 +489,7 @@ plugins/        capabilities loaded through the sdk plugin contract
 agents/         agent projects, carried with their own identity
 templates/      folded template repositories
 skills/  hooks/  roles/  commands/  persona.md
-docs/    ci/     install/  scripts/  .github/  .darkfactory/
+docs/    ci/     install/  scripts/  .github/  .agents/
 ```
 
 Two rules govern this layout.

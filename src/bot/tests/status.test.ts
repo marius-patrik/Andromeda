@@ -95,11 +95,13 @@ test("parseManagedReposJson filters active repositories for the control owner", 
 
 test("fetchManagedRepos reads managed repositories from the control repo via GitHub API", async () => {
   const github = createRequester({
-    "GET /repos/{owner}/{repo}/contents/{path}": () =>
-      managedReposContent({
+    "GET /repos/{owner}/{repo}/contents/{path}": (parameters) => {
+      assert.equal(parameters.ref, "main");
+      return managedReposContent({
         "marius-patrik/DarkFactory": { state: "active" },
         "marius-patrik/dream": { state: "active" }
-      })
+      });
+    }
   });
 
   const repos = await fetchManagedRepos(github, { owner: "marius-patrik", repo: "DarkFactory" }, "marius-patrik");
@@ -200,6 +202,7 @@ test("fetchRecentRuns returns latest plan, orchestrate, and in-flight work runs"
   const repo: RepositoryRef = { owner: "marius-patrik", repo: "DarkFactory" };
   const github = createRequester({
     "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs": (parameters) => {
+      assert.equal(parameters.branch, "main");
       const workflowId = String(parameters.workflow_id);
       if (workflowId === "df-plan.yml") {
         return workflowRunsResponse([
@@ -230,19 +233,20 @@ test("fetchRecentRuns returns latest plan, orchestrate, and in-flight work runs"
 });
 
 test("fetchLatestLedger reads the most recent df-orchestrate ledger", async () => {
-  const dataRepo: RepositoryRef = { owner: "marius-patrik", repo: "darkfactory-data" };
+  const dataRepo: RepositoryRef = { owner: "marius-patrik", repo: "private-data" };
   const controlRepo: RepositoryRef = { owner: "marius-patrik", repo: "DarkFactory" };
   const github = createRequester({
     "GET /repos/{owner}/{repo}/contents/{path}": (parameters) => {
+      assert.equal(parameters.ref, "main");
       const path = String(parameters.path);
-      if (path === "runs/marius-patrik/DarkFactory") {
+      if (path === "darkfactory-data/runs/marius-patrik/DarkFactory") {
         return [
           { name: "2026-07-05T08-00-00Z-df-orchestrate.json", type: "file" },
           { name: "2026-07-04T08-00-00Z-df-orchestrate.json", type: "file" },
           { name: "2026-07-05T07-00-00Z-df-plan.json", type: "file" }
         ];
       }
-      if (path === "runs/marius-patrik/DarkFactory/2026-07-05T08-00-00Z-df-orchestrate.json") {
+      if (path === "darkfactory-data/runs/marius-patrik/DarkFactory/2026-07-05T08-00-00Z-df-orchestrate.json") {
         return {
           type: "file",
           encoding: "base64",
@@ -269,8 +273,9 @@ test("fetchLatestLedger reads the most recent df-orchestrate ledger", async () =
 test("fetchLatestModelExecutions reports requested and resolved route evidence", async () => {
   const github = createRequester({
     "GET /repos/{owner}/{repo}/contents/{path}": (parameters) => {
+      assert.equal(parameters.ref, "main");
       const path = String(parameters.path);
-      if (path === "runs/marius-patrik/dream") {
+      if (path === "darkfactory-data/runs/marius-patrik/dream") {
         return [{ name: "2026-07-05T09-00-00Z-df-work.json", type: "file" }];
       }
       return encodedJsonFile({
@@ -290,7 +295,7 @@ test("fetchLatestModelExecutions reports requested and resolved route evidence",
   });
   const executions = await fetchLatestModelExecutions(
     github,
-    { owner: "marius-patrik", repo: "darkfactory-data" },
+    { owner: "marius-patrik", repo: "private-data" },
     [{ owner: "marius-patrik", repo: "dream" }]
   );
   assert.deepEqual(executions, [{
@@ -348,19 +353,19 @@ function createStatusRequester(): GitHubRequester {
       if (path === "PRD.md") {
         return { type: "file" };
       }
-      if (path === "runs/marius-patrik/DarkFactory") {
+      if (path === "darkfactory-data/runs/marius-patrik/DarkFactory") {
         return [{ name: "2026-07-05T08-00-00Z-df-orchestrate.json", type: "file" }];
       }
-      if (path === "runs/marius-patrik/DarkFactory/2026-07-05T08-00-00Z-df-orchestrate.json") {
+      if (path === "darkfactory-data/runs/marius-patrik/DarkFactory/2026-07-05T08-00-00Z-df-orchestrate.json") {
         return encodedJsonFile({
           created_at: "2026-07-05T08:00:00Z",
           dispatched: [{ repo: "marius-patrik/dream", issue: 1 }]
         });
       }
-      if (path === "runs/marius-patrik/dream") {
+      if (path === "darkfactory-data/runs/marius-patrik/dream") {
         return [{ name: "2026-07-05T09-00-00Z-df-work.json", type: "file" }];
       }
-      if (path === "runs/marius-patrik/dream/2026-07-05T09-00-00Z-df-work.json") {
+      if (path === "darkfactory-data/runs/marius-patrik/dream/2026-07-05T09-00-00Z-df-work.json") {
         return encodedJsonFile({
           created_at: "2026-07-05T09:00:00Z",
           status: "success",
@@ -424,6 +429,7 @@ test("fetchPrdCoverage reports root and package PRD presence", async () => {
   const github = createRequester({
     "GET /repos/{owner}/{repo}": () => ({ default_branch: "main" }),
     "GET /repos/{owner}/{repo}/contents/{path}": (parameters) => {
+      assert.equal(parameters.ref, "main");
       if (parameters.path === "PRD.md") {
         return { type: "file" };
       }
@@ -445,6 +451,23 @@ test("fetchPrdCoverage reports root and package PRD presence", async () => {
   assert.deepEqual(coverage, [
     { owner: "marius-patrik", repo: "dream", rootPrd: true, packagePrds: 1, totalPackages: 2 }
   ]);
+});
+
+test("fetchPrdCoverage rejects a non-main repository default before reading content", async () => {
+  let contentReads = 0;
+  const github = createRequester({
+    "GET /repos/{owner}/{repo}": () => ({ default_branch: "retired-integration" }),
+    "GET /repos/{owner}/{repo}/contents/{path}": () => {
+      contentReads += 1;
+      return { type: "file" };
+    }
+  });
+  const { fetchPrdCoverage } = await import("../status.js");
+  await assert.rejects(
+    () => fetchPrdCoverage(github, [{ owner: "marius-patrik", repo: "dream" }]),
+    /does not expose canonical main/
+  );
+  assert.equal(contentReads, 0);
 });
 
 test("fetchBacklogCoverage counts PRD-tracked open issues", async () => {

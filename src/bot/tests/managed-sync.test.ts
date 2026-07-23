@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import {
   ensureManagedRepositorySetup,
   ManagedSetupTrustViolation,
-  ManagedSourcePolicyContradiction,
   managedSetupPullRequestBody,
   MANAGED_SETUP_BRANCH,
   orderManagedRepositoriesForSync,
@@ -30,14 +29,10 @@ import {
   DARK_FACTORY_MODEL_POLICY_SCRIPT_PATH,
   DARK_FACTORY_PLAN_SCRIPT_PATH,
   DARK_FACTORY_PLAN_WORKFLOW_PATH,
+  RELEASE_ON_MERGE_WORKFLOW_PATH,
   DARK_FACTORY_SCRIPT_LIB_PATH,
   DARK_FACTORY_RELEASE_POLICY_PATH,
-  DARK_FACTORY_RELEASE_SCRIPT_PATH,
-  DARK_FACTORY_RELEASE_WORKFLOW_PATH,
-  DARK_FACTORY_SUBMODULE_CHECKOUT_SCRIPT_PATH,
   DARK_FACTORY_SUBMODULE_POLICY_PATH,
-  DARK_FACTORY_SUBMODULE_SCRIPT_PATH,
-  DARK_FACTORY_SUBMODULE_WORKFLOW_PATH,
   DARK_FACTORY_SWEEP_SCRIPT_PATH,
   DARK_FACTORY_TRIGGER_POLICY_PATH,
   DARK_FACTORY_TRIGGER_POLICY_SCRIPT_PATH,
@@ -68,12 +63,8 @@ const PACKAGE_MANAGED_PATHS = new Set([
   DARK_FACTORY_ORCHESTRATE_SCRIPT_PATH,
   DARK_FACTORY_MODEL_POLICY_SCRIPT_PATH,
   DARK_FACTORY_TRIGGER_POLICY_SCRIPT_PATH,
-  DARK_FACTORY_RELEASE_SCRIPT_PATH,
-  DARK_FACTORY_RELEASE_WORKFLOW_PATH,
   DARK_FACTORY_SUBMODULE_POLICY_PATH,
-  DARK_FACTORY_SUBMODULE_WORKFLOW_PATH,
-  DARK_FACTORY_SUBMODULE_SCRIPT_PATH,
-  DARK_FACTORY_SUBMODULE_CHECKOUT_SCRIPT_PATH,
+  RELEASE_ON_MERGE_WORKFLOW_PATH,
   DARK_FACTORY_SWEEP_SCRIPT_PATH,
   DARK_FACTORY_WORK_SCRIPT_PATH
 ]);
@@ -89,7 +80,7 @@ const RECOVERY_FILES: ManagedFile[] = [
     content: `${JSON.stringify({
       schemaVersion: 1,
       dataRepo: "marius-patrik/private-data",
-      ledgerRepo: "marius-patrik/darkfactory-data",
+      ledgerPath: "darkfactory-data/runs",
       packageFiles: [],
       requiredFiles: [],
       removedFiles: []
@@ -311,7 +302,7 @@ async function seedCanonicalManagedSource(root: string): Promise<{ managedRoot: 
       ? `${JSON.stringify({
         schemaVersion: 1,
         dataRepo: "marius-patrik/private-data",
-        ledgerRepo: "marius-patrik/darkfactory-data",
+        ledgerPath: "darkfactory-data/runs",
         packageFiles: [...PACKAGE_MANAGED_PATHS],
         requiredFiles,
         removedFiles: [
@@ -418,7 +409,7 @@ test("ensureManagedRepositorySetup creates a managed PR when files are missing",
       content: JSON.stringify({
         schemaVersion: 1,
         dataRepo: "marius-patrik/private-data",
-        ledgerRepo: "marius-patrik/darkfactory-data",
+        ledgerPath: "darkfactory-data/runs",
         packageFiles: [],
         requiredFiles: [],
         removedFiles: [".github/workflows/dark-factory-release.yml"]
@@ -609,12 +600,12 @@ test("managed setup fails closed when its non-force base-advance update conflict
   assert.equal(calls.some((call) => call.route === "POST /repos/{owner}/{repo}/pulls"), false);
 });
 
-test("control managed sync refuses contradictory release-control removals before GitHub reads or writes", async () => {
+test("control managed sync admits canonical retired-engine removals and reaches GitHub observation", async () => {
   let requests = 0;
   const requester: GitHubRequester = {
     async request() {
       requests += 1;
-      throw new Error("managed sync must reject the trusted source contradiction before GitHub access");
+      throw new Error("observation sentinel");
     }
   };
   const files: ManagedFile[] = [{
@@ -622,7 +613,7 @@ test("control managed sync refuses contradictory release-control removals before
     content: JSON.stringify({
       schemaVersion: 1,
       dataRepo: "marius-patrik/private-data",
-      ledgerRepo: "marius-patrik/darkfactory-data",
+      ledgerPath: "darkfactory-data/runs",
       packageFiles: [],
       requiredFiles: [],
       removedFiles: [
@@ -634,11 +625,9 @@ test("control managed sync refuses contradictory release-control removals before
 
   await assert.rejects(
     ensureManagedRepositorySetup(requester, { owner: "marius-patrik", repo: "DarkFactory" }, files),
-    (error: unknown) => error instanceof ManagedSourcePolicyContradiction
-      && /df-release\.mjs/.test(error.message)
-      && /df-release\.yml/.test(error.message)
+    /observation sentinel/
   );
-  assert.equal(requests, 0);
+  assert.equal(requests, 1);
 });
 
 test("orderManagedRepositoriesForSync processes DarkFactory control repository first", () => {
@@ -758,14 +747,14 @@ test("readManagedFiles rejects swapped or missing managed-source and runtime-led
     const manifestPath = join(managedRoot, ...DARK_FACTORY_MANAGED_CONFIG_PATH.split("/"));
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
 
-    await writeFile(manifestPath, JSON.stringify({ ...manifest, dataRepo: "marius-patrik/darkfactory-data" }));
-    assert.throws(() => readManagedFiles(), /canonical private-data source and darkfactory-data ledger authorities/);
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, dataRepo: "not-a-repository" }));
+    assert.throws(() => readManagedFiles(), /one dataRepo authority/);
 
     await writeFile(manifestPath, JSON.stringify({ ...manifest, ledgerRepo: "marius-patrik/private-data" }));
-    assert.throws(() => readManagedFiles(), /canonical private-data source and darkfactory-data ledger authorities/);
+    assert.throws(() => readManagedFiles(), /no ledgerRepo/);
 
-    await writeFile(manifestPath, JSON.stringify({ ...manifest, ledgerRepo: undefined }));
-    assert.throws(() => readManagedFiles(), /canonical private-data source and darkfactory-data ledger authorities/);
+    await writeFile(manifestPath, JSON.stringify({ ...manifest, ledgerPath: undefined }));
+    assert.throws(() => readManagedFiles(), /ledgerPath darkfactory-data\/runs/);
   } finally {
     if (previousRegistry === undefined) delete process.env.ANDROMEDA_DATA_REPOS;
     else process.env.ANDROMEDA_DATA_REPOS = previousRegistry;
@@ -789,7 +778,7 @@ test("readManagedFiles selects canonical private-data while allowing unrelated r
 
     await writeFile(registryPath, JSON.stringify([
       { id: "andromeda-data", repo: "marius-patrik/private-data", path: root },
-      { id: "darkfactory-data", repo: "marius-patrik/darkfactory-data", path: join(root, "other-data") }
+      { id: "unrelated-data", repo: "marius-patrik/unrelated-data", path: join(root, "other-data") }
     ]));
     const files = readManagedFiles();
     assert.ok(files.some((file) => file.path === "AGENTS.md"));
@@ -814,7 +803,7 @@ test("readManagedFiles rejects a missing or duplicate canonical andromeda-data a
     process.env.ANDROMEDA_HOME = root;
     process.env.ANDROMEDA_DATA_REPOS = registryPath;
 
-    await writeFile(registryPath, JSON.stringify([{ id: "darkfactory-data", repo: "marius-patrik/darkfactory-data", path: join(root, "other") }]));
+    await writeFile(registryPath, JSON.stringify([{ id: "unrelated-data", repo: "marius-patrik/unrelated-data", path: join(root, "other") }]));
     assert.throws(() => readManagedFiles(), /exactly one andromeda-data authority record/);
 
     await writeFile(registryPath, JSON.stringify([
@@ -850,7 +839,7 @@ test("readManagedFiles rejects wrong repository, path, or conflicting canonical 
       registryPath,
       JSON.stringify([{ id: "andromeda-data", repo: "wrong/data", path: root }])
     );
-    assert.throws(() => readManagedFiles(), /must use repository marius-patrik\/private-data/);
+    assert.throws(() => readManagedFiles(), /must use manifest dataRepo marius-patrik\/private-data/);
     await writeFile(registryPath, JSON.stringify([]));
     assert.throws(() => readManagedFiles(), /exactly one andromeda-data authority record/);
 
@@ -861,7 +850,7 @@ test("readManagedFiles rejects wrong repository, path, or conflicting canonical 
         { id: "other-data", repo: "marius-patrik/private-data", path: join(root, "other") }
       ])
     );
-    assert.throws(() => readManagedFiles(), /conflicting private-data authority/);
+    assert.throws(() => readManagedFiles(), /conflicting marius-patrik\/private-data authority/);
 
     await writeFile(
       registryPath,

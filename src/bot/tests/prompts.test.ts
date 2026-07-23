@@ -300,6 +300,7 @@ test("forbidden provider, auth, and CLI-mechanics content is detected", () => {
   assert.ok(findForbiddenContent("read ~/.codex/auth.json").some((hit) => hit.startsWith("auth-path")));
   assert.ok(findForbiddenContent("read C:\\Users\\patrik\\.agents\\clis").some((hit) => hit.startsWith("auth-path")));
   assert.ok(findForbiddenContent("then agents run --model x").some((hit) => hit.startsWith("runtime-command")));
+  assert.ok(findForbiddenContent("then andromeda run --model x").some((hit) => hit.startsWith("runtime-command")));
   assert.ok(findForbiddenContent("agents doctor").some((hit) => hit.startsWith("runtime-command")));
   assert.ok(findForbiddenContent("agents use default").some((hit) => hit.startsWith("runtime-command")));
   assert.ok(findForbiddenContent("agents --help").some((hit) => hit.startsWith("runtime-command")));
@@ -316,6 +317,7 @@ test("forbidden provider, auth, and CLI-mechanics content is detected", () => {
     "& `\"agents.exe`\" run --mode worker",
     "agents.cmd run task",
     "agents.ps1 run task",
+    "andromeda.ps1 run task",
     "agents /?"
   ]) {
     assert.ok(findForbiddenContent(command).some((hit) => hit.startsWith("runtime-command")), command);
@@ -751,7 +753,7 @@ test("manifest validation rejects raw untrusted variable usage in an artifact", 
 test("manifest validation rejects concrete runtime commands in an artifact", async () => {
   await withLibraryCopy(async (root) => {
     const rel = "skills/token-economy.md";
-    const content = "### Token economy\n\nDispatch with agents run now.\n";
+    const content = "### Token economy\n\nDispatch with andromeda run now.\n";
     await writeFile(join(root, rel), content);
     await editManifest(root, (manifest) => {
       const artifact = manifest.artifacts.find((entry: any) => entry.id === "skill/token-economy");
@@ -762,9 +764,9 @@ test("manifest validation rejects concrete runtime commands in an artifact", asy
 });
 
 test("concrete canonical runtime subcommands are forbidden in artifacts", () => {
-  assert.ok(findForbiddenContent("invoke agents session run now").some((hit) => hit.startsWith("runtime-command")));
-  assert.ok(findForbiddenContent("open agents tui").some((hit) => hit.startsWith("runtime-command")));
-  assert.equal(findForbiddenContent("the canonical `agents` launcher owns execution").length, 0);
+  assert.ok(findForbiddenContent("invoke andromeda session run now").some((hit) => hit.startsWith("runtime-command")));
+  assert.ok(findForbiddenContent("open andromeda tui").some((hit) => hit.startsWith("runtime-command")));
+  assert.equal(findForbiddenContent("the canonical `andromeda` launcher owns execution").length, 0);
 });
 
 test("snapshot verification detects checksum drift", async () => {

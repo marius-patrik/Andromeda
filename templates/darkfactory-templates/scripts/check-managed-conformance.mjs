@@ -18,7 +18,7 @@ function readText(path) {
   return readFileSync(path, "utf8").trim();
 }
 
-const managedConfigPath = ".darkfactory/managed-repository.json";
+const managedConfigPath = ".agents/managed-repository.json";
 if (!existsSync(managedConfigPath)) {
   console.error(`Missing managed repository config: ${managedConfigPath}`);
   process.exit(1);

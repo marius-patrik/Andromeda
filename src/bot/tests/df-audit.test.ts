@@ -595,19 +595,18 @@ test("branch protection distinguishes inaccessible 403 state from absent 404 sta
   }
 });
 
-test("data repository policy accepts exactly the two canonical private main-only repositories", () => {
+test("data repository policy accepts exactly the manifest-authorized private main-only repository", () => {
   const policy = doctor.loadDataRepositoryPolicy();
   assert.deepEqual(policy.repositories.map((entry: { repository: string }) => entry.repository), [
-    "marius-patrik/private-data",
-    "marius-patrik/darkfactory-data"
+    "marius-patrik/private-data"
   ]);
   assert.equal(policy.compensatingControl.url, "https://github.com/marius-patrik/Andromeda/pull/190");
   assert.deepEqual(new Set(policy.compensatingControl.guarantees), new Set(["encrypted-bundle-admission", "plaintext-rejection"]));
 
   const extra = structuredClone(policy);
   extra.repositories.push(structuredClone(extra.repositories[0]));
-  extra.repositories[2].repository = "marius-patrik/other-data";
-  assert.throws(() => doctor.validateDataRepositoryPolicy(extra), /exactly the two canonical/);
+  extra.repositories[1].repository = "marius-patrik/other-data";
+  assert.throws(() => doctor.validateDataRepositoryPolicy(extra), /exactly the canonical/);
 
   const malformed = structuredClone(policy);
   malformed.repositories[0].branchProtection.acceptedResidue.httpStatus = 404;
@@ -769,9 +768,9 @@ test("main-only data repositories report an unowned dev branch as extra", async 
   assert.ok(result.findings.some((finding) => finding.id === "extra-branch-dev"));
 });
 
-test("main-only policy is restricted to the two canonical data repositories", () => {
+test("main-only policy is restricted to the manifest-authorized data repository", () => {
   assert.equal(doctor.isMainOnlyDataRepository({ owner: "marius-patrik", repo: "private-data" }), true);
-  assert.equal(doctor.isMainOnlyDataRepository({ owner: "MARIUS-PATRIK", repo: "DARKFACTORY-DATA" }), true);
+  assert.equal(doctor.isMainOnlyDataRepository({ owner: "MARIUS-PATRIK", repo: "DARKFACTORY-DATA" }), false);
   assert.equal(doctor.isMainOnlyDataRepository({ owner: "marius-patrik", repo: "product-data" }), false);
   assert.equal(doctor.isMainOnlyDataRepository({ owner: "another-owner", repo: "private-data" }), false);
 });
@@ -780,7 +779,7 @@ test("doctor lifecycle admits exact canonical data repositories without making a
   const registry = { schemaVersion: 1, repositories: {} };
   assert.equal(doctor.doctorLifecycleState(repo, repo, registry), "active");
   assert.equal(doctor.doctorLifecycleState({ owner: "marius-patrik", repo: "private-data" }, repo, registry), "active");
-  assert.equal(doctor.doctorLifecycleState({ owner: "marius-patrik", repo: "darkfactory-data" }, repo, registry), "active");
+  assert.equal(doctor.doctorLifecycleState({ owner: "marius-patrik", repo: "darkfactory-data" }, repo, registry), "removed");
   assert.equal(doctor.doctorLifecycleState({ owner: "marius-patrik", repo: "other-data" }, repo, registry), "removed");
   assert.equal(doctor.doctorLifecycleState({ owner: "another-owner", repo: "private-data" }, repo, registry), "removed");
 });
@@ -1866,7 +1865,7 @@ test("diagnose mode performs no GitHub writes and pins target reads when a branc
     if (requestPath.includes(`/commits/${targetRevision}/check-runs`)) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "DarkFactory Autoreview", status: "completed", conclusion: "success", app: { id: 15368 } }] };
     if (requestPath.includes(`/commits/${targetRevision}/status`)) return { total_count: 0, statuses: [] };
     if (requestPath.includes("/commits?sha=")) return [];
-    if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("ANDROMEDA_HOME bin\\agents.ps1 state doctor --json");
+    if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("ANDROMEDA_HOME bin\\andromeda.ps1 state doctor --json");
     if (requestPath.includes("/contents/AGENTS.md")) return content("Use ANDROMEDA_HOME.");
     if (requestPath.includes("/contents/README.md")) return content("# DarkFactory\n");
     if (requestPath.includes("/contents/package.json")) return content('{"name":"@agent-os/darkfactory"}');
@@ -1948,7 +1947,7 @@ test("report mode routes issue writes to target authority and contents writes on
     if (requestPath.includes(`/commits/${targetRevision}/check-runs`)) return { total_count: 2, check_runs: [{ name: "Validate", status: "completed", conclusion: "success", app: { id: 15368 } }, { name: "DarkFactory Autoreview", status: "completed", conclusion: "success", app: { id: 15368 } }] };
     if (requestPath.includes(`/commits/${targetRevision}/status`)) return { total_count: 0, statuses: [] };
     if (requestPath.includes("/commits?sha=")) return [];
-    if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("ANDROMEDA_HOME bin\\agents.ps1 state doctor --json");
+    if (requestPath.includes("/contents/.github/workflows/df-work.yml")) return content("ANDROMEDA_HOME bin\\andromeda.ps1 state doctor --json");
     if (requestPath.includes("/contents/AGENTS.md")) return content("Use ANDROMEDA_HOME.");
     if (requestPath.includes("/contents/README.md")) return content("# DarkFactory\n");
     if (requestPath.includes("/contents/package.json")) return content('{"name":"@agent-os/darkfactory"}');
@@ -1961,7 +1960,7 @@ test("report mode routes issue writes to target authority and contents writes on
   });
   const { gh: ledgerGh, calls: ledgerCalls } = mockGh((method, requestPath) => {
     events.push(`ledger:${method}:${requestPath}`);
-    assert.match(requestPath, /^\/repos\/marius-patrik\/darkfactory-data\/contents\/runs\//);
+    assert.match(requestPath, /^\/repos\/marius-patrik\/private-data\/contents\/darkfactory-data\/runs\//);
     if (method === "GET") throw notFound();
     if (method === "PUT") return {};
     throw new Error(`unexpected ledger ${method} ${requestPath}`);
@@ -1984,7 +1983,7 @@ test("report mode routes issue writes to target authority and contents writes on
   assert.equal(targetCalls.some((call) => call.method !== "GET" && /\/labels(?:[/?]|$)/.test(call.path)), false);
   const ledgerWrites = ledgerCalls.filter((call) => call.method === "PUT");
   assert.equal(ledgerWrites.length, 2);
-  assert.equal(ledgerCalls.every((call) => /\/repos\/marius-patrik\/darkfactory-data\/contents\//.test(call.path)), true);
+  assert.equal(ledgerCalls.every((call) => /\/repos\/marius-patrik\/private-data\/contents\/darkfactory-data\/runs\//.test(call.path)), true);
   const admissionIndex = events.findIndex((event) => event.includes("ledger:PUT:") && event.includes("repo-doctor-admission"));
   const firstTargetWriteIndex = events.findIndex((event) => /^target:(POST|PATCH):/.test(event));
   assert.ok(admissionIndex >= 0 && admissionIndex < firstTargetWriteIndex);

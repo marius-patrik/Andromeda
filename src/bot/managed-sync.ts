@@ -16,18 +16,6 @@ export const DARK_FACTORY_CONTROL_REPOSITORY = {
   owner: "marius-patrik",
   repo: "DarkFactory"
 } as const;
-export const REPOSITORY_OWNED_RELEASE_CONTROLS = new Set([
-  ".agents/release-policy.json",
-  ".github/scripts/df-release.mjs",
-  ".github/workflows/df-release.yml"
-]);
-
-export class ManagedSourcePolicyContradiction extends Error {
-  constructor(paths: string[]) {
-    super(`Canonical managed source attempts to remove repository-owned DarkFactory release controls: ${paths.sort().join(", ")}. Reconcile source policy before managed sync.`);
-    this.name = "ManagedSourcePolicyContradiction";
-  }
-}
 
 export class ManagedSetupTrustViolation extends Error {
   constructor(message: string) {
@@ -121,10 +109,6 @@ export async function ensureManagedRepositorySetup(
 
   const managedFiles = files ?? readManagedFiles(repository);
   const removedPaths = removedManagedFilePaths(managedFiles);
-  if (repositoryKey(repository) === repositoryKey(DARK_FACTORY_CONTROL_REPOSITORY)) {
-    const contradictions = [...removedPaths].filter((path) => REPOSITORY_OWNED_RELEASE_CONTROLS.has(path));
-    if (contradictions.length > 0) throw new ManagedSourcePolicyContradiction(contradictions);
-  }
   const repoInfo = await getRepositoryInfo(github, repository);
 
   if (repoInfo.archived) {
@@ -1028,7 +1012,7 @@ export function managedSetupPullRequestBody(
     "- Shared Agent OS identity, memory, roles, skills, provider state, and sessions remain under `$ANDROMEDA_HOME`; DarkFactory never copies them into repositories.",
     "- `.agents/project` is managed only when a repo-specific canonical private-data overlay exists.",
     "- `AGENTS.md` is the repository entrypoint into project-local context and `$ANDROMEDA_HOME`.",
-    "- `.darkfactory` policy files define labels, branching, installer, and orchestration behavior.",
+    "- `.agents` policy files define labels, branching, installer, and orchestration behavior.",
     "- `.github/workflows/ci.yml` provides the managed validation baseline.",
     `- \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\` is bootstrap-managed so repositories have a safe baseline workflow.`,
     "- `.github/workflows/dark-factory-autoupdate.yml` verifies managed setup on a schedule while DarkFactory performs centralized sync.",

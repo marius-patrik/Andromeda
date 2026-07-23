@@ -88,8 +88,8 @@ export async function collectCleanEvidence(
     branchHeads.set(name, requiredString(commit.sha, `branch ${name} head`));
   }
   // Policy names remain immutable even when the corresponding remote ref is
-  // missing. A local-only main/dev is recovery evidence, never cleanup.
-  const policyBranchNames = new Set([defaultBranch, "main", "dev"]);
+  // missing. A local-only main is recovery evidence, never cleanup.
+  const policyBranchNames = new Set([defaultBranch, "main"]);
   const policyBranches = new Set([...policyBranchNames].filter((name) => branchHeads.has(name)));
   const trees = new Map<string, string>();
   for (const [name, head] of branchHeads) trees.set(name, await commitTree(github, repository, head));
@@ -450,7 +450,7 @@ async function collectArtifactRepairEvidence(
       ? [{ finding, path: match[1]! }]
       : [];
   });
-  const baseSha = branchHeads.get("dev");
+  const baseSha = branchHeads.get("main");
   if (candidates.length === 0 || !baseSha || !EXACT_COMMIT.test(baseSha)) return [];
   const tree = await readCompleteTree(github, repository, baseSha);
   const entries = new Map(tree.map((entry) => [entry.path, entry]));
@@ -478,7 +478,7 @@ async function collectArtifactRepairEvidence(
         path: candidate.path,
         blobSha: marker.blobSha,
         mode: marker.mode,
-        base: "dev",
+        base: "main",
         baseSha,
         branch: artifactBranch(candidate.finding.id, candidate.path, marker.blobSha, marker.baseSha),
         state: "resolved",
@@ -502,7 +502,7 @@ async function collectArtifactRepairEvidence(
       path: candidate.path,
       blobSha: entry.sha,
       mode: entry.mode,
-      base: "dev",
+      base: "main",
       baseSha,
       branch,
       state: pull?.autoMerge ? "watch" : "needed",
@@ -522,7 +522,7 @@ async function collectManagedLabelEvidence(
     const match = /^Managed label `([^`]+)` is absent from the canonical taxonomy\.$/.exec(finding.message);
     return match && finding.id.endsWith("-orphan") ? [{ finding, name: match[1]! }] : [];
   });
-  const policyRevision = branchHeads.get("dev");
+  const policyRevision = branchHeads.get("main");
   if (candidates.length === 0 || !policyRevision || !EXACT_COMMIT.test(policyRevision)) return [];
   const policyFile = await readTextFile(github, repository, MANAGED_LABEL_POLICY_PATH, policyRevision);
   let policy: unknown;
@@ -558,7 +558,7 @@ async function collectManagedLabelEvidence(
       ...matches[0]!,
       policyPath: MANAGED_LABEL_POLICY_PATH,
       policyBlob: policyFile.sha,
-      policyRef: "dev",
+      policyRef: "main",
       policyRevision
     });
   }
@@ -675,7 +675,7 @@ function exactArtifactPulls(
       && pull.trustedActor
       && pull.sameRepository
       && !pull.draft
-      && pull.baseRef === "dev"
+      && pull.baseRef === "main"
       && pull.baseSha === marker.baseSha
       && pull.title === artifactPullTitle(path)
       && marker.findingId === findingId
@@ -806,7 +806,7 @@ export async function applyCleanPlan(
       repository,
       new Map(freshEvidence.branches.map((branch) => [branch.name, branch.head])),
       new Map(freshEvidence.branches.map((branch) => [branch.name, branch.tree])),
-      new Set([freshEvidence.defaultBranch, "main", "dev"])
+      new Set([freshEvidence.defaultBranch, "main"])
     )
     : emptyLocalEvidence();
   const actions: CleanApplyReceipt["actions"] = [];
@@ -1413,35 +1413,35 @@ async function readRefShaIfPresent(
   }
 }
 
-function assertExactDevProtection(value: unknown): void {
-  const protection = asRecord(value, "dev branch protection");
-  const statuses = asRecord(protection.required_status_checks, "dev required status checks");
-  if (statuses.strict !== true || !Array.isArray(statuses.checks)) throw new Error("dev protection does not enforce strict App-bound checks");
+function assertExactMainProtection(value: unknown): void {
+  const protection = asRecord(value, "main branch protection");
+  const statuses = asRecord(protection.required_status_checks, "main required status checks");
+  if (statuses.strict !== true || !Array.isArray(statuses.checks)) throw new Error("main protection does not enforce strict App-bound checks");
   const checks = statuses.checks.map((value, index) => {
-    const check = asRecord(value, `dev required check ${index}`);
-    return { context: requiredString(check.context, `dev required check ${index} context`), appId: requiredNumber(check.app_id, `dev required check ${index} app`) };
+    const check = asRecord(value, `main required check ${index}`);
+    return { context: requiredString(check.context, `main required check ${index} context`), appId: requiredNumber(check.app_id, `main required check ${index} app`) };
   }).sort((left, right) => left.context.localeCompare(right.context));
   const required = [...REQUIRED_PROTECTED_CHECKS].sort();
   if (checks.length !== required.length || checks.some((check, index) => check.context !== required[index] || check.appId !== TRUSTED_ACTIONS_APP_ID)) {
-    throw new Error("dev protection is not bound exactly to Validate and DarkFactory Autoreview on the trusted Actions App");
+    throw new Error("main protection is not bound exactly to Validate and DarkFactory Autoreview on the trusted Actions App");
   }
-  const admins = asRecord(protection.enforce_admins, "dev admin enforcement");
-  const force = asRecord(protection.allow_force_pushes, "dev force-push policy");
-  const deletion = asRecord(protection.allow_deletions, "dev deletion policy");
+  const admins = asRecord(protection.enforce_admins, "main admin enforcement");
+  const force = asRecord(protection.allow_force_pushes, "main force-push policy");
+  const deletion = asRecord(protection.allow_deletions, "main deletion policy");
   if (admins.enabled !== true || force.enabled !== false || deletion.enabled !== false) {
-    throw new Error("dev protection permits a bypass, force push, or deletion");
+    throw new Error("main protection permits a bypass, force push, or deletion");
   }
 }
 
-async function assertProtectedDevLane(
+async function assertProtectedMainLane(
   github: OperatorGitHubRequester,
   repository: RepositoryRef
 ): Promise<void> {
   const response = await github.request("GET /repos/{owner}/{repo}/branches/{branch}/protection", {
     ...repository,
-    branch: "dev"
+    branch: "main"
   });
-  assertExactDevProtection(response.data);
+  assertExactMainProtection(response.data);
 }
 
 async function exactArtifactBlob(
@@ -1463,7 +1463,7 @@ function requireArtifactEntry(entry: CleanPlanEntry): NonNullable<CleanPlanEntry
   if (!artifact
     || entry.target !== artifact.path
     || entry.head !== artifact.blobSha
-    || artifact.base !== "dev"
+    || artifact.base !== "main"
     || artifact.state !== "needed"
     || !safeRepositoryPath(artifact.path)
     || !EXACT_COMMIT.test(artifact.blobSha)
@@ -1482,12 +1482,12 @@ async function revalidateArtifactSource(
 ): Promise<void> {
   const artifact = requireArtifactEntry(entry);
   const head = await readRefSha(github, repository, artifact.base);
-  if (head !== artifact.baseSha) throw new Error(`artifact ${artifact.path} base drifted from exact dev head`);
+  if (head !== artifact.baseSha) throw new Error(`artifact ${artifact.path} base drifted from exact main head`);
   const blob = await exactArtifactBlob(github, repository, artifact.baseSha, artifact.path);
   if (!blob || blob.sha !== artifact.blobSha || blob.mode !== artifact.mode) {
     throw new Error(`artifact ${artifact.path} blob or mode drifted before repair`);
   }
-  await assertProtectedDevLane(github, repository);
+  await assertProtectedMainLane(github, repository);
 }
 
 function artifactCommitMessage(path: string): string {
@@ -1510,7 +1510,7 @@ function artifactPullBody(artifact: NonNullable<CleanPlanEntry["artifact"]>, hea
     }),
     "## DarkFactory generated artifact cleanup",
     "",
-    `Removes only \`${artifact.path}\` at exact blob \`${artifact.blobSha}\` from \`dev@${artifact.baseSha}\`.`,
+    `Removes only \`${artifact.path}\` at exact blob \`${artifact.blobSha}\` from \`main@${artifact.baseSha}\`.`,
     "",
     "This pull request is marker-owned, protected by Validate and DarkFactory Autoreview, and may land only through GitHub auto-merge after both trusted App-bound checks are green."
   ].join("\n");
@@ -1593,7 +1593,7 @@ async function findExactArtifactPull(
   const values = await listPages(github, "GET /repos/{owner}/{repo}/pulls", {
     ...repository,
     state: "open",
-    base: "dev",
+    base: "main",
     head: `${repository.owner}:${artifact.branch}`
   });
   const pulls = values.map((value, index) => normalizePull(value, index, repository));
@@ -1605,7 +1605,7 @@ async function findExactArtifactPull(
     || !pull.sameRepository
     || pull.draft
     || pull.state !== "open"
-    || pull.baseRef !== "dev"
+    || pull.baseRef !== "main"
     || pull.baseSha !== artifact.baseSha
     || pull.headRef !== artifact.branch
     || pull.headSha !== headSha
@@ -1645,7 +1645,7 @@ async function createOrResumeArtifactPull(
       title: artifactPullTitle(artifact.path),
       body: artifactPullBody(artifact, headSha),
       head: artifact.branch,
-      base: "dev",
+      base: "main",
       draft: false,
       maintainer_can_modify: false
     });
@@ -1694,7 +1694,7 @@ async function applyArtifactRepairAction(
 ): Promise<void> {
   const artifact = requireArtifactEntry(entry);
   await revalidateArtifactSource(github, repository, entry);
-  await recordAdmission(actionReceipt(entry, "applied", `Admitted exact generated blob removal through protected dev PR ${artifact.branch}.`), options.onAdmission);
+  await recordAdmission(actionReceipt(entry, "applied", `Admitted exact generated blob removal through protected main PR ${artifact.branch}.`), options.onAdmission);
   await revalidateArtifactSource(github, repository, entry);
   const headSha = await createOrResumeArtifactCommit(github, repository, artifact);
   await revalidateArtifactSource(github, repository, entry);

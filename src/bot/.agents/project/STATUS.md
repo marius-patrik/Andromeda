@@ -4,12 +4,13 @@
 - Branch: `main`
 - Product role: Separate GitHub-native autonomous engineering product
 - Managed policy authority: the `managed-repository` child of canonical
-  `marius-patrik/Andromeda-data` at `$AGENTS_HOME`
+  `marius-patrik/private-data` at `$ANDROMEDA_HOME`
 - Managed executable source: this DarkFactory package; duplicate payloads in
   managed data fail closed
-- Operational ledger source: `marius-patrik/darkfactory-data`
-- Shared state authority: `$AGENTS_HOME`
-- Local worker authority: canonical `agents` launcher
+- Operational ledger source: manifest `dataRepo` plus
+  `ledgerPath=darkfactory-data/runs`
+- Shared state authority: `$ANDROMEDA_HOME`
+- Local worker authority: canonical `andromeda` launcher
 - Repository doctor: deterministic read-only diagnosis by default; explicit
   stable-finding issue reporting; no implicit repair
 - CI reviewer: provider-agnostic DarkFactory Autoreview through canonical

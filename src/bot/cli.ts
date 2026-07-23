@@ -46,7 +46,7 @@ import {
   type ParsedHumanCommand
 } from "./human-cli.js";
 import { ensureManagedRepositorySetup, orderManagedRepositoriesForSync } from "./managed-sync.js";
-import { readManagedFiles } from "./managed-files.js";
+import { readLedgerMigrationProof, readManagedFiles, readManagedRepositoryAuthority } from "./managed-files.js";
 import { applyCleanPlan, collectCleanEvidence, deleteRemoteBranchWithLease, type OperatorGitHubRequester } from "./clean-evidence.js";
 import { convergeMachineRuntime } from "./machine-setup.js";
 import { convergeManagedRegistration } from "./registration.js";
@@ -68,6 +68,11 @@ import {
 import { createWebhookServer } from "./server.js";
 
 const TRUSTED_ACTIONS_APP_ID = 15368;
+const MANAGED_REPOSITORY_AUTHORITY = readManagedRepositoryAuthority();
+const DATA_REPOSITORY = MANAGED_REPOSITORY_AUTHORITY.dataRepo;
+const [DATA_REPO_OWNER, DATA_REPO_NAME] = DATA_REPOSITORY.split("/");
+const LEDGER_PATH = MANAGED_REPOSITORY_AUTHORITY.ledgerPath;
+const LEDGER_MIGRATION_PROOF = readLedgerMigrationProof();
 
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
   const [command = "help"] = args;
@@ -122,11 +127,6 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
 
   if (command === "clean") {
     await runClean(args.slice(1));
-    return;
-  }
-
-  if (command === "release") {
-    await runRelease(args.slice(1));
     return;
   }
 
@@ -303,7 +303,7 @@ async function collectDoctorReports(app: App, options: DoctorCliOptions): Promis
   });
   const github = createDoctorRequester(octokit);
   const ledgerGithub = options.writeIssues
-    ? createDoctorRequester(await getScopedInstallationOctokit(app, CONTROL_OWNER, { contents: "write" }, ["darkfactory-data"]))
+    ? createDoctorRequester(await getScopedInstallationOctokit(app, DATA_REPO_OWNER, { contents: "write" }, [DATA_REPO_NAME]))
     : undefined;
   const moduleUrl = new URL("../../scripts/df-audit.mjs", import.meta.url);
   const doctor = await import(moduleUrl.href) as {
@@ -380,9 +380,7 @@ async function runSetup(args: string[], commandId = "setup"): Promise<void> {
   const dispatchedIssueLanePlans = new Set<string>();
   const dispatchedReadinessPlans = new Set<string>();
   const dispatchedRegistrationSyncs = new Set<string>();
-  const dispatchedReleasePlans = new Set<string>();
   const dispatchedCleanPlans = new Set<string>();
-  const dispatchedSubmodulePlans = new Set<string>();
   const maxPasses = options.watch ? boundedInteger(process.env.DF_SETUP_WATCH_PASSES, 120, 1, 240) : 1;
   let finalPlan = planSetupConvergence([]);
   let previousEvidenceHash = "";
@@ -397,7 +395,7 @@ async function runSetup(args: string[], commandId = "setup"): Promise<void> {
     completedPasses = pass;
     stableEvidencePasses = previousEvidenceHash === plan.evidenceHash ? stableEvidencePasses + 1 : 0;
     previousEvidenceHash = plan.evidenceHash;
-    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "setup-admission", options.all ? "fleet" : options.target, {
+    await ledger.writeRunLedger(dataGithub, "setup-admission", options.all ? "fleet" : options.target, {
       plan_id: plan.planId,
       evidence_hash: plan.evidenceHash,
       pass,
@@ -411,13 +409,11 @@ async function runSetup(args: string[], commandId = "setup"): Promise<void> {
       dispatchedIssueLanePlans,
       dispatchedReadinessPlans,
       dispatchedRegistrationSyncs,
-      dispatchedReleasePlans,
       dispatchedCleanPlans,
-      dispatchedSubmodulePlans,
       { agentsHome: options.agentsHome, packageRoot: fileURLToPath(new URL("..", import.meta.url)) }
     );
     receipts.push(...passReceipts);
-    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "setup-completion", options.all ? "fleet" : options.target, {
+    await ledger.writeRunLedger(dataGithub, "setup-completion", options.all ? "fleet" : options.target, {
       plan_id: plan.planId,
       evidence_hash: plan.evidenceHash,
       pass,
@@ -442,10 +438,7 @@ async function runSetup(args: string[], commandId = "setup"): Promise<void> {
       "open-managed-setup-pr",
       "reconcile-issue-lane",
       "evaluate-readiness",
-      "reconcile-branches",
-      "converge-release",
-      "converge-clean",
-      "converge-submodules"
+      "converge-clean"
     ].includes(action.operation));
     if (stableEvidencePasses >= 2 && !asynchronous) {
       stopReason = "stable-evidence";
@@ -481,9 +474,7 @@ async function executeSetupPlan(
   dispatchedIssueLanePlans: Set<string>,
   dispatchedReadinessPlans: Set<string>,
   dispatchedRegistrationSyncs: Set<string>,
-  dispatchedReleasePlans: Set<string>,
   dispatchedCleanPlans: Set<string>,
-  dispatchedSubmodulePlans: Set<string>,
   machine: { agentsHome: string; packageRoot: string }
 ): Promise<SetupReceipt[]> {
   const receipts: SetupReceipt[] = [];
@@ -548,7 +539,7 @@ async function executeSetupPlan(
 
     if (operations.has("initialize-repository")) {
       try {
-        receipts.push(...await convergeRepositoryFoundation(github, { owner, repo }, { createDev: false }));
+        receipts.push(...await convergeRepositoryFoundation(github, { owner, repo }));
       } catch (error) {
         if (!(error instanceof SetupOwnerActionRequired)) throw error;
         receipts.push({ action: error.action, target: report.target_repository, status: "owner-required", detail: error.message });
@@ -604,7 +595,7 @@ async function executeSetupPlan(
           repo: CONTROL_REPO,
           workflow_id: "df-plan.yml",
           ref: "main",
-          inputs: { repo: report.target_repository, ref: "dev" }
+          inputs: { repo: report.target_repository, ref: "main" }
         });
         dispatchedIssueLanePlans.add(dispatchKey);
         receipts.push({ action: "issue-lane", target: report.target_repository, status: "applied", detail: "Dispatched trusted PRD reconciliation; workflow-run chaining will re-evaluate readiness." });
@@ -649,48 +640,8 @@ async function executeSetupPlan(
       }
     }
 
-    if (operations.has("converge-submodules")) {
-      const dispatchKey = `${plan.planId}:${report.target_repository}:submodules`;
-      if (!dispatchedSubmodulePlans.has(dispatchKey)) {
-        const control = await getScopedInstallationOctokit(app, CONTROL_OWNER, { actions: "write", contents: "read" }, [CONTROL_REPO]);
-        await control.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
-          owner: CONTROL_OWNER,
-          repo: CONTROL_REPO,
-          workflow_id: "df-submodule-autoupdate.yml",
-          ref: "main",
-          inputs: { repo: "" }
-        });
-        dispatchedSubmodulePlans.add(dispatchKey);
-        receipts.push({ action: "submodule-convergence", target: report.target_repository, status: "applied", detail: "Dispatched the trusted released-child scan; only an exact policy-owned gitlink may enter a reviewed pointer PR." });
-      } else {
-        receipts.push({ action: "submodule-convergence", target: report.target_repository, status: "current", detail: "This exact evidence plan already dispatched released pointer convergence; waiting for its trusted run." });
-      }
-    }
-
-    for (const [operation, mode] of [["reconcile-branches", "reconcile"], ["converge-release", "run"]] as const) {
-      if (!operations.has(operation)) continue;
-      // Reconciliation changes the release predicate. Never enqueue a release
-      // from the same stale observation; the next doctor pass may request it.
-      if (operation === "converge-release" && operations.has("reconcile-branches")) continue;
-      const dispatchKey = `${plan.planId}:${report.target_repository}:${mode}`;
-      if (!dispatchedReleasePlans.has(dispatchKey)) {
-        const control = await getScopedInstallationOctokit(app, CONTROL_OWNER, { actions: "write", contents: "read" }, [CONTROL_REPO]);
-        await control.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
-          owner: CONTROL_OWNER,
-          repo: CONTROL_REPO,
-          workflow_id: "df-release.yml",
-          ref: "main",
-          inputs: { repo: report.target_repository, mode }
-        });
-        dispatchedReleasePlans.add(dispatchKey);
-        receipts.push({ action: "release-convergence", target: report.target_repository, status: "applied", detail: `Dispatched trusted release ${mode}; no direct main/dev write or bypass was used.` });
-      } else {
-        receipts.push({ action: "release-convergence", target: report.target_repository, status: "current", detail: `This exact evidence plan already dispatched trusted release ${mode}; waiting for protected convergence.` });
-      }
-    }
-
     for (const operation of operations) {
-      if (["converge-machine-runtime", "converge-registration", "initialize-repository", "open-managed-setup-pr", "converge-settings", "reconcile-issue-lane", "evaluate-readiness", "reconcile-branches", "converge-release", "converge-clean", "converge-submodules"].includes(operation)) continue;
+      if (["converge-machine-runtime", "converge-registration", "initialize-repository", "open-managed-setup-pr", "converge-settings", "reconcile-issue-lane", "evaluate-readiness", "converge-clean"].includes(operation)) continue;
       receipts.push({ action: operation, target: report.target_repository, status: "owner-required", detail: "The owning prerequisite has not yet exposed a trusted setup executor; setup refused to improvise." });
     }
   }
@@ -707,217 +658,6 @@ export type CleanCliOptions = {
   json: boolean;
   watch: boolean;
 };
-
-export type ReleaseCliOptions = {
-  mode: "status" | "plan" | "reconcile" | "run" | "verify";
-  target: string;
-  watch: boolean;
-  json: boolean;
-};
-
-export function parseReleaseCliArgs(args: string[]): ReleaseCliOptions {
-  const options: ReleaseCliOptions = {
-    mode: "status",
-    target: `${CONTROL_OWNER}/${CONTROL_REPO}`,
-    watch: false,
-    json: false
-  };
-  let index = 0;
-  if (["status", "plan", "reconcile", "run", "verify"].includes(args[0])) {
-    options.mode = args[0] as ReleaseCliOptions["mode"];
-    index += 1;
-  }
-  let targetSeen = false;
-  for (; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--watch") { options.watch = true; continue; }
-    if (argument === "--json") { options.json = true; continue; }
-    if (["--force", "--bypass", "--admin", "--delete-dev"].includes(argument)) {
-      throw new Error(`${argument} is intentionally unavailable for release`);
-    }
-    if (argument.startsWith("-")) throw new Error(`unknown release option: ${argument}`);
-    if (targetSeen || !/^[^/\s]+\/[^/\s]+$/.test(argument)) throw new Error("release accepts at most one owner/repo target");
-    options.target = argument;
-    targetSeen = true;
-  }
-  if (options.watch && options.mode !== "run") throw new Error("release --watch is available only with release run");
-  return options;
-}
-
-async function runRelease(args: string[], commandId?: string): Promise<void> {
-  const options = parseReleaseCliArgs(args);
-  const credentials = loadAppCredentials();
-  const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
-  const [owner] = splitRepository(options.target);
-  const mutating = ["reconcile", "run", "verify"].includes(options.mode);
-  const targetGithub = createDoctorRequester(await getScopedInstallationOctokit(app, owner, {
-    administration: "read",
-    actions: "read",
-    checks: "read",
-    contents: mutating ? "write" : "read",
-    issues: mutating ? "write" : "read",
-    pull_requests: mutating ? "write" : "read",
-    statuses: "read"
-  }));
-  const dataGithub = mutating
-    ? createDoctorRequester(await getScopedInstallationOctokit(app, CONTROL_OWNER, { contents: "write" }, ["darkfactory-data"]))
-    : targetGithub;
-  const release = await import(new URL("../../scripts/df-release.mjs", import.meta.url).href) as {
-    configureReleaseRuntime(options: Record<string, unknown>): void;
-    runReleaseCommand(options: Record<string, unknown>): Promise<Record<string, unknown>>;
-  };
-  release.configureReleaseRuntime({
-    gh: targetGithub,
-    ledgerGh: dataGithub,
-    controlRepo: { owner: CONTROL_OWNER, repo: CONTROL_REPO }
-  });
-  const repository = { owner, repo: options.target.split("/")[1] };
-  const maxPasses = options.watch ? boundedInteger(process.env.DF_RELEASE_WATCH_PASSES, 40, 1, 240) : 1;
-  let result: Record<string, unknown> = {};
-  let completedPasses = 0;
-  for (let pass = 1; pass <= maxPasses; pass += 1) {
-    completedPasses = pass;
-    result = await release.runReleaseCommand({ mode: options.mode, repository });
-    const status = typeof result.status === "string" ? result.status : "unknown";
-    if (!options.watch || releaseResultIsTerminal({ status })) break;
-    if (pass < maxPasses) await delay(15_000);
-  }
-  const watchTimedOut = options.watch && !releaseResultIsTerminal(result);
-  if (watchTimedOut) {
-    result = {
-      ...result,
-      status: "blocked",
-      watch: { timedOut: true, passes: completedPasses, lastStatus: String(result.status || "unknown") }
-    };
-  }
-  const blocked = releaseResultIsBlocked(result);
-  if (options.json) console.log(JSON.stringify(humanJsonResult(
-    commandId ?? `release-${options.mode}`,
-    blocked ? "blocked" : "ok",
-    result,
-    blocked ? { code: "release_convergence_blocked", message: "Release convergence is blocked by current evidence" } : null
-  ), null, 2));
-  else printReleaseResult(result);
-  if (blocked) process.exitCode = 1;
-}
-
-export function releaseResultIsBlocked(result: Record<string, unknown>): boolean {
-  return ["blocked", "failed", "owner-required"].includes(String(result.status || ""));
-}
-
-export function releaseResultIsTerminal(result: Record<string, unknown>): boolean {
-  return ["verified", "blocked", "failed", "owner-required", "skipped"].includes(String(result.status || ""));
-}
-
-export type SubmoduleCliOptions = {
-  mode: "status" | "update" | "verify";
-  child: string;
-  watch: boolean;
-  json: boolean;
-};
-
-type SubmoduleEngine = {
-  run(options: { mode: SubmoduleCliOptions["mode"]; child: string }): Promise<Record<string, unknown>>;
-};
-
-export function parseSubmoduleCliArgs(args: string[]): SubmoduleCliOptions {
-  const options: SubmoduleCliOptions = { mode: "status", child: "", watch: false, json: false };
-  let index = 0;
-  if (["status", "update", "verify"].includes(args[0])) {
-    options.mode = args[0] as SubmoduleCliOptions["mode"];
-    index += 1;
-  }
-  let childSeen = false;
-  for (; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--watch") { options.watch = true; continue; }
-    if (argument === "--json") { options.json = true; continue; }
-    if (["--force", "--bypass", "--admin"].includes(argument)) throw new Error(`${argument} is intentionally unavailable for submodule convergence`);
-    if (argument.startsWith("-")) throw new Error(`unknown submodules option: ${argument}`);
-    if (childSeen) throw new Error("submodules accepts at most one released child owner/repo target");
-    options.child = validateRepository(argument);
-    childSeen = true;
-  }
-  return options;
-}
-
-export function submoduleGithubPermissions(mode: SubmoduleCliOptions["mode"]): Record<string, "read" | "write"> {
-  const mutating = mode === "update";
-  return {
-    administration: "read",
-    actions: mutating ? "write" : "read",
-    checks: "read",
-    contents: mutating ? "write" : "read",
-    issues: mutating ? "write" : "read",
-    pull_requests: mutating ? "write" : "read",
-    statuses: "read"
-  };
-}
-
-function submoduleWatchSettled(result: Record<string, unknown>): boolean {
-  const status = typeof result.status === "string" ? result.status : "";
-  if (["blocked", "current", "released", "verified", "automerge-armed", "failed", "skipped"].includes(status)) return true;
-  const plan = isRecord(result.plan) ? result.plan : null;
-  return result.mode === "status" && plan !== null && ["block", "current", "released"].includes(String(plan.action || ""));
-}
-
-export async function executeSubmoduleEngine(
-  options: SubmoduleCliOptions,
-  engine: SubmoduleEngine,
-  runtime: { maxPasses?: number; wait?: (milliseconds: number) => Promise<void> } = {}
-): Promise<Record<string, unknown>> {
-  const maxPasses = options.watch ? (runtime.maxPasses ?? boundedInteger(process.env.DF_SUBMODULE_WATCH_PASSES, 40, 1, 240)) : 1;
-  const wait = runtime.wait ?? (async (milliseconds: number) => { await delay(milliseconds); });
-  let result: Record<string, unknown> = {};
-  for (let pass = 1; pass <= maxPasses; pass += 1) {
-    result = await engine.run({ mode: options.mode, child: options.child });
-    if (!options.watch || submoduleWatchSettled(result)) return result;
-    if (pass < maxPasses) await wait(15_000);
-  }
-  throw new Error(`Timed out waiting for submodule ${options.mode} convergence`);
-}
-
-export function submoduleJsonResult(options: SubmoduleCliOptions, result: Record<string, unknown>): ReturnType<typeof humanJsonResult> {
-  const blocked = result.status === "blocked";
-  return humanJsonResult(
-    `submodules-${options.mode}`,
-    blocked ? "blocked" : "ok",
-    result,
-    blocked ? { code: "submodule_convergence_blocked", message: "Submodule convergence is blocked by current evidence" } : null
-  );
-}
-
-async function runSubmodules(args: string[]): Promise<void> {
-  const options = parseSubmoduleCliArgs(args);
-  const credentials = loadAppCredentials();
-  const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
-  const mutating = options.mode === "update";
-  const github = createDoctorRequester(await getScopedInstallationOctokit(app, CONTROL_OWNER, submoduleGithubPermissions(options.mode)));
-  const ledgerGithub = mutating
-    ? createDoctorRequester(await getScopedInstallationOctokit(app, CONTROL_OWNER, { contents: "write" }, ["darkfactory-data"]))
-    : github;
-  const module = await import(new URL("../../scripts/df-submodule-autoupdate.mjs", import.meta.url).href) as unknown as {
-    configureSubmoduleRuntime(options: Record<string, unknown>): void;
-    runSubmoduleCommand(options: { mode: SubmoduleCliOptions["mode"]; child: string }): Promise<Record<string, unknown>>;
-  };
-  module.configureSubmoduleRuntime({
-    gh: github,
-    ledgerGh: ledgerGithub,
-    controlRepo: { owner: CONTROL_OWNER, repo: CONTROL_REPO },
-    root: fileURLToPath(new URL("..", import.meta.url))
-  });
-  const result = await executeSubmoduleEngine(options, { run: module.runSubmoduleCommand });
-  const blocked = result.status === "blocked";
-  if (options.json) {
-    console.log(JSON.stringify(submoduleJsonResult(options, result), null, 2));
-  } else {
-    const plan = isRecord(result.plan) ? result.plan : {};
-    console.log(`Submodule ${options.mode}: ${String(result.status || "observed")}.`);
-    console.log(`- Plan: ${String(plan.planId || "read-only")} (${String(plan.action || "observe")})`);
-    console.log("Rerun with --watch to observe the same evidence-bound lane; no force or bypass mode exists.");
-  }
-  if (blocked) process.exitCode = 1;
-}
 
 export function parseCleanCliArgs(args: string[]): CleanCliOptions {
   const options: CleanCliOptions = {
@@ -981,7 +721,7 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
 
   if (options.mode === "plan") {
     const path = await persistCleanPlan(options.agentsHome, plan);
-    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-plan", target, {
+    await ledger.writeRunLedger(dataGithub, "clean-plan", target, {
       control_revision: controlRevision,
       plan_id: plan.planId,
       evidence_hash: plan.evidenceHash,
@@ -998,7 +738,7 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
     const actionable = plan.entries.filter((entry) => entry.action !== "preserve");
     const reviewResidue = plan.entries.filter((entry) => entry.kind === "lane-finding");
     const result = { schemaVersion: 1, mode: "verify", repository: target, controlRevision, clean: actionable.length === 0 && reviewResidue.length === 0, actionable, reviewResidue };
-    await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-verify", target, result);
+    await ledger.writeRunLedger(dataGithub, "clean-verify", target, result);
     if (options.json) console.log(JSON.stringify(humanJsonResult(
       commandId ?? "clean-verify",
       result.clean ? "ok" : "blocked",
@@ -1018,7 +758,7 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
   const remoteDeletionToken = remoteDeletion
     ? await getScopedInstallationToken(app, owner, { contents: "write" }, [repo])
     : "";
-  await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-apply-admission", target, {
+  await ledger.writeRunLedger(dataGithub, "clean-apply-admission", target, {
     control_revision: controlRevision,
     plan_id: saved.planId,
     evidence_hash: saved.evidenceHash,
@@ -1039,7 +779,7 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
       }
     } : {}),
     onAdmission: async (action) => {
-      await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-action-admission", target, {
+      await ledger.writeRunLedger(dataGithub, "clean-action-admission", target, {
         control_revision: controlRevision,
         plan_id: saved!.planId,
         evidence_hash: saved!.evidenceHash,
@@ -1047,7 +787,7 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
       });
     },
     onCompletion: async (action) => {
-      await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-action-receipt", target, {
+      await ledger.writeRunLedger(dataGithub, "clean-action-receipt", target, {
         control_revision: controlRevision,
         plan_id: saved!.planId,
         evidence_hash: saved!.evidenceHash,
@@ -1055,7 +795,7 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
       });
     }
   });
-  await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-apply-completion", target, {
+  await ledger.writeRunLedger(dataGithub, "clean-apply-completion", target, {
     control_revision: controlRevision,
     plan_id: saved.planId,
     evidence_hash: saved.evidenceHash,
@@ -1074,7 +814,7 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
       const reviewResidue = freshPlan.entries.filter((entry) => entry.kind === "lane-finding");
       const stalled: boolean = previousEvidenceHash.length > 0 && previousEvidenceHash === freshPlan.evidenceHash;
       watchVerification = { clean: actionable.length === 0 && reviewResidue.length === 0, actionable: actionable.length, reviewResidue: reviewResidue.length, passes: pass, stalled };
-      await ledger.writeRunLedger(dataGithub, "marius-patrik/darkfactory-data", "clean-watch-verify", target, {
+      await ledger.writeRunLedger(dataGithub, "clean-watch-verify", target, {
         control_revision: controlRevision,
         plan_id: saved.planId,
         evidence_hash: freshPlan.evidenceHash,
@@ -1103,13 +843,14 @@ async function runClean(args: string[], commandId?: string): Promise<void> {
 
 const CLEAN_REVIEW_CATEGORIES = new Set([
   "branch hygiene",
+  "branch policy",
   "pull request health",
-  "release lane",
   "issue lane",
   "PRD drift",
   "repository hygiene",
   "state boundary",
   "nested repository state",
+  "monorepo topology",
   "local checkout"
 ]);
 
@@ -1153,16 +894,16 @@ function parseLabelDefinitions(source: string): LabelDefinition[] {
 }
 
 async function operatorLedgerModule(): Promise<{
-  writeRunLedger: (github: unknown, dataRepo: string, kind: string, target: string, ledger: Record<string, unknown>) => Promise<unknown>;
+  writeRunLedger: (github: unknown, kind: string, target: string, ledger: Record<string, unknown>) => Promise<unknown>;
 }> {
   const moduleUrl = new URL("../../scripts/df-lib.mjs", import.meta.url);
   return await import(moduleUrl.href) as {
-    writeRunLedger: (github: unknown, dataRepo: string, kind: string, target: string, ledger: Record<string, unknown>) => Promise<unknown>;
+    writeRunLedger: (github: unknown, kind: string, target: string, ledger: Record<string, unknown>) => Promise<unknown>;
   };
 }
 
 async function operatorLedgerGithub(app: App): Promise<ReturnType<typeof createDoctorRequester>> {
-  return createDoctorRequester(await getScopedInstallationOctokit(app, CONTROL_OWNER, { contents: "write" }, ["darkfactory-data"]));
+  return createDoctorRequester(await getScopedInstallationOctokit(app, DATA_REPO_OWNER, { contents: "write" }, [DATA_REPO_NAME]));
 }
 
 function createOperatorRequester(octokit: Octokit): OperatorGitHubRequester {
@@ -1201,15 +942,6 @@ function printSetupResult(result: {
   for (const receipt of result.receipts) console.log(`- ${receipt.status}: ${receipt.action} ${receipt.target} — ${receipt.detail}`);
   console.log(`Observation stopped after ${result.passes} pass(es): ${result.stopReason}.`);
   console.log(result.converged ? "Setup is a proven no-op." : "Setup is resumable; rerun after reviewed PRs and owner residue resolve.");
-}
-
-function printReleaseResult(result: Record<string, unknown>): void {
-  const plan = isRecord(result.plan) ? result.plan : {};
-  const action = isRecord(result.action) ? result.action : {};
-  console.log(`Release ${String(result.mode || "status")} for ${String(result.repository || (isRecord(result.observation) ? result.observation.repository : "unknown"))}.`);
-  console.log(`- Plan: ${String(plan.planId || "read-only")} (${String(plan.action || "observe")}: ${String(plan.reason || "current")})`);
-  if (Object.keys(action).length) console.log(`- Result: ${String(action.status || result.status || "complete")} (${String(action.action || "release")})`);
-  console.log("Rerun the same command to resume marker-owned work; no force or bypass mode exists.");
 }
 
 function printCleanPlan(plan: ReturnType<typeof buildCleanPlan>): void {
@@ -1310,31 +1042,6 @@ async function runHumanCommand(command: ParsedHumanCommand): Promise<boolean> {
         ...(command.options["--watch"] === true ? ["--watch"] : []),
         ...(command.options["--json"] === true ? ["--json"] : [])
       ], command.spec.id);
-      return true;
-    }
-    case "release-status":
-    case "release-plan":
-    case "release-reconcile":
-    case "release-run":
-    case "release-verify": {
-      const mode = command.spec.id.slice("release-".length);
-      await runRelease([
-        mode,
-        ...command.arguments,
-        ...(command.options["--watch"] === true ? ["--watch"] : []),
-        ...(command.options["--json"] === true ? ["--json"] : [])
-      ], command.spec.id);
-      return true;
-    }
-    case "submodules-status":
-    case "submodules-update":
-    case "submodules-verify": {
-      await runSubmodules([
-        command.spec.id.slice("submodules-".length),
-        ...command.arguments,
-        ...(command.options["--watch"] === true ? ["--watch"] : []),
-        ...(command.options["--json"] === true ? ["--json"] : [])
-      ]);
       return true;
     }
     default:
@@ -1444,14 +1151,14 @@ async function createIssueDevelopmentRuntime(repository: string, writeIssues: bo
     issues: writeIssues ? "write" : "read",
     pull_requests: "read"
   }, [repo]);
-  const data = await getScopedInstallationOctokit(app, owner, { contents: "write" }, ["darkfactory-data"]);
+  const data = await getScopedInstallationOctokit(app, DATA_REPO_OWNER, { contents: "write" }, [DATA_REPO_NAME]);
   const ledgerModule = await import(new URL("../../scripts/df-lib.mjs", import.meta.url).href) as unknown as {
-    writeRunLedger(github: unknown, dataRepo: string, kind: string, target: string, payload: unknown): Promise<unknown>;
+    writeRunLedger(github: unknown, kind: string, target: string, payload: unknown): Promise<unknown>;
   };
   return {
     github: createDoctorRequester(target),
     ledger: async (kind, targetRepository, payload) => {
-      await ledgerModule.writeRunLedger(createDoctorRequester(data), "marius-patrik/darkfactory-data", kind, targetRepository, payload);
+      await ledgerModule.writeRunLedger(createDoctorRequester(data), kind, targetRepository, payload);
     },
     agentsHome: process.env.ANDROMEDA_HOME?.trim() || "",
     controlRevision: exactControlRevision(),
@@ -1546,7 +1253,7 @@ async function scopedAutoreviewToken(repository: string): Promise<string> {
     contents: "write",
     issues: "write",
     pull_requests: "write"
-  }, [...new Set([repo, CONTROL_REPO, "darkfactory-data"])]);
+  }, [...new Set([repo, CONTROL_REPO, DATA_REPO_NAME])]);
 }
 
 async function runIssueAutoreviewCommand(command: ParsedHumanCommand): Promise<void> {
@@ -1710,13 +1417,13 @@ async function createRepositoryOctokit(
 async function createLedgerWriter(): Promise<(kind: string, repository: string, payload: unknown) => Promise<void>> {
   const credentials = loadAppCredentials();
   const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
-  const data = await getScopedInstallationOctokit(app, CONTROL_OWNER, { contents: "write" }, ["darkfactory-data"]);
+  const data = await getScopedInstallationOctokit(app, DATA_REPO_OWNER, { contents: "write" }, [DATA_REPO_NAME]);
   const github = createDoctorRequester(data);
   const ledgerModule = await import(new URL("../../scripts/df-lib.mjs", import.meta.url).href) as unknown as {
-    writeRunLedger(github: unknown, dataRepo: string, kind: string, target: string, payload: unknown): Promise<unknown>;
+    writeRunLedger(github: unknown, kind: string, target: string, payload: unknown): Promise<unknown>;
   };
   return async (kind, repository, payload) => {
-    await ledgerModule.writeRunLedger(github, "marius-patrik/darkfactory-data", kind, repository, payload);
+    await ledgerModule.writeRunLedger(github, kind, repository, payload);
   };
 }
 
@@ -2010,7 +1717,7 @@ function assertPullMergeAdmission(
   if (snapshot.version.toLowerCase() !== expectedVersion.toLowerCase()) throw new Error(`stale pull-request version: expected ${expectedVersion}, observed ${snapshot.version}`);
   const pull = snapshot.pull;
   if (pull.state !== "open" || pull.draft === true || !isRecord(pull.base) || !isRecord(pull.head)) throw new Error("Pull request must be open and ready for review");
-  if (!new Set(["main", "dev"]).has(String(pull.base.ref || ""))) throw new Error("Pull request base must be protected main or dev");
+  if (pull.base.ref !== "main") throw new Error("Pull request base must be canonical main");
   if (!isRecord(pull.head.repo) || String(pull.head.repo.full_name || "").toLowerCase() !== repository.toLowerCase()) throw new Error("Pull request auto-merge requires a same-repository head");
   const required = requiredProtectionChecks(snapshot.protection);
   for (const name of ["Validate", "DarkFactory Autoreview"]) {
@@ -2117,7 +1824,7 @@ async function runExplainCommand(command: ParsedHumanCommand): Promise<void> {
     const parsed = parseIssueTarget(target);
     result = pullResult(await pullSnapshot(parsed.repository, parsed.number));
   } else if (kind === "run") result = await observedRun(target);
-  else if (kind === "repo" || kind === "release") {
+  else if (kind === "repo") {
     const repository = validateRepository(target);
     const credentials = loadAppCredentials();
     const app = new App({ appId: credentials.appId, privateKey: credentials.privateKey });
@@ -2267,26 +1974,6 @@ function receiptSchemaVersion(receipt: Record<string, unknown>, required: boolea
   }
 }
 
-function greenReceiptChecks(value: unknown, requiredNames: readonly string[], field: string): Record<string, unknown>[] {
-  const summary = receiptRecord(value, field);
-  if (summary.green !== true || !Array.isArray(summary.checks) || summary.checks.length === 0) {
-    throw new Error(`Receipt ${field} must contain a green, non-empty check set`);
-  }
-  const checks = summary.checks.map((entry, index) => {
-    const check = receiptRecord(entry, `${field}.checks[${index}]`);
-    const name = receiptString(check.name, `${field}.checks[${index}].name`);
-    if (check.state !== "green" || check.actualAppId !== TRUSTED_ACTIONS_APP_ID) {
-      throw new Error(`Receipt ${field} check ${name} is not green and App-bound to ${TRUSTED_ACTIONS_APP_ID}`);
-    }
-    return check;
-  });
-  const names = new Set(checks.map((check) => check.name));
-  for (const required of requiredNames) {
-    if (!names.has(required)) throw new Error(`Receipt ${field} is missing required gate ${required}`);
-  }
-  return checks;
-}
-
 function validateWorkVerificationReceipt(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
   receiptSchemaVersion(receipt, true);
   const target = receiptString(receipt.target, "target");
@@ -2317,70 +2004,6 @@ function validateWorkVerificationReceipt(receipt: Record<string, unknown>, targe
     gates: predicates,
     outcome: "verified",
     handoff: { pullRequest: pull.number, url: pull.url, mergedAt }
-  };
-}
-
-function validateReleaseReceipt(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
-  receiptSchemaVersion(receipt, false);
-  if (receipt.status !== "verified" || receipt.repository !== targetRepository) throw new Error("Receipt release outcome or repository is invalid");
-  const planId = receiptString(receipt.plan_id, "plan_id");
-  if (!/^release-[0-9a-f]{20}$/.test(planId)) throw new Error("Receipt release authorizing plan ID is invalid");
-  const mainSha = receiptSha(receipt.main_sha, "main_sha");
-  const devSha = receiptSha(receipt.dev_sha, "dev_sha");
-  const mainTreeSha = receipt.main_tree_sha === null ? null : receiptSha(receipt.main_tree_sha, "main_tree_sha");
-  const devTreeSha = receipt.dev_tree_sha === null ? null : receiptSha(receipt.dev_tree_sha, "dev_tree_sha");
-  if (mainSha !== devSha && (!mainTreeSha || mainTreeSha !== devTreeSha)) throw new Error("Receipt release immutable refs are not converged");
-  const policyMode = receiptString(receipt.policy_mode, "policy_mode");
-  if (!new Set(["branch-only", "tagged", "packaged", "artifact", "deployed"]).has(policyMode)) throw new Error("Receipt release policy mode is invalid");
-  const release = receiptRecord(receipt.release, "release");
-  if (release.green !== true || receiptSha(release.head_sha, "release.head_sha") !== mainSha || !/^https:\/\/github\.com\//.test(receiptString(release.pull_request, "release.pull_request"))) {
-    throw new Error("Receipt release pull identity or outcome is invalid");
-  }
-  if (mainTreeSha && receiptSha(release.tree_sha, "release.tree_sha") !== mainTreeSha) throw new Error("Receipt release pull tree does not match the released tree");
-  const gates = greenReceiptChecks(release.checks, ["Validate", "DarkFactory Autoreview"], "release.checks");
-  const publication = receiptRecord(receipt.publication, "publication");
-  if (publication.green !== true || publication.mode !== policyMode) throw new Error("Receipt release publication handoff is incomplete");
-  return {
-    immutableRefs: [mainSha, devSha, ...(mainTreeSha ? [mainTreeSha] : []), ...(devTreeSha ? [devTreeSha] : [])],
-    authorizingIntent: { planId, policyMode },
-    gates,
-    outcome: "verified",
-    handoff: publication
-  };
-}
-
-function validateSubmoduleReceipt(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
-  receiptSchemaVersion(receipt, true);
-  if (receipt.status !== "released") throw new Error("Receipt submodule outcome is not released");
-  const plan = receiptRecord(receipt.plan, "plan");
-  if (plan.schemaVersion !== 1 || !/^submodule-[0-9a-f]{20}$/.test(receiptString(plan.planId, "plan.planId")) || plan.action !== "released") {
-    throw new Error("Receipt submodule authorizing plan is invalid");
-  }
-  if (!Array.isArray(plan.blockers) || plan.blockers.length !== 0) throw new Error("Receipt submodule plan contains blockers");
-  const evidence = receiptRecord(plan.evidence, "plan.evidence");
-  if (evidence.parent !== targetRepository) throw new Error("Receipt submodule parent does not match the requested repository");
-  const childSha = receiptSha(evidence.child_sha, "plan.evidence.child_sha");
-  const parentMain = receiptSha(evidence.parent_main, "plan.evidence.parent_main");
-  const parentDev = receiptSha(evidence.parent_dev, "plan.evidence.parent_dev");
-  const mainPointer = receiptSha(evidence.main_pointer, "plan.evidence.main_pointer");
-  const devPointer = receiptSha(evidence.dev_pointer, "plan.evidence.dev_pointer");
-  if (childSha !== mainPointer || childSha !== devPointer) throw new Error("Receipt submodule pointers do not match the released child SHA");
-  const action = receiptRecord(receipt.action, "action");
-  if (action.status !== "released" || action.verified !== true || receiptSha(action.sha, "action.sha") !== childSha || action.downstream_handoff !== "darkfactory-release-verified") {
-    throw new Error("Receipt submodule outcome or downstream handoff is incomplete");
-  }
-  const observation = receiptRecord(receipt.observation, "observation");
-  const childRelease = receiptRecord(observation.child_release, "observation.child_release");
-  if (receiptSha(childRelease.sha, "observation.child_release.sha") !== childSha || !/^https:\/\/github\.com\//.test(receiptString(childRelease.receipt, "observation.child_release.receipt"))) {
-    throw new Error("Receipt submodule child release authority is invalid");
-  }
-  const gates = greenReceiptChecks(childRelease.main_checks, ["Validate"], "observation.child_release.main_checks");
-  return {
-    immutableRefs: [childSha, parentMain, parentDev, mainPointer, devPointer],
-    authorizingIntent: { planId: plan.planId, child: evidence.child, parent: evidence.parent, path: evidence.path },
-    gates,
-    outcome: "released",
-    handoff: action.downstream_handoff
   };
 }
 
@@ -2426,8 +2049,6 @@ function validateAutoreviewReceipt(receipt: Record<string, unknown>, targetRepos
 function validateReceiptKind(receipt: Record<string, unknown>, targetRepository: string): ReceiptKindVerification {
   switch (receipt.kind) {
     case "cli-work-verify": return validateWorkVerificationReceipt(receipt, targetRepository);
-    case "df-release": return validateReleaseReceipt(receipt, targetRepository);
-    case "df-submodule-update": return validateSubmoduleReceipt(receipt, targetRepository);
     case "autoreview-result": return validateAutoreviewReceipt(receipt, targetRepository);
     default: throw new Error(`Receipt kind ${String(receipt.kind || "missing")} has no explicit verifier`);
   }
@@ -2451,7 +2072,7 @@ export function validateReceiptDocument(value: unknown, targetRepository: string
   if (!RECEIPT_SHA.test(evidence.sha) || !RECEIPT_SHA.test(evidence.ledgerRevision) || !RECEIPT_SHA.test(evidence.commitSha)) {
     throw new Error("Receipt file, ledger revision, or commit identity is invalid");
   }
-  if (evidence.path !== `runs/${target}/${evidence.name}`) throw new Error("Receipt file path is outside the bounded target ledger");
+  if (evidence.path !== `${LEDGER_PATH}/${target}/${evidence.name}`) throw new Error("Receipt file path is outside the bounded target ledger");
   const fileTime = receiptFileTimestamp(evidence.name, kind);
   if (!Number.isFinite(fileTime) || Math.abs(fileTime - createdTime) > 5_000) throw new Error("Receipt filename timestamp does not match created_at; stale or replayed evidence refused");
   if (evidence.actor.type !== "Bot" || !TRUSTED_RECEIPT_ACTORS.has(evidence.actor.login)) throw new Error("Receipt ledger commit actor is not an exact trusted DarkFactory App identity");
@@ -2467,10 +2088,10 @@ export function validateReceiptDocument(value: unknown, targetRepository: string
 }
 
 async function readReceiptLedgerSnapshot(data: ReceiptRequester): Promise<ReceiptLedgerSnapshot> {
-  const ref = await data.request("GET", "/repos/marius-patrik/darkfactory-data/git/ref/heads/main");
+  const ref = await data.request("GET", `/repos/${DATA_REPOSITORY}/git/ref/heads/main`);
   if (!isRecord(ref) || !isRecord(ref.object)) throw new Error("DarkFactory receipt ledger main ref is malformed");
   const headSha = receiptSha(ref.object.sha, "ledger main ref");
-  const commit = await data.request("GET", `/repos/marius-patrik/darkfactory-data/git/commits/${headSha}`);
+  const commit = await data.request("GET", `/repos/${DATA_REPOSITORY}/git/commits/${headSha}`);
   if (!isRecord(commit) || !isRecord(commit.tree)) throw new Error("DarkFactory receipt ledger main commit is malformed");
   return Object.freeze({ headSha, rootTreeSha: receiptSha(commit.tree.sha, "ledger main tree") });
 }
@@ -2481,16 +2102,16 @@ export async function listReceiptFilesFromTree(
   snapshot: ReceiptLedgerSnapshot
 ): Promise<Array<{ name: string; path: string; sha: string; url: unknown }>> {
   const target = validateRepository(targetRepository);
-  const directory = `runs/${target}`;
+  const directory = `${LEDGER_PATH}/${target}`;
   let treeSha = snapshot.rootTreeSha;
   for (const segment of directory.split("/")) {
-    const tree = await data.request("GET", `/repos/marius-patrik/darkfactory-data/git/trees/${treeSha}`);
+    const tree = await data.request("GET", `/repos/${DATA_REPOSITORY}/git/trees/${treeSha}`);
     if (!isRecord(tree) || tree.truncated === true || !Array.isArray(tree.tree)) throw new Error(`DarkFactory receipt tree evidence is truncated or malformed at ${segment}`);
     const child = tree.tree.find((entry) => isRecord(entry) && entry.type === "tree" && entry.path === segment);
     if (!child || !isRecord(child)) return [];
     treeSha = receiptSha(child.sha, `ledger tree ${segment}`);
   }
-  const directoryTree = await data.request("GET", `/repos/marius-patrik/darkfactory-data/git/trees/${treeSha}`);
+  const directoryTree = await data.request("GET", `/repos/${DATA_REPOSITORY}/git/trees/${treeSha}`);
   if (!isRecord(directoryTree) || directoryTree.truncated === true || !Array.isArray(directoryTree.tree)) throw new Error("DarkFactory receipt directory tree evidence is truncated or malformed");
   return directoryTree.tree
     .filter((entry) => isRecord(entry) && entry.type === "blob" && typeof entry.path === "string" && entry.path.endsWith(".json"))
@@ -2523,9 +2144,9 @@ export async function readExactReceiptFile(
   const target = validateRepository(targetRepository);
   const candidates = receiptName.endsWith(".json") ? [receiptName] : [receiptName, `${receiptName}.json`];
   for (const name of candidates) {
-    const filePath = `runs/${target}/${name}`;
+    const filePath = `${LEDGER_PATH}/${target}/${name}`;
     try {
-      const value = await data.request("GET", `/repos/marius-patrik/darkfactory-data/contents/${encodeContentsPath(filePath)}?ref=${snapshot.headSha}`);
+      const value = await data.request("GET", `/repos/${DATA_REPOSITORY}/contents/${encodeContentsPath(filePath)}?ref=${snapshot.headSha}`);
       return decodeReceiptFile(value, filePath);
     } catch (error) {
       if (receiptHttpStatus(error) !== 404) throw error;
@@ -2534,23 +2155,82 @@ export async function readExactReceiptFile(
   throw new Error(`Receipt ${receiptName} was not found in the bounded target ledger`);
 }
 
-async function readReceiptCommitEvidence(
+export async function readReceiptCommitEvidence(
   data: ReceiptRequester,
   file: { name: string; path: string; sha: string },
   snapshot: ReceiptLedgerSnapshot
 ): Promise<ReceiptFileEvidence> {
-  const commits = await data.request("GET", `/repos/marius-patrik/darkfactory-data/commits?path=${encodeURIComponent(file.path)}&sha=${snapshot.headSha}&per_page=1`);
-  if (!Array.isArray(commits) || commits.length !== 1 || !isRecord(commits[0]) || !isRecord(commits[0].author)) {
+  const commits = await data.request("GET", `/repos/${DATA_REPOSITORY}/commits?path=${encodeURIComponent(file.path)}&sha=${snapshot.headSha}&per_page=1`);
+  const current = exactReceiptCommit(commits);
+  if (trustedReceiptActor(current.actor)) return receiptFileEvidence(file, snapshot, current);
+
+  const migrationPrefix = `${LEDGER_MIGRATION_PROOF.targetPath}/`;
+  if (!file.path.startsWith(migrationPrefix)) {
+    throw new Error("DarkFactory receipt commit actor is untrusted and the path is outside the migration proof");
+  }
+  const sourceSuffix = file.path.slice(migrationPrefix.length);
+  if (!sourceSuffix) throw new Error("DarkFactory receipt migration path is incomplete");
+  const fold = await data.request("GET", `/repos/${DATA_REPOSITORY}/git/commits/${LEDGER_MIGRATION_PROOF.foldCommit}`);
+  if (
+    !isRecord(fold) ||
+    !Array.isArray(fold.parents) ||
+    !fold.parents.some((parent) => isRecord(parent) && parent.sha === LEDGER_MIGRATION_PROOF.sourceParent)
+  ) {
+    throw new Error("DarkFactory receipt ledger fold does not bind the declared source parent");
+  }
+  const ancestry = await data.request("GET", `/repos/${DATA_REPOSITORY}/compare/${LEDGER_MIGRATION_PROOF.foldCommit}...${snapshot.headSha}`);
+  if (!isRecord(ancestry) || !["ahead", "identical"].includes(String(ancestry.status || ""))) {
+    throw new Error("DarkFactory receipt ledger head does not descend from the declared fold");
+  }
+  const sourcePath = `${LEDGER_MIGRATION_PROOF.sourcePath}/${sourceSuffix}`;
+  const sourceValue = await data.request(
+    "GET",
+    `/repos/${DATA_REPOSITORY}/contents/${encodeContentsPath(sourcePath)}?ref=${LEDGER_MIGRATION_PROOF.sourceParent}`
+  );
+  const sourceFile = decodeReceiptFile(sourceValue, sourcePath);
+  if (sourceFile.sha !== file.sha) {
+    throw new Error("Migrated receipt blob does not match its immutable source-parent blob");
+  }
+  const sourceCommits = await data.request(
+    "GET",
+    `/repos/${DATA_REPOSITORY}/commits?path=${encodeURIComponent(sourcePath)}&sha=${LEDGER_MIGRATION_PROOF.sourceParent}&per_page=1`
+  );
+  const source = exactReceiptCommit(sourceCommits);
+  if (!trustedReceiptActor(source.actor)) {
+    throw new Error("Migrated receipt source actor is not an exact trusted DarkFactory App identity");
+  }
+  return receiptFileEvidence(file, snapshot, source);
+}
+
+function exactReceiptCommit(value: unknown): { sha: string; actor: { login: string; type: string } } {
+  if (!Array.isArray(value) || value.length !== 1 || !isRecord(value[0]) || !isRecord(value[0].author)) {
     throw new Error("DarkFactory receipt commit provenance is missing or ambiguous");
   }
-  const actor = commits[0].author;
+  return {
+    sha: receiptSha(value[0].sha, "file commit"),
+    actor: {
+      login: receiptString(value[0].author.login, "commit actor login"),
+      type: receiptString(value[0].author.type, "commit actor type")
+    }
+  };
+}
+
+function trustedReceiptActor(actor: { login: string; type: string }): boolean {
+  return actor.type === "Bot" && TRUSTED_RECEIPT_ACTORS.has(actor.login);
+}
+
+function receiptFileEvidence(
+  file: { name: string; path: string; sha: string },
+  snapshot: ReceiptLedgerSnapshot,
+  commit: { sha: string; actor: { login: string; type: string } }
+): ReceiptFileEvidence {
   return Object.freeze({
     name: file.name,
     path: file.path,
     sha: file.sha,
     ledgerRevision: snapshot.headSha,
-    commitSha: receiptSha(commits[0].sha, "file commit"),
-    actor: Object.freeze({ login: receiptString(actor.login, "commit actor login"), type: receiptString(actor.type, "commit actor type") })
+    commitSha: commit.sha,
+    actor: Object.freeze({ login: commit.actor.login, type: commit.actor.type })
   });
 }
 
@@ -2580,7 +2260,7 @@ function assertNoReceiptSecrets(value: unknown, pathPrefix = "receipt"): void {
 
 async function runReceiptsCommand(command: ParsedHumanCommand): Promise<void> {
   const target = receiptTarget(command.arguments[0], command.spec.id !== "receipts-list");
-  const data = createDoctorRequester(await createRepositoryOctokit("marius-patrik/darkfactory-data", { contents: "read" }));
+  const data = createDoctorRequester(await createRepositoryOctokit(DATA_REPOSITORY, { contents: "read" }));
   const snapshot = await readReceiptLedgerSnapshot(data);
   if (command.spec.id === "receipts-list") {
     const files = await listReceiptFilesFromTree(data, target.repository, snapshot);
@@ -2595,7 +2275,7 @@ async function runReceiptsCommand(command: ParsedHumanCommand): Promise<void> {
     const matches = files.filter((entry) => entry.sha === target.receipt.toLowerCase());
     if (matches.length !== 1) throw new Error(`Receipt SHA ${target.receipt} was not found exactly once in the bounded target ledger`);
     const match = matches[0];
-    const content = await data.request("GET", `/repos/marius-patrik/darkfactory-data/contents/${encodeContentsPath(match.path)}?ref=${snapshot.headSha}`);
+    const content = await data.request("GET", `/repos/${DATA_REPOSITORY}/contents/${encodeContentsPath(match.path)}?ref=${snapshot.headSha}`);
     file = decodeReceiptFile(content, match.path);
   } else {
     file = await readExactReceiptFile(data, target.repository, target.receipt, snapshot);

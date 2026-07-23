@@ -14,7 +14,7 @@ import { commandInvocation } from "./process-command";
  * Agent OS-owned lifecycle for the trusted DarkFactory `df-local` GitHub Actions
  * runner (issue #245). The manager provisions and registers the runner, persists
  * it across reboot/logon with a least-privilege per-user scheduled task, binds
- * execution to the canonical `bin\agents.ps1` launcher, gates every start on a
+ * execution to the canonical `bin\andromeda.ps1` launcher, gates every start on a
  * healthy `andromeda state doctor`, never persists a registration token, reconciles
  * stale/duplicate registrations and processes, and reports redacted health for
  * DarkFactory doctor/dispatcher consumption.

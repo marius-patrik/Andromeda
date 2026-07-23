@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "managedBy": "darkfactory-agent",
+  "dataRepo": "marius-patrik/private-data",
+  "ledgerPath": "darkfactory-data/runs",
+  "workspacePackage": "darkfactory-workspace",
+  "requiredSecrets": ["CODEX_AUTH_JSON"],
+  "requiredFiles": [
+    "AGENTS.md",
+    ".agents/.global/VERSION",
+    ".agents/branching-policy.md",
+    ".agents/labels.json",
+    ".agents/managed-repository.json",
+    ".agents/installer-policy.json",
+    ".agents/release-conventions.md",
+    ".agents/release-policy.json",
+    ".github/workflows/ci.yml",
+    ".github/workflows/dark-factory-bootstrap.yml",
+    ".github/workflows/dark-factory-autoupdate.yml",
+    ".github/workflows/dark-factory-release.yml",
+    ".github/workflows/codex-review.yml",
+    ".github/codex-review.Dockerfile",
+    ".github/codex-review.schema.json",
+    ".github/scripts/run-codex-review.sh",
+    ".github/scripts/dark-factory-release-check.mjs"
+  ]
+}

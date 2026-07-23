@@ -15,7 +15,7 @@ function report(findings: DoctorReport["findings"], repository = "marius-patrik/
     schema_version: 2,
     target_repository: repository,
     lifecycle: "active",
-    source_refs: { main: "main-sha", dev: "dev-sha" },
+    source_refs: { main: "main-sha" },
     findings
   };
 }
@@ -98,28 +98,29 @@ test("setup initializes an empty repository before managed content and enforceme
   assert.deepEqual(plan.actions.map((action) => [action.stage, action.operation]), [["repository-bootstrap", "initialize-repository"]]);
 });
 
-test("setup delegates branch reconciliation and release residue to the trusted release engine", () => {
+test("setup denies retired integration and release-lane findings", () => {
   const plan = planSetupConvergence([report([
-    { id: "dev-behind-main", category: "branch convergence", message: "behind", severity: "error", repair_class: "pr" },
-    { id: "release-pr-missing", category: "release lane", message: "missing", severity: "error", repair_class: "pr" }
+    { id: "retired-dev-branch-present", category: "branch policy", message: "retired integration branch", severity: "critical", repair_class: "pr" },
+    { id: "retired-lane-branch-release-example", category: "branch policy", message: "retired release branch", severity: "critical", repair_class: "pr" }
   ])]);
-  assert.deepEqual(plan.actions.map((action) => [action.stage, action.operation]), [
-    ["verification", "reconcile-branches"],
-    ["verification", "converge-release"]
+  assert.deepEqual(plan.actions.map((action) => [action.stage, action.operation, action.supported]), [
+    ["verification", "retire-non-main-branch", false],
+    ["verification", "retire-non-main-branch", false]
   ]);
+  assert.equal(plan.residue.length, 2);
 });
 
-test("setup delegates only typed hygiene and released pointer repairs to their trusted engines", () => {
+test("setup delegates typed hygiene but denies forbidden gitlink repair", () => {
   const plan = planSetupConvergence([report([
     { id: "generated-artifact-debug-log", category: "repository hygiene", message: "generated", severity: "warning", repair_class: "pr" },
-    { id: "submodule-plugins-child-pointer-drift-dev", category: "submodule pointer", message: "released pointer drift", severity: "warning", repair_class: "pr" }
+    { id: "gitlink-plugins-child-main-forbidden", category: "monorepo topology", message: "forbidden gitlink", severity: "critical", repair_class: "pr" }
   ])]);
 
   assert.deepEqual(plan.actions.map((action) => [action.stage, action.operation, action.supported]), [
     ["verification", "converge-clean", true],
-    ["verification", "converge-submodules", true]
+    ["verification", "remove-forbidden-gitlink", false]
   ]);
-  assert.deepEqual(plan.residue, []);
+  assert.equal(plan.residue.length, 1);
 });
 
 test("setup preserves metadata and sensitive state as owner work instead of promising a generic PR", () => {
@@ -135,7 +136,7 @@ test("setup preserves metadata and sensitive state as owner work instead of prom
 });
 
 test("setup blocks code-repository convergence for the exact canonical main-only data repositories", () => {
-  for (const repository of ["marius-patrik/private-data", "MARIUS-PATRIK/DARKFACTORY-DATA"]) {
+  for (const repository of ["marius-patrik/private-data", "MARIUS-PATRIK/PRIVATE-DATA"]) {
     const plan = planSetupConvergence([report([{
       id: "protection-main-admin-bypass",
       category: "branch protection",
@@ -186,7 +187,7 @@ test("clean plan deletes only exact independently preserved branch heads", () =>
 test("clean plan removes a clean worktree only when its exact head is independently preserved", () => {
   const safe = branch({
     name: "merged-worktree",
-    containedBy: ["dev"],
+    containedBy: ["main"],
     worktrees: [{ pathId: "wt-safe", branch: "merged-worktree", head: "merged-worktree-sha", dirty: false, untracked: false, submoduleDirty: false }]
   });
   const plan = buildCleanPlan(evidence([safe]), new Date("2026-07-15T00:00:00Z"));
@@ -200,7 +201,7 @@ test("clean plan removes a clean worktree only when its exact head is independen
 test("clean plan never targets the explicitly supplied root checkout", () => {
   const safe = branch({
     name: "merged-root",
-    containedBy: ["dev"],
+    containedBy: ["main"],
     worktrees: [{ pathId: "wt-root", branch: "merged-root", head: "merged-root-sha", dirty: false, untracked: false, submoduleDirty: false, rootCheckout: true }]
   });
   const plan = buildCleanPlan(evidence([safe], {
@@ -208,7 +209,7 @@ test("clean plan never targets the explicitly supplied root checkout", () => {
       ref: "refs/df/root-evidence",
       head: "merged-root-sha",
       tree: "merged-root-tree",
-      independentlyPreservedBy: ["branch:dev"],
+      independentlyPreservedBy: ["branch:main"],
       worktree: safe.worktrees[0],
       cleanupCandidate: true
     }]
@@ -240,7 +241,7 @@ test("clean plan preserves dirty, unpublished, open-PR, and ambiguous human work
 test("clean plan enumerates and removes only independently preserved local branches", () => {
   const plan = buildCleanPlan(evidence([], {
     localBranches: [
-      branch({ name: "merged-local", containedBy: ["dev"] }),
+      branch({ name: "merged-local", containedBy: ["main"] }),
       branch({ name: "unpublished-local", localUnpublished: true }),
       branch({ name: "dirty-local", worktrees: [{ pathId: "wt-local", branch: "dirty-local", head: "dirty-local-sha", dirty: false, untracked: true, submoduleDirty: false }] })
     ]
@@ -260,8 +261,8 @@ test("clean plan classifies every open PR and issue while scheduling only eviden
   const head4 = "4".repeat(40);
   const plan = buildCleanPlan(evidence([], {
     pullRequests: [
-      { number: 3, version: `${baseSha}:${head3}`, base: "dev", baseSha, headRef: "feature/3", head: head3, classification: "active", findingIds: [], autoreview: "current", successor: null },
-      { number: 4, version: `${baseSha}:${head4}`, base: "dev", baseSha, headRef: "feature/4", head: head4, classification: "red", findingIds: ["pr-4-red"], autoreview: "failed", successor: null }
+      { number: 3, version: `${baseSha}:${head3}`, base: "main", baseSha, headRef: "feature/3", head: head3, classification: "active", findingIds: [], autoreview: "current", successor: null },
+      { number: 4, version: `${baseSha}:${head4}`, base: "main", baseSha, headRef: "feature/4", head: head4, classification: "red", findingIds: ["pr-4-red"], autoreview: "failed", successor: null }
     ],
     issues: [
       { number: 7, fingerprint: "7".repeat(64), classification: "current", findingIds: [], reviewable: false, autoreview: "missing" },
@@ -289,7 +290,7 @@ test("clean plan closes only superseded or abandoned PRs with an exact independe
   const successor = {
     number: 20,
     version: `${baseSha}:${successorHead}`,
-    base: "dev",
+    base: "main",
     baseSha,
     headRef: "feature/successor",
     head: successorHead,
@@ -298,7 +299,7 @@ test("clean plan closes only superseded or abandoned PRs with an exact independe
   const pull = (number: number, classification: "active" | "superseded" | "abandoned", withSuccessor: boolean) => ({
     number,
     version: `${baseSha}:${sourceHead}`,
-    base: "dev",
+    base: "main",
     baseSha,
     headRef: `feature/${number}`,
     head: sourceHead,
@@ -363,8 +364,8 @@ test("clean plan consumes artifact and label findings only through typed exact r
   const labelFinding = { id: "label-df-old-orphan", category: "repository hygiene", severity: "warning", repairClass: "pr" as const, message: "Managed label `df:old` is absent from the canonical taxonomy.", evidence: [], fingerprint: "b".repeat(64) };
   const plan = buildCleanPlan(evidence([], {
     reviewFindings: [artifactFinding, labelFinding],
-    artifactRepairs: [{ findingId: artifactFinding.id, findingFingerprint: artifactFinding.fingerprint, path: "debug.log", blobSha: "1".repeat(40), mode: "100644", base: "dev", baseSha: "2".repeat(40), branch: "darkfactory/clean-artifact-test", state: "needed" }],
-    managedLabels: [{ findingId: labelFinding.id, findingFingerprint: labelFinding.fingerprint, name: "df:old", color: "abcdef", description: "old", policyPath: ".agents/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: "2".repeat(40) }]
+    artifactRepairs: [{ findingId: artifactFinding.id, findingFingerprint: artifactFinding.fingerprint, path: "debug.log", blobSha: "1".repeat(40), mode: "100644", base: "main", baseSha: "2".repeat(40), branch: "darkfactory/clean-artifact-test", state: "needed" }],
+    managedLabels: [{ findingId: labelFinding.id, findingFingerprint: labelFinding.fingerprint, name: "df:old", color: "abcdef", description: "old", policyPath: ".agents/labels.json", policyBlob: "3".repeat(40), policyRef: "main", policyRevision: "2".repeat(40) }]
   }));
 
   assert.equal(plan.entries.find((entry) => entry.kind === "artifact")?.action, "repair-artifact");
@@ -402,7 +403,7 @@ function evidence(branches: CleanBranchEvidence[], overrides: Partial<CleanEvide
   return {
     repository: "marius-patrik/example",
     defaultBranch: "main",
-    observedRefs: { main: "main-sha", dev: "dev-sha" },
+    observedRefs: { main: "main-sha" },
     branches,
     localBranches: [],
     orphanRefs: [],

@@ -1,6 +1,5 @@
 import {
   AUTOREVIEW_REQUIRED_CONTEXT,
-  DARK_FACTORY_DATA_REPO,
   assertAllowedRepo,
   checksAreGreen,
   checksSummary,
@@ -35,7 +34,6 @@ const WORK_BRANCH = process.env.DF_WORK_BRANCH || "";
 const EMPTY_CHECK_SETTLE_MS = 10 * 60 * 1000;
 let gh;
 let CONTROL_REPO;
-const DATA_REPO = DARK_FACTORY_DATA_REPO;
 
 export function configureSweepRuntime(options) {
   gh = options.gh;
@@ -57,8 +55,8 @@ async function main() {
     controlRepo: parseRepo(requiredEnv("DF_CONTROL_REPO"))
   });
 
-  if (MODE === "dev-merge") {
-    await closeDevMergeIssuesFromEnv();
+  if (MODE === "worker-merge") {
+    await closeWorkerMergeIssuesFromEnv();
     return;
   }
 
@@ -110,7 +108,7 @@ async function main() {
           ledger.actions.push(result);
         }
       }
-      const closureResults = await closeRecentlyMergedDevIssues(repository);
+      const closureResults = await closeRecentlyMergedWorkerIssues(repository);
       ledger.actions.push(...closureResults);
     } catch (error) {
       if (warnReadOnlyRepository(repository, error, "follow-through")) {
@@ -334,14 +332,14 @@ function hasAutoreviewContext(statusCheckRollup) {
 }
 
 async function managedConfigDeclaresAutoreview(repository, ref) {
-  const content = await getOptionalFileContent(gh, repository, ".darkfactory/managed-repository.json", ref);
+  const content = await getOptionalFileContent(gh, repository, ".agents/managed-repository.json", ref);
   if (!content) return false;
 
   try {
     const config = JSON.parse(content);
     return managedConfigPaths(config).some((filePath) => filePath === ".github/workflows/darkfactory-autoreview.yml");
   } catch (error) {
-    console.warn(`DarkFactory sweep warning ${repoName(repository)}: invalid .darkfactory/managed-repository.json: ${error.message || String(error)}`);
+    console.warn(`DarkFactory sweep warning ${repoName(repository)}: invalid .agents/managed-repository.json: ${error.message || String(error)}`);
     return false;
   }
 }
@@ -399,9 +397,9 @@ async function mergePullRequest(repository, pull) {
   }
 
   try {
-    await closeIssuesIfDevMerge(repository, pull);
+    await closeIssuesIfWorkerMerge(repository, pull);
   } catch (error) {
-    console.warn(`DarkFactory sweep dev-closure warning ${ref}: ${error.message || String(error)}`);
+    console.warn(`DarkFactory sweep worker-closure warning ${ref}: ${error.message || String(error)}`);
   }
   return merged;
 }
@@ -447,19 +445,19 @@ async function replaceIssueLabels(repository, issueNumber, add, remove) {
   }
 }
 
-export async function closeDevMergeIssuesFromEnv() {
-  return await closeVerifiedDevMergeIssues({
-    repositoryName: process.env.DF_DEV_MERGE_REPO || "",
-    pullNumber: process.env.DF_DEV_MERGE_PR || "",
-    mergeSha: process.env.DF_DEV_MERGE_SHA || ""
+export async function closeWorkerMergeIssuesFromEnv() {
+  return await closeVerifiedWorkerMergeIssues({
+    repositoryName: process.env.DF_WORKER_MERGE_REPO || "",
+    pullNumber: process.env.DF_WORKER_MERGE_PR || "",
+    mergeSha: process.env.DF_WORKER_MERGE_SHA || ""
   });
 }
 
-export async function closeVerifiedDevMergeIssues(request) {
+export async function closeVerifiedWorkerMergeIssues(request) {
   let repository;
   const ledger = {
     trigger: TRIGGER,
-    mode: "dev-merge",
+    mode: "worker-merge",
     requested: {
       repository: String(request.repositoryName || ""),
       pull_number: String(request.pullNumber || ""),
@@ -470,11 +468,11 @@ export async function closeVerifiedDevMergeIssues(request) {
       model_calls: 0,
       input_tokens: 0,
       output_tokens: 0,
-      note: "Issue closure on dev merge is deterministic"
+      note: "Issue closure on a verified main merge is deterministic"
     }
   };
   try {
-    const verified = await verifyDevMergeRequest(request);
+    const verified = await verifyWorkerMergeRequest(request);
     repository = verified.repository;
     ledger.verified = {
       repository: repoName(repository),
@@ -485,17 +483,17 @@ export async function closeVerifiedDevMergeIssues(request) {
       head: verified.pull.headRefName,
       closing_issues: verified.closingIssues
     };
-    const action = await closeIssuesIfDevMerge(repository, verified.pull);
+    const action = await closeIssuesIfWorkerMerge(repository, verified.pull);
     ledger.actions.push(action);
   } catch (error) {
     ledger.actions.push({
       repo: repository ? repoName(repository) : String(request.repositoryName || "invalid"),
       pr: String(request.pullNumber || ""),
       action: "error",
-      reason: "dev-merge-verification-or-closure-failed",
+      reason: "worker-merge-verification-or-closure-failed",
       error: error.message || String(error)
     });
-    await writeLedger("df-sweep", repository ? repoName(repository) : "invalid-dev-merge-target", ledger);
+    await writeLedger("df-sweep", repository ? repoName(repository) : "invalid-worker-merge-target", ledger);
     throw error;
   }
 
@@ -505,29 +503,29 @@ export async function closeVerifiedDevMergeIssues(request) {
   return ledger.actions[0];
 }
 
-export async function verifyDevMergeRequest(request) {
+export async function verifyWorkerMergeRequest(request) {
   const repositoryName = String(request.repositoryName || "").trim();
   const pullNumberText = String(request.pullNumber || "").trim();
   const mergeSha = String(request.mergeSha || "").trim().toLowerCase();
-  if (!repositoryName) throw new Error("Missing exact dev-merge repository identifier.");
-  if (!/^[1-9][0-9]*$/.test(pullNumberText)) throw new Error("Invalid exact dev-merge pull request number.");
-  if (!/^[0-9a-f]{40}$/.test(mergeSha)) throw new Error("Invalid exact dev-merge commit SHA.");
+  if (!repositoryName) throw new Error("Missing exact worker-merge repository identifier.");
+  if (!/^[1-9][0-9]*$/.test(pullNumberText)) throw new Error("Invalid exact worker-merge pull request number.");
+  if (!/^[0-9a-f]{40}$/.test(mergeSha)) throw new Error("Invalid exact worker-merge commit SHA.");
 
   const repository = parseRepo(repositoryName);
   if (!CONTROL_REPO || repository.owner.toLowerCase() !== CONTROL_REPO.owner.toLowerCase()) {
-    throw new Error(`Dev-merge closure is restricted to the ${CONTROL_REPO?.owner || "control"} owner.`);
+    throw new Error(`Worker-merge closure is restricted to the ${CONTROL_REPO?.owner || "control"} owner.`);
   }
   assertAllowedRepo(repository);
 
   const registry = await readManagedRepoRegistry();
   const lifecycle = managedRepoLifecycleState(repository, registry);
   if (lifecycle !== "active") {
-    throw new Error(`Refusing dev-merge closure for managed lifecycle state '${lifecycle}'.`);
+    throw new Error(`Refusing worker-merge closure for managed lifecycle state '${lifecycle}'.`);
   }
 
   const liveRepository = await getRepository(gh, repository);
   if (liveRepository?.archived === true || liveRepository?.disabled === true) {
-    throw new Error(`Refusing dev-merge closure for archived=${liveRepository?.archived === true} disabled=${liveRepository?.disabled === true}.`);
+    throw new Error(`Refusing worker-merge closure for archived=${liveRepository?.archived === true} disabled=${liveRepository?.disabled === true}.`);
   }
   if (typeof liveRepository?.full_name !== "string"
       || liveRepository.full_name.toLowerCase() !== repoName(repository).toLowerCase()) {
@@ -540,7 +538,7 @@ export async function verifyDevMergeRequest(request) {
   if (rawPull?.state !== "closed" || rawPull?.merged !== true || !rawPull?.merged_at) {
     throw new Error("GitHub does not report the requested pull request as merged.");
   }
-  if (rawPull?.base?.ref !== "dev") throw new Error("Merged pull request base is not dev.");
+  if (rawPull?.base?.ref !== "main") throw new Error("Merged pull request base is not main.");
   if (String(rawPull?.base?.repo?.full_name || "").toLowerCase() !== repoName(repository).toLowerCase()) {
     throw new Error("Merged pull request base repository does not match the managed target.");
   }
@@ -565,12 +563,12 @@ export async function verifyDevMergeRequest(request) {
   return { repository, pull, closingIssues };
 }
 
-export async function closeIssuesIfDevMerge(repository, pull) {
-  if (pull.baseRefName !== "dev") {
-    return { repo: repoName(repository), pr: pull.url, action: "skip-dev-closure", reason: `base-${pull.baseRefName}` };
+export async function closeIssuesIfWorkerMerge(repository, pull) {
+  if (pull.baseRefName !== "main") {
+    return { repo: repoName(repository), pr: pull.url, action: "skip-worker-closure", reason: `base-${pull.baseRefName}` };
   }
   if (!isWorkerPullRequest(pull, repository)) {
-    return { repo: repoName(repository), pr: pull.url, action: "skip-dev-closure", reason: "not-worker-pr" };
+    return { repo: repoName(repository), pr: pull.url, action: "skip-worker-closure", reason: "not-worker-pr" };
   }
 
   const issueNumbers = extractClosingIssueNumbers(pull.body || "", repoName(repository));
@@ -581,9 +579,9 @@ export async function closeIssuesIfDevMerge(repository, pull) {
       throw new Error(`Closing reference #${issue_number} resolves to a pull request, not an issue.`);
     }
     let mutated = false;
-    if (!(await hasDevMergeComment(repository, issue_number, pull.url))) {
+    if (!(await hasWorkerMergeComment(repository, issue_number, pull.url))) {
       await gh.request("POST", `/repos/${repoName(repository)}/issues/${issue_number}/comments`, {
-        body: `merged to dev in ${pull.url}, enters canonical main through the next Agent OS integration PR`
+        body: `merged to main in ${pull.url}`
       });
       mutated = true;
     }
@@ -596,13 +594,13 @@ export async function closeIssuesIfDevMerge(repository, pull) {
   return {
     repo: repoName(repository),
     pr: pull.url,
-    action: "close-dev-merge-issues",
+    action: "close-worker-merge-issues",
     issues: changed,
     closing_refs: issueNumbers
   };
 }
 
-async function closeRecentlyMergedDevIssues(repository) {
+async function closeRecentlyMergedWorkerIssues(repository) {
   const pulls = await gh.request(
     "GET",
     `/repos/${repoName(repository)}/pulls?state=closed&sort=updated&direction=desc&per_page=50`
@@ -613,23 +611,23 @@ async function closeRecentlyMergedDevIssues(repository) {
   for (const pull of pulls) {
     // The list endpoint does not reliably expose merged status; fetch the
     // single PR to get the exact merge timestamp and full payload.
-    if (pull.base?.ref !== "dev") continue;
+    if (pull.base?.ref !== "main") continue;
     const full = await gh.request("GET", `/repos/${repoName(repository)}/pulls/${pull.number}`);
     const normalized = normalizeRestPullRequest(full);
-    if (!normalized.mergedAt || normalized.baseRefName !== "dev" || !isWorkerPullRequest(normalized, repository)) continue;
-    const action = await closeIssuesIfDevMerge(repository, normalized);
+    if (!normalized.mergedAt || normalized.baseRefName !== "main" || !isWorkerPullRequest(normalized, repository)) continue;
+    const action = await closeIssuesIfWorkerMerge(repository, normalized);
     if (action.issues?.length) results.push(action);
   }
   return results;
 }
 
-async function hasDevMergeComment(repository, issueNumber, pullUrl) {
+async function hasWorkerMergeComment(repository, issueNumber, pullUrl) {
   const comments = await gh.request(
     "GET",
     `/repos/${repoName(repository)}/issues/${issueNumber}/comments?per_page=100`
   );
   return Array.isArray(comments) && comments.some((comment) => {
-    return typeof comment.body === "string" && comment.body.includes(`merged to dev in ${pullUrl}`);
+    return typeof comment.body === "string" && comment.body.includes(`merged to main in ${pullUrl}`);
   });
 }
 
@@ -753,10 +751,14 @@ async function listOpenPullRequests(repository) {
 }
 
 async function sweepBaseBranches(repository) {
-  if (WORK_BRANCH) return new Set([WORK_BRANCH]);
-
   const repo = await getRepository(gh, repository);
-  return new Set(["dev", repo.default_branch].filter(Boolean));
+  if (repo.default_branch !== "main") {
+    throw new Error(`DarkFactory sweep requires main as the target repository default branch; received '${repo.default_branch || "missing"}'.`);
+  }
+  if (WORK_BRANCH && WORK_BRANCH !== "main") {
+    throw new Error(`DarkFactory sweep must target main; received '${WORK_BRANCH}'.`);
+  }
+  return new Set(["main"]);
 }
 
 async function getPullRequestMergeGate(repository, pullNumber) {
@@ -806,7 +808,7 @@ async function getPullRequestMergeGate(repository, pullNumber) {
 }
 
 function normalizeRestPullRequest(pull) {
-  // Preserve the REST merged_at field so the dev-merge closure backstop can
+  // Preserve the REST merged_at field so the worker-merge closure backstop can
   // distinguish merged PRs from merely closed ones.
   const mergedAt = pull.merged_at || null;
   return {
@@ -849,7 +851,7 @@ async function enableAutoMerge(pullRequestId) {
 
 async function writeLedger(kind, targetRepoName, ledger) {
   try {
-    const written = await writeRunLedger(gh, DATA_REPO, kind, targetRepoName, ledger);
+    const written = await writeRunLedger(gh, kind, targetRepoName, ledger);
     console.log(`DarkFactory ledger written to ${written.repository}/${written.path}`);
   } catch (error) {
     console.warn(`DarkFactory ledger warning: ${error.message || String(error)}`);

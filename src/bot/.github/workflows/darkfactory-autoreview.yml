@@ -75,7 +75,7 @@ jobs:
           repositories: |
             ${{ github.event.repository.name }}
             DarkFactory
-            darkfactory-data
+            private-data
           permission-contents: write
           permission-issues: write
           permission-pull-requests: write

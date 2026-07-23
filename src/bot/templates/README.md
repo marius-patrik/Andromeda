@@ -8,7 +8,7 @@ This is the one template workspace shipped with DarkFactory.
 - `packages/web` — Bun and TypeScript web starter
 
 Shared Agent OS identity, memory, roles, skills, providers, and sessions are
-installed under `$AGENTS_HOME`; templates never copy that state. Generated
+installed under `$ANDROMEDA_HOME`; templates never copy that state. Generated
 repositories carry only their own project guidance and DarkFactory policy.
 
 ## Validation

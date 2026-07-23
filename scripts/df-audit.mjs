@@ -1,6 +1,6 @@
 import {
-  AGENT_OS_DATA_REPO,
-  DARK_FACTORY_DATA_REPO,
+  ANDROMEDA_DATA_REPO,
+  DARK_FACTORY_LEDGER_PATH,
   createGithubClient,
   findAuditMarker,
   findPrdMarker,
@@ -44,24 +44,21 @@ const EXACT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
 export const TRUSTED_GATE_APP_ID = 15368;
 const TRUSTED_GATE_NAMES = new Set(["Validate", "Codex Review", "DarkFactory Autoreview"]);
 
-export const ANDROMEDA_LAYOUT = [
-  { name: "DarkFactory", path: "plugins/DarkFactory", repo: "marius-patrik/DarkFactory" },
-  { name: "LifeQuest", path: "plugins/LifeQuest", repo: "marius-patrik/LifeQuest" },
-  { name: "SkyAgent", path: "plugins/SkyAgent", repo: "marius-patrik/SkyAgent" },
-  { name: "Singularity", path: "apps/Singularity", repo: "marius-patrik/Singularity" },
-  { name: "Fabrica", path: "apps/Fabrica", repo: "marius-patrik/Fabrica" },
-  { name: "data", path: "data/andromeda", repo: "marius-patrik/private-data" },
-  { name: "darkfactory-data", path: "data/darkfactory", repo: "marius-patrik/darkfactory-data" }
+export const ANDROMEDA_COMPONENT_PATHS = [
+  "src/bot",
+  "src/cli",
+  "src/mcp",
+  "src/memory",
+  "src/sdk",
+  "src/server"
 ];
-
-const ANDROMEDA_ROOTS = ["apps", "commands", "data", "hooks", "src", "plugins", "roles", "skills"];
 const HEALTHY_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 const RED_CONCLUSIONS = new Set(["action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"]);
 const PULL_REQUEST_ONLY_GATE_CONTEXTS = new Set(["Codex Review", "DarkFactory Autoreview"]);
 const DOCTOR_MODES = new Set(["diagnose", "report"]);
 const CONTROL_REPO = { owner: "marius-patrik", repo: "Andromeda" };
 const DOCTOR_ISSUE_AUTHORS = new Set(["darkfactory-agent[bot]", "mp-agents[bot]"]);
-const MAIN_ONLY_DATA_REPOSITORIES = new Set([AGENT_OS_DATA_REPO, DARK_FACTORY_DATA_REPO].map((name) => name.toLowerCase()));
+const MAIN_ONLY_DATA_REPOSITORIES = new Set([ANDROMEDA_DATA_REPO.toLowerCase()]);
 const DATA_REPOSITORY_POLICY_FILE = fileURLToPath(new URL(`../${DATA_REPOSITORY_POLICY_PATH}`, import.meta.url));
 const PLAN_BRANCH_PROTECTION_MESSAGE_MARKERS = [
   "upgrade to github pro",
@@ -145,7 +142,7 @@ export function loadDataRepositoryPolicy(filePath = DATA_REPOSITORY_POLICY_FILE)
 }
 
 export function validateDataRepositoryPolicy(value) {
-  const expectedRepositories = [AGENT_OS_DATA_REPO, DARK_FACTORY_DATA_REPO];
+  const expectedRepositories = [ANDROMEDA_DATA_REPO];
   const expectedGuarantees = ["encrypted-bundle-admission", "plaintext-rejection"];
   const validEntry = (entry) => isObjectRecord(entry)
     && hasExactKeys(entry, ["repository", "visibility", "defaultBranch", "branches", "branchProtection"])
@@ -184,7 +181,7 @@ export function validateDataRepositoryPolicy(value) {
       || new Set(repositoryNames).size !== expectedRepositories.length
       || !expectedRepositories.every((repository) => repositoryNames.includes(repository))
       || !validControl) {
-    throw new Error("Trusted data repository policy must name exactly the two canonical private main-only data repositories, one HTTP 403 plan residue, and Andromeda PR #190 encrypted/plaintext admission evidence.");
+    throw new Error("Trusted data repository policy must name exactly the canonical private main-only data repository, one HTTP 403 plan residue, and Andromeda PR #190 encrypted/plaintext admission evidence.");
   }
   return value;
 }
@@ -252,7 +249,7 @@ export async function runRepositoryDoctor(github, options = {}) {
     if (!isMainOnlyDataRepository(repository) && !agentOsDataRevision) {
       agentOsDataRevision = await resolvePinnedRevision(
         github,
-        parseRepo(AGENT_OS_DATA_REPO),
+        parseRepo(ANDROMEDA_DATA_REPO),
         null,
         "main",
         "canonical private-data"
@@ -391,7 +388,6 @@ async function auditTargetRepository(github, repository, metadata, options) {
   const branchNames = new Set(branches.map((branch) => branch.name));
   const defaultRevision = defaultBranch ? immutableBranchRevision(branches, defaultBranch) : null;
   const mainRevision = branchNames.has("main") ? immutableBranchRevision(branches, "main") : null;
-  const devRevision = branchNames.has("dev") ? immutableBranchRevision(branches, "dev") : null;
   const pulls = await listOpenPullRequests(github, repository);
   const issues = isData ? [] : await listDoctorIssues(github, repository, "all");
   const openIssues = issues.filter((issue) => issue.state === "open");
@@ -422,7 +418,6 @@ async function auditTargetRepository(github, repository, metadata, options) {
     branches,
     branchNames,
     mainRevision,
-    devRevision,
     pulls,
     isData,
     dataRepositoryPolicy: options.dataRepositoryPolicy,
@@ -432,7 +427,7 @@ async function auditTargetRepository(github, repository, metadata, options) {
   observations.push(...branchAudit.observations);
 
   if (isData) {
-    observations.push("Canonical data repository was inspected only under the main-only protection, administration, force-push, deletion, and branch-hygiene policy; managed-code, workflow, PRD, and submodule requirements do not apply.");
+    observations.push("Canonical data repository was inspected only under the main-only protection, administration, force-push, deletion, and branch-hygiene policy; managed-code, workflow, and PRD requirements do not apply.");
   } else if (defaultRevision) {
     findings.push(...await auditManagedFileDrift(github, repository, defaultRevision, options.controlRepo, {
       controlRevision: options.controlRevision,
@@ -450,15 +445,12 @@ async function auditTargetRepository(github, repository, metadata, options) {
     findings.push(...await auditDocStaleness(repository, metadata, defaultRevision, github));
     findings.push(...await auditRetiredAuthorityNames(github, repository, defaultRevision));
   } else {
-    observations.push("Target content, tree, document, and submodule audits were skipped because no immutable default-branch revision was available.");
+    observations.push("Target content, tree, and document audits were skipped because no immutable default-branch revision was available.");
   }
 
-  if (!isData) {
-    for (const branch of ["main", "dev"].filter((name) => branchNames.has(name))) {
-      const revision = branch === "main" ? mainRevision : devRevision;
-      findings.push(...await auditHealth(repository, branch, revision, github, { now: options.now }));
-      if (defaultRevision) findings.push(...await auditSubmoduleState(github, repository, branch, revision));
-    }
+  if (!isData && branchNames.has("main")) {
+    findings.push(...await auditHealth(repository, "main", mainRevision, github, { now: options.now }));
+    if (defaultRevision) findings.push(...await auditSubmoduleState(github, repository, "main", mainRevision));
   }
 
   if (options.localPath) {
@@ -471,7 +463,7 @@ async function auditTargetRepository(github, repository, metadata, options) {
     findings.push(...local.findings);
     observations.push(...local.observations);
   } else {
-    observations.push("Local dirty and recursive submodule worktree state was not observable; only committed GitHub state was inspected.");
+    observations.push("Local dirty worktree state was not observable; only committed GitHub state was inspected.");
   }
 
   if (normalizedName(repository) === normalizedName(options.controlRepo) && options.agentsHome) {
@@ -500,10 +492,9 @@ async function auditTargetRepository(github, repository, metadata, options) {
       default_branch: defaultBranch,
       default_branch_revision: defaultRevision,
       main: mainRevision,
-      dev: devRevision,
       control: `${repoName(options.controlRepo)}@${options.controlRevision}`,
       agent_os_data: options.agentOsDataRevision
-        ? `${AGENT_OS_DATA_REPO}@${options.agentOsDataRevision}`
+        ? `${ANDROMEDA_DATA_REPO}@${options.agentOsDataRevision}`
         : null
     },
     machine_evidence_schema: normalizedName(repository) === normalizedName(options.controlRepo) && options.agentsHome ? 1 : 0,
@@ -526,8 +517,6 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
   const observations = [];
   const acceptedResidue = [];
   const { branches, branchNames, pulls, isData } = context;
-  const mainRevision = context.mainRevision ?? branchSha(branches, "main");
-  const devRevision = context.devRevision ?? branchSha(branches, "dev");
   const dataRepositoryPolicy = isData
     ? validateDataRepositoryPolicy(context.dataRepositoryPolicy || loadDataRepositoryPolicy())
     : null;
@@ -561,38 +550,11 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
       repair: ["Restore main only from a verified released commit through an owner-reviewed operation."]
     }));
   }
-  if (!isData && !branchNames.has("dev")) {
-    findings.push(doctorFinding("dev-branch-missing", "branch policy", "Required integration branch `dev` is missing.", {
+  if (branchNames.has("dev")) {
+    findings.push(doctorFinding("retired-dev-branch-present", "branch policy", "Retired integration branch `dev` is still present.", {
       severity: "critical",
-      repair: ["Restore dev from the verified convergence point without rewriting main."]
+      repair: ["Preserve any unmerged history, then delete the retired branch after re-fetching exact refs."]
     }));
-  }
-
-  let comparison = null;
-  if (!isData && branchNames.has("main") && branchNames.has("dev")) {
-    const observedComparison = await compareBranches(github, repository, mainRevision, devRevision);
-    if (!isValidBranchComparison(observedComparison)) {
-      findings.push(doctorFinding("main-dev-comparison-malformed", "branch convergence", "The main...dev comparison response is malformed or incomplete, so branch convergence is unobservable.", {
-        severity: "critical",
-        evidence: [compareEvidence(repository, "main", "dev")]
-      }));
-    } else {
-      comparison = observedComparison;
-      observations.push(`main...dev is ${comparison.status} (ahead=${comparison.ahead_by}, behind=${comparison.behind_by}).`);
-    }
-    if (comparison?.status === "behind") {
-      findings.push(doctorFinding("dev-behind-main", "branch convergence", "`dev` is behind `main` and must be synchronized before new work/release.", {
-        severity: "error",
-        evidence: [compareEvidence(repository, "main", "dev")],
-        repair: ["Open a reviewed main-to-dev reconciliation PR; do not force-update dev."]
-      }));
-    } else if (comparison?.status === "diverged") {
-      findings.push(doctorFinding("main-dev-diverged", "branch convergence", "`main` and `dev` have diverged.", {
-        severity: "critical",
-        evidence: [compareEvidence(repository, "main", "dev")],
-        repair: ["Create a reconciliation branch and escalate semantic conflicts; block release until green."]
-      }));
-    }
   }
 
   if (!isData) {
@@ -612,8 +574,8 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
     observations.push(`Repository auto-merge posture is ${autoMerge.enabled === null ? "unknown" : autoMerge.enabled ? "enabled" : "disabled"} (${autoMerge.source}).`);
   }
 
-  for (const branch of ["main", ...(!isData ? ["dev"] : [])].filter((name) => branchNames.has(name))) {
-    findings.push(...await auditBranchProtection(github, repository, branch, {
+  if (branchNames.has("main")) {
+    findings.push(...await auditBranchProtection(github, repository, "main", {
       protectionRequired: true,
       gatesRequired: !isData,
       observations,
@@ -632,7 +594,14 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
 
   for (const branch of branches) {
     const verifiedPullHead = activeHeads.has(`${branch.name}\0${branch.commit?.sha || ""}`);
-    if (branch.name === "main" || (!isData && branch.name === "dev") || verifiedPullHead) continue;
+    if (/^(?:release|reconcile)\//.test(branch.name)) {
+      findings.push(doctorFinding(`retired-lane-branch-${slug(branch.name)}`, "branch policy", `Retired release/reconciliation branch \`${branch.name}\` is present.`, {
+        severity: "critical",
+        evidence: [{ label: branch.name, url: `https://github.com/${repoName(repository)}/tree/${encodeURIComponent(branch.name)}` }],
+        repair: ["Preserve any unmerged history, then delete the retired lane branch after re-fetching exact refs."]
+      }));
+    }
+    if (branch.name === "main" || verifiedPullHead) continue;
     findings.push(doctorFinding(`extra-branch-${slug(branch.name)}`, "branch hygiene", `Extra branch \`${branch.name}\` is not the head of an open same-repository PR.`, {
       severity: "warning",
       evidence: [{ label: branch.name, url: `https://github.com/${repoName(repository)}/tree/${encodeURIComponent(branch.name)}` }],
@@ -642,9 +611,13 @@ export async function auditBranchAndReleaseState(github, repository, metadata, c
 
   const pullAudit = await auditPullRequests(github, repository, pulls, { now: context.now });
   findings.push(...pullAudit.findings);
-
-  if (!isData && comparison) {
-    findings.push(...await auditReleaseLane(github, repository, comparison, pullAudit.pulls, devRevision));
+  for (const pull of pullAudit.pulls) {
+    if (pull.base?.ref !== "main") {
+      findings.push(doctorFinding(`pr-${pull.number}-base-not-main`, "branch policy", `PR #${pull.number} targets \`${pull.base?.ref || "missing"}\`; all work must target \`main\`.`, {
+        severity: "critical",
+        evidence: pull.html_url ? [{ label: `PR #${pull.number}`, url: pull.html_url }] : []
+      }));
+    }
   }
   return { findings, observations, acceptedResidue };
 }
@@ -858,80 +831,6 @@ async function auditPullRequests(github, repository, pulls, options = {}) {
   return { findings, pulls: enriched };
 }
 
-async function auditReleaseLane(github, repository, comparison, pulls, devRevision) {
-  const findings = [];
-  const releaseCandidates = pulls.filter((pull) => pull.base?.ref === "main" && (pull.head?.ref === "dev" || pull.head?.ref?.startsWith("release/")));
-  const trustedCandidates = releaseCandidates.filter((pull) => sameRepositoryPullHead(pull, repository));
-  const eligible = [];
-
-  for (const pull of releaseCandidates.filter((item) => !sameRepositoryPullHead(item, repository))) {
-    findings.push(doctorFinding(`release-pr-${pull.number}-untrusted-head`, "release lane", `Release PR #${pull.number} does not use a same-repository head and cannot satisfy release policy.`, {
-      severity: "critical", evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }]
-    }));
-  }
-
-  for (const pull of trustedCandidates) {
-    if (pull.head?.ref === "dev") {
-      findings.push(doctorFinding(`release-pr-${pull.number}-uses-dev-head`, "release lane", `Release PR #${pull.number} uses long-lived \`dev\` as its head.`, {
-        severity: "error",
-        evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }],
-        repair: ["Use a protected release/<id> branch so delete-after-merge cannot remove dev."]
-      }));
-      continue;
-    }
-
-    if (!EXACT_COMMIT_PATTERN.test(pull.head?.sha || "")) {
-      findings.push(doctorFinding(`release-pr-${pull.number}-head-revision-malformed`, "release lane", `Release PR #${pull.number} has no exact head revision and cannot satisfy release policy.`, {
-        severity: "critical", evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }]
-      }));
-      continue;
-    }
-
-    let relation;
-    try {
-      relation = await compareBranches(github, repository, devRevision, pull.head.sha);
-    } catch (error) {
-      if (![403, 404, 409, 422].includes(error?.status)) throw error;
-      findings.push(doctorFinding(`release-pr-${pull.number}-dev-lineage-unobservable`, "release lane", `Current-dev ancestry for release PR #${pull.number} is unobservable; it cannot satisfy release policy.`, {
-        severity: "critical", evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }]
-      }));
-      continue;
-    }
-    if (!isValidBranchComparison(relation)) {
-      findings.push(doctorFinding(`release-pr-${pull.number}-dev-lineage-malformed`, "release lane", `Current-dev ancestry for release PR #${pull.number} returned malformed comparison evidence; it cannot satisfy release policy.`, {
-        severity: "critical", evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }]
-      }));
-      continue;
-    }
-    if (!["identical", "ahead"].includes(relation?.status)) {
-      findings.push(doctorFinding(`release-pr-${pull.number}-not-current-dev-derived`, "release lane", `Release PR #${pull.number} does not contain current \`dev\` (dev...release is \`${relation?.status || "malformed"}\`).`, {
-        severity: "critical",
-        evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }],
-        repair: ["Recreate or update the release branch from current dev through a reviewed, non-force-pushed branch update."]
-      }));
-      continue;
-    }
-    eligible.push(pull);
-  }
-
-  if (comparison.status === "ahead") {
-    if (eligible.length === 0) {
-      findings.push(doctorFinding("release-pr-missing", "release lane", "`dev` is ahead of `main`, but no eligible current-dev-derived release PR targets `main`.", {
-        severity: "error",
-        evidence: [compareEvidence(repository, "main", "dev")],
-        repair: ["Create or update a protected release branch and reviewed release PR."]
-      }));
-    }
-  } else if (comparison.status === "identical" && trustedCandidates.length) {
-    for (const pull of trustedCandidates) {
-      findings.push(doctorFinding(`release-pr-${pull.number}-obsolete`, "release lane", `Release PR #${pull.number} remains open although main and dev are identical.`, {
-        severity: "warning", evidence: [{ label: `PR #${pull.number}`, url: pull.html_url }]
-      }));
-    }
-  }
-  return findings;
-}
-
 export async function auditManagedFileDrift(github, repository, targetRef, controlRepo = CONTROL_REPO, options = {}) {
   if (!targetRef) return [doctorFinding("managed-target-ref-missing", "managed file drift", "Cannot inspect managed files without a target ref.", { severity: "critical" })];
   const controlRevision = assertExactCommit(options.controlRevision, "trusted control");
@@ -947,7 +846,7 @@ export async function auditManagedFileDrift(github, repository, targetRef, contr
 
   for (const filePath of manifest.value.requiredFiles) {
     const packageOwned = manifest.value.packageFiles.includes(filePath);
-    const sourceRepo = packageOwned ? controlRepo : parseRepo(AGENT_OS_DATA_REPO);
+    const sourceRepo = packageOwned ? controlRepo : parseRepo(ANDROMEDA_DATA_REPO);
     const sourcePath = packageOwned ? filePath : `managed-repository/${filePath}`;
     const sourceRevision = packageOwned ? controlRevision : agentOsDataRevision;
     const expected = await getOptionalFileContent(github, sourceRepo, sourcePath, sourceRevision);
@@ -1027,7 +926,7 @@ function parseManagedManifest(text) {
 
 async function auditProjectOverlay(github, repository, targetRef, agentOsDataRevision) {
   const findings = [];
-  const dataRepo = parseRepo(AGENT_OS_DATA_REPO);
+  const dataRepo = parseRepo(ANDROMEDA_DATA_REPO);
   const prefix = `managed-repository/repositories/${repository.owner}/${repository.repo}/.agents/project`;
   const files = await listRemoteDirectoryFiles(github, dataRepo, prefix, agentOsDataRevision);
   for (const source of files) {
@@ -1085,7 +984,7 @@ export async function auditRepositoryTree(repository, tree, options = {}) {
       findings.push(doctorFinding(`generated-artifact-${slug(filePath)}`, "repository hygiene", `Generated/runtime artifact \`${filePath}\` is committed.`, { severity: "warning" }));
     }
     if (nestedGitMetadata) {
-      findings.push(doctorFinding(`nested-git-metadata-${slug(filePath)}`, "nested repository state", `Nested Git metadata \`${filePath}\` is committed outside the root submodule contract.`, { severity: "error" }));
+      findings.push(doctorFinding(`nested-git-metadata-${slug(filePath)}`, "nested repository state", `Nested Git metadata \`${filePath}\` is committed inside the monorepo.`, { severity: "error" }));
     }
   }
   if (malformedEntries > 0) {
@@ -1103,49 +1002,17 @@ export async function auditRootLayout(github, repository, ref, tree) {
   const paths = new Map(tree.tree.map((entry) => [entry.path, entry]));
 
   if (normalized === "marius-patrik/andromeda") {
-    for (const root of ANDROMEDA_ROOTS) {
-      if (!paths.has(root)) {
-        findings.push(doctorFinding(`andromeda-root-${slug(root)}-missing`, "product layout", `Required Andromeda root \`${root}/\` is missing.`, { severity: "error" }));
+    for (const componentPath of ANDROMEDA_COMPONENT_PATHS) {
+      if (!paths.has(componentPath)) {
+        findings.push(doctorFinding(`andromeda-component-${slug(componentPath)}-missing`, "product layout", `Required Andromeda component \`${componentPath}/\` is missing.`, { severity: "error" }));
       }
     }
     const gitmodules = await getOptionalFileContent(github, repository, ".gitmodules", ref);
-    const entries = parseGitmodules(gitmodules || "");
-    const byPath = new Map(entries.map((entry) => [entry.path, entry]));
-    for (const expected of ANDROMEDA_LAYOUT) {
-      const actual = byPath.get(expected.path);
-      if (!actual) {
-        findings.push(doctorFinding(`andromeda-submodule-${slug(expected.path)}-missing`, "product layout", `Required gitlink \`${expected.path}\` (${expected.name}) is missing or misplaced.`, { severity: "critical" }));
-        continue;
-      }
-      const resolved = resolveSubmoduleRepo(repository, actual.url);
-      if (actual.name !== expected.name || !resolved || normalizedName(resolved) !== expected.repo.toLowerCase()) {
-        const observedRepository = resolved
-          ? `GitHub repository \`${repoName(resolved)}\``
-          : describeSubmoduleUrl(actual.url);
-        findings.push(doctorFinding(`andromeda-submodule-${slug(expected.path)}-identity`, "product layout", `Gitlink \`${expected.path}\` has a mismatched name or repository identity (${observedRepository}); expected \`${expected.name}\` / \`${expected.repo}\`.`, { severity: "critical" }));
-      }
-      if (paths.get(expected.path)?.type !== "commit") {
-        findings.push(doctorFinding(`andromeda-submodule-${slug(expected.path)}-mode`, "product layout", `Path \`${expected.path}\` is not a gitlink (tree type commit).`, { severity: "critical" }));
-      }
+    if ((gitmodules || "").trim()) {
+      findings.push(doctorFinding("andromeda-submodule-declarations-present", "product layout", "Andromeda declares submodules even though the monorepo contract requires an empty `.gitmodules` file.", { severity: "critical" }));
     }
-    for (const [index, actual] of entries.entries()) {
-      if (
-        !isSafeSubmoduleName(actual.name) ||
-        !isSafeSubmodulePath(actual.path) ||
-        !actual.url ||
-        !isSafeSubmoduleBranch(actual.branch)
-      ) {
-        findings.push(doctorFinding(
-          `andromeda-submodule-declaration-${index + 1}-invalid`,
-          "product layout",
-          `Andromeda submodule declaration #${index + 1} has an invalid or missing name, repository-relative path, URL, or branch.`,
-          { severity: "critical" }
-        ));
-        continue;
-      }
-      if (!ANDROMEDA_LAYOUT.some((expected) => expected.path === actual.path)) {
-        findings.push(doctorFinding(`andromeda-submodule-unexpected-${slug(actual.path)}`, "product layout", `Unexpected Andromeda submodule declaration \`${actual.name}\` at \`${actual.path}\`.`, { severity: "error" }));
-      }
+    for (const entry of tree.tree.filter((candidate) => candidate?.type === "commit")) {
+      findings.push(doctorFinding(`andromeda-gitlink-${slug(entry.path)}-present`, "product layout", `Andromeda contains forbidden gitlink \`${entry.path}\`; all components must be ordinary monorepo directories.`, { severity: "critical" }));
     }
     const readme = await getOptionalFileContent(github, repository, "README.md", ref);
     if (!/^# Andromeda\s*$/m.test(readme || "")) {
@@ -1178,11 +1045,11 @@ export async function auditRuntimeAuthority(github, repository, ref, controlRepo
   if (!work) {
     return [doctorFinding("canonical-worker-workflow-missing", "runtime authority", "Trusted control df-work workflow is missing.", { severity: "critical" })];
   }
-  if (!/ANDROMEDA_HOME/.test(work) || !/bin\\agents\.ps1/.test(work) || !/state doctor --json/.test(work)) {
+  if (!/ANDROMEDA_HOME/.test(work) || !/bin\\andromeda\.ps1/.test(work) || !/state doctor --json/.test(work)) {
     findings.push(doctorFinding("canonical-launcher-binding-invalid", "runtime authority", "df-work does not prove absolute ANDROMEDA_HOME, exact `bin\\andromeda.ps1`, and `state doctor --json` before execution.", { severity: "critical" }));
   }
   if (/\b(kimi|agy|claude)\s+(?:-p|--|\$)/i.test(work) || /\bcodex\s+exec\b/i.test(work)) {
-    findings.push(doctorFinding("direct-provider-cli-in-worker", "runtime authority", "df-work contains a direct provider CLI invocation instead of canonical `agents` execution.", { severity: "critical" }));
+    findings.push(doctorFinding("direct-provider-cli-in-worker", "runtime authority", "df-work contains a direct provider CLI invocation instead of canonical `andromeda` execution.", { severity: "critical" }));
   }
   const agents = await getOptionalFileContent(github, repository, "AGENTS.md", ref);
   if (!/\$ANDROMEDA_HOME|ANDROMEDA_HOME/.test(agents || "")) {
@@ -1273,8 +1140,8 @@ export function auditMachineRuntimeEvidence(evidence) {
   else if (!observed.runnerOnline) automatic("df-local-runner-offline", "The canonical df-local runner is not online.", "Repair and start the lifecycle-managed runner, then re-prove the online registration.");
   if (!observed.runnerPersistent) automatic("df-local-runner-persistence-unproven", "Runner reboot persistence and listener health are unproven.", "Repair the canonical runner lifecycle and re-prove its persistent controller definition.");
   if (!observed.routeProbeOk) blocked("provider-route-probe-unavailable", "Canonical Agent OS resolved-route reachability is unproven.", "Land/use the Andromeda #260 resolved-route probe; do not invoke raw provider CLIs.");
-  if (!observed.ledgerReachable) blocked("darkfactory-ledger-unreachable", "Canonical darkfactory-data ledger checkout/registration is unreachable.", "Repair the canonical darkfactory-data registration and checkout.");
-  if (!observed.ledgerWritable) blocked("darkfactory-ledger-write-unproven", "Canonical darkfactory-data local write access is unproven.", "Repair local data-checkout permissions, then let setup prove remote write authority with its admission/completion receipts.");
+  if (!observed.ledgerReachable) blocked("darkfactory-ledger-unreachable", "Canonical private-data ledger path is unreachable.", "Repair the canonical private-data registration and nested ledger path.");
+  if (!observed.ledgerWritable) blocked("darkfactory-ledger-write-unproven", "Canonical private-data ledger path write access is unproven.", "Repair local data-checkout permissions, then let setup prove remote write authority with its admission/completion receipts.");
   if (observed.stateDoctorOk) observations.push("Canonical Agent OS state doctor completed successfully.");
   if (observed.versionObserved) observations.push("Canonical launcher/source version receipt is observable.");
   return { findings, observations };
@@ -1317,8 +1184,9 @@ function collectMachineRuntimeEvidence(agentsHome) {
   const route = run(["route", "probe", "--json"]);
   const routeJson = parse(route);
   const routeProbeOk = route.ok && routeJson?.ok === true;
-  const ledger = run(["data", "repo", "path", "darkfactory-data"]);
-  const ledgerPath = ledger.ok ? ledger.stdout.trim() : "";
+  const ledger = run(["data", "repo", "path", "andromeda-data"]);
+  const dataPath = ledger.ok ? ledger.stdout.trim() : "";
+  const ledgerPath = dataPath ? path.join(dataPath, ...DARK_FACTORY_LEDGER_PATH.split("/")) : "";
   const ledgerReachable = Boolean(ledgerPath && existsSync(ledgerPath));
   let ledgerWritable = false;
   if (ledgerReachable) {
@@ -2019,66 +1887,13 @@ export function activeAuthorityText(content) {
 export async function auditSubmoduleState(github, repository, branch, revision = branch) {
   const findings = [];
   const gitmodules = await getOptionalFileContent(github, repository, ".gitmodules", revision);
-  const parsed = parseGitmodulesDocument(gitmodules);
-  const submodules = parsed.submodules;
-  const seenPaths = new Set();
-  const declaredPaths = new Set();
-
-  if (gitmodules !== null && (parsed.malformed || submodules.length === 0)) {
+  if ((gitmodules || "").trim()) {
     findings.push(doctorFinding(
-      `submodule-metadata-${slug(branch)}-invalid`,
-      "submodule metadata",
-      `The .gitmodules file on \`${branch}\` is malformed or contains no complete submodule declarations.`,
+      `submodule-declarations-${slug(branch)}-forbidden`,
+      "monorepo topology",
+      `The .gitmodules file on \`${branch}\` is not empty; the repository contract allows no submodules.`,
       { severity: "critical" }
     ));
-  }
-
-  for (const [index, submodule] of submodules.entries()) {
-    if (isSafeSubmodulePath(submodule.path)) declaredPaths.add(submodule.path);
-    if (
-      !isSafeSubmoduleName(submodule.name) ||
-      !isSafeSubmodulePath(submodule.path) ||
-      !submodule.url ||
-      !isSafeSubmoduleBranch(submodule.branch)
-    ) {
-      findings.push(doctorFinding(
-        `submodule-declaration-${slug(branch)}-${index + 1}-invalid`,
-        "submodule metadata",
-        `Submodule declaration #${index + 1} on \`${branch}\` has an invalid or missing name, repository-relative path, URL, or branch.`,
-        { severity: "critical" }
-      ));
-      continue;
-    }
-    if (seenPaths.has(submodule.path)) {
-      findings.push(doctorFinding(`submodule-path-${slug(submodule.path)}-duplicate`, "submodule metadata", `Submodule path \`${submodule.path}\` is declared more than once.`, { severity: "critical" }));
-      continue;
-    }
-    seenPaths.add(submodule.path);
-    const childRepo = resolveSubmoduleRepo(repository, submodule.url);
-    if (!childRepo) {
-      findings.push(doctorFinding(`submodule-${slug(submodule.path)}-url-invalid`, "submodule metadata", `Submodule \`${submodule.path}\` uses an unsupported ${describeSubmoduleUrl(submodule.url)}.`, { severity: "critical" }));
-      continue;
-    }
-    const recorded = await getSubmoduleCommit(github, repository, submodule.path, revision);
-    if (!recorded) {
-      findings.push(doctorFinding(`submodule-${slug(submodule.path)}-gitlink-missing-${slug(branch)}`, "submodule pointer", `Submodule \`${submodule.path}\` is declared but has no gitlink on \`${branch}\`.`, { severity: "critical" }));
-      continue;
-    }
-    const child = await getSubmoduleHead(github, childRepo);
-    if (!child) {
-      findings.push(doctorFinding(`submodule-${slug(submodule.path)}-head-unavailable`, "submodule pointer", `Child head for \`${submodule.path}\` (${repoName(childRepo)}) is inaccessible.`, { severity: "error" }));
-      continue;
-    }
-    if (submodule.branch && submodule.branch !== child.branch) {
-      findings.push(doctorFinding(`submodule-${slug(submodule.path)}-branch-drift`, "submodule metadata", `Submodule \`${submodule.path}\` tracks \`${submodule.branch}\`, but child default branch is \`${child.branch}\`.`, { severity: "error" }));
-    }
-    if (recorded !== child.sha) {
-      findings.push(doctorFinding(`submodule-${slug(submodule.path)}-pointer-drift-${slug(branch)}`, "submodule pointer", `Submodule \`${submodule.path}\` records \`${recorded.slice(0, 12)}\` on \`${branch}\`, while ${repoName(childRepo)} \`${child.branch}\` is \`${child.sha.slice(0, 12)}\`.`, {
-        severity: "warning",
-        evidence: [{ label: "compare", url: `https://github.com/${repoName(childRepo)}/compare/${recorded}...${child.sha}` }],
-        repair: ["Update only after proving the child head is the eligible released/default commit and parent validation is green."]
-      }));
-    }
   }
 
   let tree;
@@ -2087,8 +1902,8 @@ export async function auditSubmoduleState(github, repository, branch, revision =
   } catch (error) {
     findings.push(doctorFinding(
       `submodule-tree-${slug(branch)}-unavailable`,
-      "submodule pointer",
-      `The recursive tree on \`${branch}\` is unavailable, so declared and actual gitlinks cannot be correlated.`,
+      "monorepo topology",
+      `The recursive tree on \`${branch}\` is unavailable, so the no-gitlinks invariant cannot be proven.`,
       { severity: "critical" }
     ));
     return findings;
@@ -2096,117 +1911,25 @@ export async function auditSubmoduleState(github, repository, branch, revision =
   if (tree?.truncated === true || !Array.isArray(tree?.tree)) {
     findings.push(doctorFinding(
       `submodule-tree-${slug(branch)}-incomplete`,
-      "submodule pointer",
-      `The recursive tree on \`${branch}\` is incomplete, so declared and actual gitlinks cannot be correlated.`,
+      "monorepo topology",
+      `The recursive tree on \`${branch}\` is incomplete, so the no-gitlinks invariant cannot be proven.`,
       { severity: "critical" }
     ));
     return findings;
   }
-  const observedGitlinks = new Set();
-  let malformedGitlink = false;
   for (const entry of tree.tree) {
     if (entry?.type !== "commit") continue;
-    if (!isSafeSubmodulePath(entry.path) || observedGitlinks.has(entry.path)) {
-      malformedGitlink = true;
-      continue;
-    }
-    observedGitlinks.add(entry.path);
-  }
-  if (malformedGitlink) {
     findings.push(doctorFinding(
-      `submodule-tree-${slug(branch)}-entry-invalid`,
-      "submodule pointer",
-      `The recursive tree on \`${branch}\` contains an invalid or duplicate gitlink entry.`,
-      { severity: "critical" }
-    ));
-  }
-  for (const gitlinkPath of observedGitlinks) {
-    if (declaredPaths.has(gitlinkPath)) continue;
-    findings.push(doctorFinding(
-      `submodule-${slug(gitlinkPath)}-undeclared-${slug(branch)}`,
-      "submodule metadata",
-      `Gitlink \`${gitlinkPath}\` exists on \`${branch}\` but is not declared by .gitmodules.`,
+      `gitlink-${slug(entry.path || "invalid")}-${slug(branch)}-forbidden`,
+      "monorepo topology",
+      `Forbidden gitlink \`${entry.path || "invalid"}\` exists on \`${branch}\`.`,
       { severity: "critical" }
     ));
   }
   return findings;
 }
 
-export function parseGitmodules(content) {
-  return parseGitmodulesDocument(content).submodules;
-}
-
-function parseGitmodulesDocument(content) {
-  const submodules = [];
-  if (content === null) return { submodules, malformed: false };
-  if (typeof content !== "string") return { submodules, malformed: true };
-  let current = null;
-  let malformed = false;
-  let observedContent = false;
-  const seenKeys = new Set();
-  for (const rawLine of content.replace(/\r\n/g, "\n").split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
-    observedContent = true;
-    const section = line.match(/^\[submodule\s+"([^"]+)"\]\s*$/);
-    if (section) {
-      if (current) submodules.push(current);
-      current = { name: section[1], path: "", url: "", branch: "" };
-      seenKeys.clear();
-      continue;
-    }
-    if (line.startsWith("[")) {
-      if (current) submodules.push(current);
-      current = null;
-      seenKeys.clear();
-      malformed = true;
-      continue;
-    }
-    if (!current) {
-      malformed = true;
-      continue;
-    }
-    const pair = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.*)$/);
-    if (!pair) {
-      malformed = true;
-      continue;
-    }
-    const key = pair[1].toLowerCase();
-    if (["path", "url", "branch"].includes(key)) {
-      if (seenKeys.has(key)) malformed = true;
-      seenKeys.add(key);
-      current[key] = pair[2].trim();
-    }
-  }
-  if (current) submodules.push(current);
-  return { submodules, malformed: malformed || (observedContent && submodules.length === 0) };
-}
-
-function isSafeSubmoduleName(value) {
-  return typeof value === "string" && value.length > 0 && value.length <= 200 && /^[A-Za-z0-9._/-]+$/.test(value) && !hasUnsafePathSegment(value);
-}
-
-function isSafeSubmodulePath(value) {
-  return typeof value === "string" && value.length > 0 && value.length <= 1024 && /^[A-Za-z0-9._/-]+$/.test(value) && !value.startsWith("/") && !value.endsWith("/") && !hasUnsafePathSegment(value);
-}
-
-function isSafeSubmoduleBranch(value) {
-  return value === "" || (
-    typeof value === "string" &&
-    value.length <= 255 &&
-    /^[A-Za-z0-9._/-]+$/.test(value) &&
-    !value.startsWith("/") &&
-    !value.endsWith("/") &&
-    !value.includes("..") &&
-    !value.includes("@{")
-  );
-}
-
-function hasUnsafePathSegment(value) {
-  return value.split("/").some((segment) => !segment || segment === "." || segment === "..");
-}
-
-export function resolveSubmoduleRepo(parentRepo, url) {
+export function resolveRepositoryUrl(parentRepo, url) {
   if (typeof url !== "string" || !url.trim()) return null;
   const value = url.trim();
   const github = value.match(/^(?:https?:\/\/github\.com\/|git@github\.com:|github\.com:)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:\/.*)?$/);
@@ -2225,20 +1948,6 @@ export function resolveSubmoduleRepo(parentRepo, url) {
   return null;
 }
 
-function describeSubmoduleUrl(url) {
-  if (typeof url !== "string" || !url.trim()) return "missing URL";
-  const value = url.trim();
-  if (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(value)) return "machine-local path";
-  if (/^file:/i.test(value)) return "machine-local file URL";
-  if (value.startsWith("./") || value.startsWith("../")) return "relative repository URL";
-  if (/^(?:https?:\/\/github\.com\/|git@github\.com:|github\.com:)/i.test(value)) return "malformed GitHub repository URL";
-  const scheme = value.match(/^([A-Za-z][A-Za-z0-9+.-]*):/i)?.[1]?.toLowerCase();
-  if (scheme === "http" || scheme === "https") return "non-GitHub web URL";
-  if (scheme === "ssh" || scheme === "git") return "non-GitHub remote URL";
-  if (scheme) return "URL with an unsupported scheme";
-  return "unrecognized repository URL";
-}
-
 /**
  * Inventory invariant: every worktree and ref attached to the explicitly
  * supplied repository is either proven preserved by the immutable remote
@@ -2254,7 +1963,7 @@ export function auditLocalCheckout(localPath, repository, options = {}) {
     return { findings: [doctorFinding("local-checkout-missing", "local checkout", "The explicitly supplied local checkout does not exist.", { severity: "critical" })], observations };
   }
   const origin = git(resolved, ["remote", "get-url", "origin"]);
-  const remote = resolveSubmoduleRepo(repository, origin.stdout.trim());
+  const remote = resolveRepositoryUrl(repository, origin.stdout.trim());
   if (!origin.ok || !remote || normalizedName(remote) !== normalizedName(repository)) {
     return { findings: [doctorFinding("local-checkout-origin-mismatch", "local checkout", `Local checkout origin does not match ${repoName(repository)}.`, { severity: "critical" })], observations };
   }
@@ -2450,7 +2159,7 @@ function inventoryLocalWorktrees(root) {
       findings.push(doctorFinding(
         rootCheckout ? "local-checkout-dirty" : `local-worktree-${id}-dirty`,
         "local checkout",
-        rootCheckout ? "Explicit local checkout has modified or untracked state." : `Linked worktree \`${id}\` has modified, untracked, or submodule state.`,
+        rootCheckout ? "Explicit local checkout has modified or untracked state." : `Linked worktree \`${id}\` has modified, untracked, or forbidden nested-entry state.`,
         {
           severity: "error",
           repair: ["Preserve user changes; reconcile intentionally before any automated repair."]
@@ -2466,63 +2175,11 @@ function inventoryLocalWorktrees(root) {
       }));
     }
     if (fields.has("locked")) observations.push(`Linked worktree \`${id}\` is locked and was inspected without changing its lock.`);
-    const submodules = auditLocalWorktreeSubmodules(worktreePath, id, rootCheckout);
-    findings.push(...submodules.findings);
-    observations.push(...submodules.observations);
   }
   if (!rootObserved) {
     findings.push(doctorFinding("local-explicit-worktree-unobservable", "local checkout", "The explicitly supplied checkout is absent from its common Git worktree inventory.", { severity: "critical" }));
   }
   return { findings, observations, worktrees };
-}
-
-function auditLocalWorktreeSubmodules(worktreePath, worktreeId, rootCheckout) {
-  const findings = [];
-  const observations = [];
-  const submodules = git(worktreePath, ["submodule", "status", "--recursive"]);
-  if (!submodules.ok) {
-    findings.push(doctorFinding(
-      rootCheckout ? "local-submodule-inventory-unobservable" : `local-worktree-${worktreeId}-submodule-inventory-unobservable`,
-      "local checkout",
-      rootCheckout ? "Recursive submodule state for the explicit checkout is unobservable." : `Recursive submodule state for linked worktree \`${worktreeId}\` is unobservable.`,
-      { severity: "critical", repair: ["Preserve the worktree and restore complete recursive submodule evidence before cleanup."] }
-    ));
-    return { findings, observations };
-  }
-  let inspected = 0;
-  for (const line of submodules.stdout.split(/\r?\n/).filter(Boolean)) {
-    const match = line.match(/^(.)([0-9a-f]{40})\s+(.+?)(?:\s+\(.+\))?$/i);
-    if (!match) {
-      findings.push(doctorFinding(
-        rootCheckout ? "local-submodule-inventory-malformed" : `local-worktree-${worktreeId}-submodule-inventory-malformed`,
-        "local checkout",
-        rootCheckout ? "Recursive submodule inventory returned a malformed record." : `Recursive submodule inventory for linked worktree \`${worktreeId}\` returned a malformed record.`,
-        { severity: "critical" }
-      ));
-      continue;
-    }
-    inspected += 1;
-    const [, prefix, , subPath] = match;
-    const nestedPath = path.resolve(worktreePath, subPath);
-    const relative = path.relative(worktreePath, nestedPath);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      findings.push(doctorFinding(`local-worktree-${worktreeId}-submodule-path-invalid`, "local checkout", `Linked worktree \`${worktreeId}\` contains an invalid recursive submodule path.`, { severity: "critical" }));
-      continue;
-    }
-    const idPrefix = rootCheckout ? `local-submodule-${slug(subPath)}` : `local-worktree-${worktreeId}-submodule-${slug(subPath)}`;
-    if (prefix === "-") findings.push(doctorFinding(`${idPrefix}-uninitialized`, "local checkout", `Submodule \`${subPath}\` is uninitialized.`, { severity: "error" }));
-    if (prefix === "+") findings.push(doctorFinding(`${idPrefix}-pointer`, "local checkout", `Submodule \`${subPath}\` is checked out at a different commit than the parent gitlink.`, { severity: "error" }));
-    if (prefix === "U") findings.push(doctorFinding(`${idPrefix}-conflict`, "local checkout", `Submodule \`${subPath}\` has a merge conflict.`, { severity: "critical" }));
-    if (prefix !== "-") {
-      const nested = existsSync(nestedPath)
-        ? git(nestedPath, ["status", "--porcelain=v2", "--untracked-files=all", "--ignore-submodules=none"])
-        : { ok: false, stdout: "" };
-      if (!nested.ok) findings.push(doctorFinding(`${idPrefix}-status-unobservable`, "local checkout", `Submodule \`${subPath}\` status is unobservable.`, { severity: "critical" }));
-      else if (nested.stdout.trim()) findings.push(doctorFinding(`${idPrefix}-dirty`, "local checkout", `Submodule \`${subPath}\` has local modified/untracked state.`, { severity: "error" }));
-    }
-  }
-  if (inspected > 0) observations.push(`Linked worktree \`${worktreeId}\` recursive submodule inventory inspected ${inspected} submodule(s).`);
-  return { findings, observations };
 }
 
 function inventoryLocalRefs(root) {
@@ -2884,7 +2541,7 @@ async function writeDoctorLedger(ledgerGithub, repository, report, options) {
   const phase = options?.phase;
   if (!["admission", "completion"].includes(phase)) throw new Error("Repository-doctor ledger phase must be admission or completion.");
   const kind = phase === "admission" ? "repo-doctor-admission" : "repo-doctor";
-  const written = await writeRunLedger(ledgerGithub, DARK_FACTORY_DATA_REPO, kind, repoName(repository), {
+  const written = await writeRunLedger(ledgerGithub, kind, repoName(repository), {
     phase,
     schema_version: report.schema_version,
     machine_evidence_schema: report.machine_evidence_schema || 0,
@@ -3222,30 +2879,6 @@ async function getLatestCommitForPath(repository, filePath, branch, github) {
     return Array.isArray(data) ? data[0] : null;
   } catch (error) {
     if (error.status === 404 || error.status === 409) return null;
-    throw error;
-  }
-}
-
-async function getSubmoduleCommit(github, repository, submodulePath, branch) {
-  try {
-    const data = await github.request("GET", `/repos/${repoName(repository)}/contents/${encodePath(submodulePath)}?ref=${encodeURIComponent(branch)}`);
-    const legacySubmodule = data?.type === "submodule";
-    const currentSubmodule = data?.type === "file" && typeof data?.submodule_git_url === "string" && Boolean(data.submodule_git_url.trim());
-    return (legacySubmodule || currentSubmodule) && /^[0-9a-f]{40}$/i.test(data?.sha || "") ? data.sha : null;
-  } catch (error) {
-    if (error.status === 403 || error.status === 404) return null;
-    throw error;
-  }
-}
-
-async function getSubmoduleHead(github, repository) {
-  try {
-    const metadata = await getRepository(github, repository);
-    const branch = metadata.default_branch || "main";
-    const data = await github.request("GET", `/repos/${repoName(repository)}/commits/${encodeURIComponent(branch)}`);
-    return typeof data?.sha === "string" ? { sha: data.sha, branch } : null;
-  } catch (error) {
-    if (error.status === 403 || error.status === 404) return null;
     throw error;
   }
 }

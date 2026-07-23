@@ -18,6 +18,7 @@ import {
   type ValidationSpec,
   type WorkItemContext
 } from "./prompts.ts";
+import { readManagedRepositoryAuthority } from "./managed-files.js";
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const GIT_REVISION_PATTERN = /^[0-9a-f]{40}$/i;
@@ -28,12 +29,10 @@ const REPOSITORY_OVERLAYS = Object.freeze([
   "overlay/go",
   "overlay/main-only-private-data",
   "overlay/mixed-monorepo",
-  "overlay/python-uv",
-  "overlay/submodule-root"
+  "overlay/python-uv"
 ] as const);
 const DATA_REPOSITORIES = new Set([
-  "marius-patrik/andromeda-data",
-  "marius-patrik/darkfactory-data"
+  readManagedRepositoryAuthority().dataRepo.toLowerCase()
 ]);
 const DEFAULT_VERIFIED_MAX_AGE_MS = 10 * 60 * 1000;
 const MAX_VERIFIED_FUTURE_SKEW_MS = 5 * 1000;
@@ -337,7 +336,9 @@ export function classifyRepositoryOverlay(
     throw new Error("Repository classification requires a complete bounded path inventory");
   }
   const paths = new Set(repositoryPaths.map(normalizedRepositoryPath));
-  if (paths.has(".gitmodules")) return "overlay/submodule-root";
+  if (paths.has(".gitmodules")) {
+    throw new Error("Repository topology violates the no-submodules invariant");
+  }
   const hasNode = [...paths].some((entry) => entry === "package.json" || entry.endsWith("/package.json"));
   const hasGo = [...paths].some((entry) => /(?:^|\/)(?:go\.mod|go\.work)$/.test(entry));
   const hasPython = [...paths].some((entry) => /(?:^|\/)(?:pyproject\.toml|uv\.lock)$/.test(entry));
@@ -360,9 +361,6 @@ export function validationCommandsForRepository(
   const overlay = classifyRepositoryOverlay(repository, repositoryPaths);
   const normalized = new Set(repositoryPaths.map(normalizedRepositoryPath));
   if (overlay === "overlay/main-only-private-data") return ["git diff --check"];
-  if (overlay === "overlay/submodule-root") {
-    return ["git diff --check", "git submodule status --recursive"];
-  }
   if (overlay === "overlay/bun-node") return ["npm run check"];
   if (overlay === "overlay/go") return ["go test ./..."];
   if (overlay === "overlay/python-uv") return ["uv run pytest"];
@@ -531,7 +529,7 @@ function canonicalLauncher(environment: NodeJS.ProcessEnv): string {
   if (!agentsHome || !path.isAbsolute(agentsHome)) {
     throw new ModelTurnError("canonical_launcher_unavailable", "A valid absolute ANDROMEDA_HOME is required");
   }
-  const launcher = path.join(agentsHome, "bin", "agents.ps1");
+  const launcher = path.join(agentsHome, "bin", "andromeda.ps1");
   if (!existsSync(launcher)) {
     throw new ModelTurnError("canonical_launcher_unavailable", "Canonical Agent OS launcher is unavailable");
   }

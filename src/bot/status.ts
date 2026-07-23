@@ -1,6 +1,7 @@
+import { readManagedRepositoryAuthority } from "./managed-files.js";
+
 export const CONTROL_OWNER = "marius-patrik";
 export const CONTROL_REPO = "DarkFactory";
-export const DARK_FACTORY_DATA_REPO = "darkfactory-data";
 
 export interface GitHubRequester {
   request(route: string, parameters: Record<string, unknown>): Promise<{ data: unknown; headers?: Record<string, string> }>;
@@ -122,7 +123,8 @@ export async function fetchManagedRepos(
   const response = await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
     owner: controlRepo.owner,
     repo: controlRepo.repo,
-    path: MANAGED_REPOS_PATH
+    path: MANAGED_REPOS_PATH,
+    ref: "main"
   });
 
   const content = decodeContentResponse(response.data);
@@ -139,14 +141,14 @@ export async function buildStatusReport(
 ): Promise<StatusReport> {
   const owner = CONTROL_OWNER;
   const controlRepo = CONTROL_REPO;
-  const dataRepo = DARK_FACTORY_DATA_REPO;
+  const dataRepo = parseRepositoryRef(readManagedRepositoryAuthority().dataRepo);
 
   const managedRepos = await fetchManagedRepos(github, { owner, repo: controlRepo }, owner);
   const [loopState, recentRuns, latestLedger, modelExecutions, blocked, prdCoverage, backlogCoverage] = await Promise.all([
     fetchLoopStateForRepos(github, managedRepos),
     fetchRecentRuns(github, { owner, repo: controlRepo }),
-    fetchLatestLedger(github, { owner, repo: dataRepo }, { owner, repo: controlRepo }),
-    fetchLatestModelExecutions(github, { owner, repo: dataRepo }, managedRepos),
+    fetchLatestLedger(github, dataRepo, { owner, repo: controlRepo }),
+    fetchLatestModelExecutions(github, dataRepo, managedRepos),
     fetchBlockedIssues(github, managedRepos),
     fetchPrdCoverage(github, managedRepos),
     fetchBacklogCoverage(github, managedRepos)
@@ -171,13 +173,14 @@ export async function fetchLatestModelExecutions(
   repos: RepositoryRef[]
 ): Promise<ModelExecutionSummary[]> {
   const summaries = await Promise.all(repos.map(async (repo) => {
-    const ledgerPath = `runs/${repo.owner}/${repo.repo}`;
+    const ledgerPath = `${readManagedRepositoryAuthority().ledgerPath}/${repo.owner}/${repo.repo}`;
     let listing;
     try {
       listing = await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
         owner: dataRepo.owner,
         repo: dataRepo.repo,
-        path: ledgerPath
+        path: ledgerPath,
+        ref: "main"
       });
     } catch (error) {
       if (isRequestError(error) && error.status === 404) return null;
@@ -193,7 +196,8 @@ export async function fetchLatestModelExecutions(
     const response = await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
       owner: dataRepo.owner,
       repo: dataRepo.repo,
-      path: `${ledgerPath}/${latest}`
+      path: `${ledgerPath}/${latest}`,
+      ref: "main"
     });
     const content = decodeContentResponse(response.data);
     if (content === null) return null;
@@ -358,6 +362,7 @@ async function fetchWorkflowRuns(
     owner: repo.owner,
     repo: repo.repo,
     workflow_id: workflowId,
+    branch: "main",
     per_page: 50
   });
 
@@ -397,11 +402,12 @@ export async function fetchLatestLedger(
   dataRepo: RepositoryRef,
   controlRepo: RepositoryRef
 ): Promise<LedgerSummary | null> {
-  const ledgerPath = `runs/${controlRepo.owner}/${controlRepo.repo}`;
+  const ledgerPath = `${readManagedRepositoryAuthority().ledgerPath}/${controlRepo.owner}/${controlRepo.repo}`;
   const response = await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
     owner: dataRepo.owner,
     repo: dataRepo.repo,
-    path: ledgerPath
+    path: ledgerPath,
+    ref: "main"
   });
 
   if (!Array.isArray(response.data)) {
@@ -425,7 +431,8 @@ export async function fetchLatestLedger(
   const fileResponse = await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
     owner: dataRepo.owner,
     repo: dataRepo.repo,
-    path: `${ledgerPath}/${latestFile}`
+    path: `${ledgerPath}/${latestFile}`,
+    ref: "main"
   });
 
   const content = decodeContentResponse(fileResponse.data);
@@ -483,12 +490,12 @@ async function fetchRepoPrdCoverage(github: GitHubRequester, repo: RepositoryRef
     repo: repo.repo
   });
 
-  const defaultBranch = isRecord(repoInfo.data) && typeof repoInfo.data.default_branch === "string"
-    ? repoInfo.data.default_branch
-    : "main";
+  if (!isRecord(repoInfo.data) || repoInfo.data.default_branch !== "main") {
+    throw new Error(`Repository ${repo.owner}/${repo.repo} does not expose canonical main as its default branch`);
+  }
 
-  const rootPrd = await hasRootPrd(github, repo, defaultBranch);
-  const { packagePrds, totalPackages } = await countPackagePrds(github, repo, defaultBranch);
+  const rootPrd = await hasRootPrd(github, repo, "main");
+  const { packagePrds, totalPackages } = await countPackagePrds(github, repo, "main");
 
   return {
     owner: repo.owner,

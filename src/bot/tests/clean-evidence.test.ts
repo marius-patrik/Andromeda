@@ -41,7 +41,7 @@ test("clean evidence binds the checkout identity and preserves detached worktree
     git(root, ["add", "README.md"]);
     git(root, ["commit", "-m", "fixture"]);
     git(root, ["remote", "add", "origin", "https://github.com/marius-patrik/example.git"]);
-    git(root, ["branch", "dev"]);
+    git(root, ["branch", "feature/local-evidence"]);
     const head = git(root, ["rev-parse", "HEAD"]).trim();
     const tree = git(root, ["rev-parse", "HEAD^{tree}"]).trim();
     git(root, ["update-ref", "refs/df/export", head]);
@@ -56,7 +56,7 @@ test("clean evidence binds the checkout identity and preserves detached worktree
     assert.equal(evidence.detachedWorktrees.length, 1);
     assert.equal(evidence.detachedWorktrees[0]?.head, head);
     assert.equal(plan.entries.some((entry) => entry.kind === "worktree" && entry.target === evidence.detachedWorktrees[0]?.pathId && entry.action === "preserve"), true);
-    assert.equal(plan.entries.some((entry) => entry.kind === "local-branch" && entry.target === "dev" && entry.classification === "protected-policy" && entry.action === "preserve"), true);
+    assert.equal(plan.entries.some((entry) => entry.kind === "local-branch" && entry.target === "feature/local-evidence" && entry.classification === "proven-merged" && entry.action === "delete"), true);
     assert.equal(plan.entries.some((entry) => entry.kind === "orphan-ref" && entry.target === "refs/df/export" && entry.action === "delete"), true);
     assert.equal(plan.entries.some((entry) => entry.kind === "orphan-ref" && entry.target === "refs/tags/v1" && entry.action === "preserve"), true);
     assert.equal(plan.entries.some((entry) => entry.kind === "orphan-ref" && entry.target === "refs/remotes/origin/main" && entry.action === "preserve"), true);
@@ -647,7 +647,7 @@ test("clean PR closure rejects a race at the atomic mutation boundary", async ()
   assert.equal(events.includes("close"), false);
 });
 
-test("clean artifact repair opens one exact dev PR and arms only protected green auto-merge", async () => {
+test("clean artifact repair opens one exact main PR and arms only protected green auto-merge", async () => {
   const state = artifactState();
   const evidence = artifactActionEvidence();
   const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
@@ -656,12 +656,12 @@ test("clean artifact repair opens one exact dev PR and arms only protected green
   assert.equal(state.branchHead, ARTIFACT_HEAD);
   assert.equal(state.pull?.auto_merge !== null, true);
   assert.equal(state.events.includes("create-ref:refs/heads/darkfactory/clean-artifact-" + artifactBranchSuffix()), true);
-  assert.equal(state.events.some((event) => event.includes("refs/heads/dev")), false);
+  assert.equal(state.events.some((event) => event === "create-ref:refs/heads/main"), false);
   assert.equal(state.events.includes("graphql:auto-merge"), true);
   assert.match(receipt.actions.find((action) => action.kind === "artifact")?.reason ?? "", /protected squash auto-merge/);
 });
 
-test("clean artifact repair blocks a dev base race before creating repository objects", async () => {
+test("clean artifact repair blocks a main base race before creating repository objects", async () => {
   const state = artifactState();
   const evidence = artifactActionEvidence();
   const plan = buildCleanPlan(evidence, new Date("2026-07-16T12:00:00Z"));
@@ -954,7 +954,7 @@ function pullFixture(number: number, overrides: Record<string, unknown> = {}): R
       sha: headSha,
       repo: { name: "example", owner: { login: "marius-patrik" } }
     },
-    base: { ref: "dev", sha: BASE_SHA },
+    base: { ref: "main", sha: BASE_SHA },
     updated_at: `2026-07-16T10:0${number}:00Z`,
     ...overrides
   };
@@ -962,7 +962,7 @@ function pullFixture(number: number, overrides: Record<string, unknown> = {}): R
 
 function successorEvidenceGithub(mode: "ancestry" | "tree" | "cross-base" | "fork"): OperatorGitHubRequester {
   const successorOverrides: Record<string, unknown> = mode === "cross-base"
-    ? { base: { ref: "main", sha: BASE_SHA } }
+    ? { base: { ref: "retired-integration", sha: BASE_SHA } }
     : mode === "fork"
       ? { head: { ref: "feature/successor", sha: SUCCESSOR_SHA, repo: { name: "example-fork", owner: { login: "someone-else" } } } }
       : {};
@@ -1102,7 +1102,7 @@ function pullClosureEvidence(): CleanEvidence {
   const successor = {
     number: 2,
     version: `${BASE_SHA}:${SUCCESSOR_SHA}`,
-    base: "dev",
+    base: "main",
     baseSha: BASE_SHA,
     headRef: "feature/successor",
     head: SUCCESSOR_SHA,
@@ -1111,7 +1111,7 @@ function pullClosureEvidence(): CleanEvidence {
   return {
     repository: "marius-patrik/example",
     defaultBranch: "main",
-    observedRefs: { main: MAIN_SHA, dev: BASE_SHA },
+    observedRefs: { main: BASE_SHA },
     branches: [],
     localBranches: [],
     orphanRefs: [],
@@ -1120,7 +1120,7 @@ function pullClosureEvidence(): CleanEvidence {
       {
         number: 1,
         version: `${BASE_SHA}:${SOURCE_SHA}`,
-        base: "dev",
+        base: "main",
         baseSha: BASE_SHA,
         headRef: "feature/source",
         head: SOURCE_SHA,
@@ -1132,7 +1132,7 @@ function pullClosureEvidence(): CleanEvidence {
       {
         number: 2,
         version: `${BASE_SHA}:${SUCCESSOR_SHA}`,
-        base: "dev",
+        base: "main",
         baseSha: BASE_SHA,
         headRef: "feature/successor",
         head: SUCCESSOR_SHA,
@@ -1212,7 +1212,7 @@ function pullClosureMutationVersion(state: { sourceHead: string; sourceState: st
     body: "Superseded by: #2",
     headRef: "feature/source",
     headSha: state.sourceHead,
-    baseRef: "dev",
+    baseRef: "main",
     baseSha: BASE_SHA,
     sameRepository: true,
     trustedActor: false,
@@ -1307,7 +1307,7 @@ function artifactActionEvidence(): CleanEvidence {
   return {
     repository: "marius-patrik/example",
     defaultBranch: "main",
-    observedRefs: { main: MAIN_SHA, dev: ARTIFACT_BASE },
+    observedRefs: { main: ARTIFACT_BASE },
     branches: [],
     localBranches: [],
     orphanRefs: [],
@@ -1324,7 +1324,7 @@ function artifactActionEvidence(): CleanEvidence {
       path: "debug.log",
       blobSha: ARTIFACT_BLOB,
       mode: "100644",
-      base: "dev",
+      base: "main",
       baseSha: ARTIFACT_BASE,
       branch: `darkfactory/clean-artifact-${artifactBranchSuffix()}`,
       state: "needed"
@@ -1355,13 +1355,13 @@ function artifactGithub(state: ReturnType<typeof artifactState>): OperatorGitHub
     user: TRUSTED_ACTOR,
     auto_merge: state.pull?.auto_merge ?? null,
     head: { ref: branch, sha: ARTIFACT_HEAD, repo: { name: "example", owner: { login: "marius-patrik" } } },
-    base: { ref: "dev", sha: ARTIFACT_BASE },
+    base: { ref: "main", sha: ARTIFACT_BASE },
     updated_at: "2026-07-16T12:00:00Z"
   });
   return {
     async request(route, parameters) {
       if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") {
-        if (parameters.ref === "heads/dev") return { data: { object: { sha: state.baseSha } } };
+        if (parameters.ref === "heads/main") return { data: { object: { sha: state.baseSha } } };
         if (parameters.ref === `heads/${branch}` && state.branchHead) return { data: { object: { sha: state.branchHead } } };
         throw Object.assign(new Error("missing"), { status: 404 });
       }
@@ -1415,9 +1415,9 @@ function artifactGithub(state: ReturnType<typeof artifactState>): OperatorGitHub
 function managedLabelEvidence(): CleanEvidence {
   const finding = { id: "label-df-old-orphan", category: "repository hygiene", severity: "warning", repairClass: "pr" as const, message: "Managed label `df:old` is absent from the canonical taxonomy.", evidence: [], fingerprint: "b".repeat(64) };
   return {
-    repository: "marius-patrik/example", defaultBranch: "main", observedRefs: { dev: ARTIFACT_BASE }, branches: [], localBranches: [], orphanRefs: [], detachedWorktrees: [], pullRequests: [], issues: [],
+    repository: "marius-patrik/example", defaultBranch: "main", observedRefs: { main: ARTIFACT_BASE }, branches: [], localBranches: [], orphanRefs: [], detachedWorktrees: [], pullRequests: [], issues: [],
     reviewFindings: [finding], pullRequestFingerprint: "prs-label-v1", issueLaneFingerprint: "issues-label-v1", prdFingerprint: "prd-v1",
-    managedLabels: [{ findingId: finding.id, findingFingerprint: finding.fingerprint, name: "df:old", color: "abcdef", description: "old label", policyPath: ".agents/labels.json", policyBlob: "3".repeat(40), policyRef: "dev", policyRevision: ARTIFACT_BASE }]
+    managedLabels: [{ findingId: finding.id, findingFingerprint: finding.fingerprint, name: "df:old", color: "abcdef", description: "old label", policyPath: ".agents/labels.json", policyBlob: "3".repeat(40), policyRef: "main", policyRevision: ARTIFACT_BASE }]
   };
 }
 
@@ -1557,7 +1557,6 @@ async function createCleanWorktreeFixture(): Promise<{
   const head = git(root, ["rev-parse", "HEAD"]).trim();
   const tree = git(root, ["rev-parse", "HEAD^{tree}"]).trim();
   git(root, ["update-ref", "refs/remotes/origin/main", head]);
-  git(root, ["branch", "dev", head]);
   git(root, ["branch", "cleanup", head]);
   git(root, ["branch", "alternate", head]);
   git(root, ["worktree", "add", linked, "cleanup"]);

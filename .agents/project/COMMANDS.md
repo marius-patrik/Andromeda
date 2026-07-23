@@ -70,7 +70,7 @@ Explicit temporary or live state commands must always set all three roots:
 ANDROMEDA_HOME=/absolute/.agents \
 ANDROMEDA_USER_HOME=/absolute/user-home \
 ANDROMEDA_ROOT=/absolute/Andromeda \
-  bun run agents -- state doctor
+  andromeda state doctor
 ```
 
 Never run tests with the personal state root unless the test is an intentional

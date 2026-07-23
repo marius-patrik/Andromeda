@@ -60,7 +60,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: df-verification-target
-          path: .darkfactory-verification
+          path: .agents-verification
           github-token: ${{ github.token }}
           run-id: ${{ github.event.workflow_run.id }}
 
@@ -80,7 +80,6 @@ jobs:
         env:
           DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
           DF_CONTROL_REPO: marius-patrik/DarkFactory
-          DF_VERIFICATION_TARGET_FILE: .darkfactory-verification/target.json
+          DF_VERIFICATION_TARGET_FILE: .agents-verification/target.json
           DF_TRIGGER: ${{ github.event_name }}
-          DF_DATA_REPO: marius-patrik/darkfactory-data
         run: node .github/scripts/df-verify.mjs

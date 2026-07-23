@@ -201,10 +201,13 @@ test("workflow evidence is fetched only for active trusted workflow names", asyn
 test("shared GitHub transport accepts the rerun endpoint's successful empty 201 response", async () => {
   const originalFetch = globalThis.fetch;
   const calls: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(input), init });
-    return new Response(null, { status: 201 });
-  };
+  globalThis.fetch = Object.assign(
+    async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return new Response(null, { status: 201 });
+    },
+    { preconnect() {} }
+  );
   try {
     const gh = githubClientModule.createGithubClient("test-token", "empty-rerun-response-test");
     const result = await gh.request("POST", "/repos/marius-patrik/DarkFactory/actions/runs/5012/rerun");
@@ -286,7 +289,7 @@ test("Autoreview recovery lifecycle-filters code repositories, reruns the exact 
       { owner: "marius-patrik", repo: "Andromeda" },
       { owner: "marius-patrik", repo: "private-data" }
     ],
-    dataRepositories: ["marius-patrik/private-data", "marius-patrik/darkfactory-data"],
+    dataRepositories: ["marius-patrik/private-data"],
     now: Date.parse("2026-07-16T12:00:00Z"),
     async writeLedger(kind: string, target: string, payload: any) { ledgers.push({ kind, target, payload }); }
   });
@@ -881,7 +884,7 @@ test("active recovery workflows bind trusted main, Agent OS, scoped tokens, exac
   assert.match(recovery, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(recovery, /bin\\andromeda\.ps1/);
   assert.match(recovery, /permission-actions: write/);
-  assert.match(recovery, /repositories: darkfactory-data[\s\S]*permission-contents: write/);
+  assert.match(recovery, /repositories: private-data[\s\S]*permission-contents: write/);
   assert.match(recovery, /df-autoreview-recovery\.mjs/);
   assert.match(recovery, /name: Upload sanitized recovery receipt[\s\S]*if: always\(\)[\s\S]*if-no-files-found: ignore/);
   assert.doesNotMatch(recovery, /hashFiles\('autoreview-recovery-receipt\.json'\)/);

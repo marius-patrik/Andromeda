@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   WORK_LABELS,
   assertAllowedRepo,
   checksAreGreen,
@@ -172,7 +171,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 async function main() {
   const token = requiredEnv("DARK_FACTORY_TOKEN");
   const controlRepo = parseRepo(requiredEnv("DF_CONTROL_REPO"));
-  const dataRepo = DARK_FACTORY_DATA_REPO;
   const trigger = process.env.DF_TRIGGER ?? "unknown";
   const maxRounds = parseMaxRounds(process.env.DF_MAX_FIX_ROUNDS);
   const gh = createGithubClient(token, "darkfactory-fix");
@@ -246,7 +244,7 @@ async function main() {
   }
 
   try {
-    const written = await writeRunLedger(gh, dataRepo, "df-fix", repoName(controlRepo), ledger);
+    const written = await writeRunLedger(gh, "df-fix", repoName(controlRepo), ledger);
     console.log(`DarkFactory ledger written to ${written.repository}/${written.path}`);
   } catch (error) {
     console.warn(sanitize(`DarkFactory ledger warning: ${error.message || String(error)}`, token));

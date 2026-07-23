@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // @ts-ignore Script helpers are native ESM workflow files, not built TypeScript modules.
 const dfLib: any = await import("../../../scripts/df-lib.mjs");
@@ -60,6 +62,111 @@ const {
   considerPullRequest: considerSweepPullRequest,
   verifyDevMergeRequest
 } = dfSweep;
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+
+async function listFilesRecursively(root: string): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const absolute = resolve(root, entry.name);
+    if (entry.isDirectory()) files.push(...await listFilesRecursively(absolute));
+    else if (entry.isFile()) files.push(absolute);
+  }
+  return files;
+}
+
+test("live managed payloads contain no retired repository, token, or launcher authority", async () => {
+  const liveFiles = new Set<string>();
+  for (const packageRoot of [repositoryRoot, resolve(repositoryRoot, "src/bot")]) {
+    const manifestPath = resolve(packageRoot, ".agents/managed-repository.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    for (const relativePath of [...manifest.packageFiles, ...manifest.requiredFiles]) {
+      liveFiles.add(resolve(packageRoot, relativePath));
+    }
+  }
+  for (const templateRoot of [
+    resolve(repositoryRoot, "templates/darkfactory-templates/.agents"),
+    resolve(repositoryRoot, "templates/darkfactory-templates/.github/scripts"),
+    resolve(repositoryRoot, "templates/darkfactory-templates/.github/workflows")
+  ]) {
+    for (const filePath of await listFilesRecursively(templateRoot)) liveFiles.add(filePath);
+  }
+
+  const retiredPatterns = [
+    /marius-patrik\/(?:darkfactory-data|andromeda-data)\b/i,
+    /\b(?:DARK_FACTORY_DATA_REPO|DF_DATA_REPO|AGENT_OS_DATA_REPO)\b/,
+    /\bagents\.ps1\b/i
+  ];
+  for (const filePath of liveFiles) {
+    const content = await readFile(filePath, "utf8");
+    for (const pattern of retiredPatterns) {
+      assert.doesNotMatch(content, pattern, filePath);
+    }
+  }
+});
+
+test("active policy consumers and generated manifests share the .agents authority", async () => {
+  const policyPath = /\.darkfactory[\\/](?:autoreview-policy|branching-policy|data-repository-policy|enforcement-rules|installer-policy|issue-draft-policy|labels|managed-repos|managed-repository|model-policy|orchestration|release-conventions|release-policy|submodule-policy|trigger-policy)\b/i;
+  const liveRoots = [
+    resolve(repositoryRoot, "scripts"),
+    resolve(repositoryRoot, "src/bot/.github/scripts"),
+    resolve(repositoryRoot, "templates")
+  ];
+  for (const liveRoot of liveRoots) {
+    for (const filePath of await listFilesRecursively(liveRoot)) {
+      if (!/\.(?:[cm]?[jt]s|json|ya?ml|md)$/.test(filePath)) continue;
+      assert.doesNotMatch(await readFile(filePath, "utf8"), policyPath, filePath);
+    }
+  }
+
+  for (const name of ["darkfactory-templates", "repo", "web", "cli", "bot"]) {
+    const templateRoot = resolve(repositoryRoot, "templates", name);
+    const entries = await readdir(templateRoot);
+    assert.ok(entries.includes(".agents"), `${name} must publish .agents policy authority`);
+    assert.ok(!entries.includes(".darkfactory"), `${name} must not publish retired .darkfactory policy authority`);
+    const manifest = JSON.parse(await readFile(resolve(templateRoot, ".agents/managed-repository.json"), "utf8"));
+    assert.ok(Array.isArray(manifest.requiredFiles), `${name} managed manifest must declare requiredFiles`);
+    assert.ok(manifest.requiredFiles.includes(".agents/managed-repository.json"), `${name} manifest must require itself at .agents`);
+    assert.ok(manifest.requiredFiles.every((filePath: unknown) =>
+      typeof filePath === "string" && !filePath.startsWith(".darkfactory/")
+    ), `${name} manifest must not require retired .darkfactory paths`);
+  }
+});
+
+test("published CI checkouts preserve full fold provenance history", async () => {
+  for (const workflowPath of [
+    resolve(repositoryRoot, ".github/workflows/ci.yml"),
+    resolve(repositoryRoot, "src/bot/.github/workflows/ci.yml")
+  ]) {
+    const source = await readFile(workflowPath, "utf8");
+    const checkoutCount = [...source.matchAll(/uses:\s*actions\/checkout@/g)].length;
+    const fullHistoryCount = [...source.matchAll(/fetch-depth:\s*0(?:\s|$)/g)].length;
+    assert.ok(checkoutCount > 0, `${workflowPath} must check out repository history`);
+    assert.equal(
+      fullHistoryCount,
+      checkoutCount,
+      `${workflowPath} must fetch complete history for every checkout`
+    );
+    assert.doesNotMatch(source, /fetch-depth:\s*[1-9][0-9]*/, workflowPath);
+  }
+});
+
+test("df-lib resolves managed authority relative to each installed payload, not process cwd", async () => {
+  const payloads = [
+    resolve(repositoryRoot, "scripts/df-lib.mjs"),
+    resolve(repositoryRoot, "src/bot/.github/scripts/df-lib.mjs"),
+    resolve(repositoryRoot, "templates/darkfactory-templates/.github/scripts/df-lib.mjs")
+  ];
+  for (const filePath of payloads) {
+    const source = await readFile(filePath, "utf8");
+    assert.match(source, /MANAGED_REPOSITORY_CONFIG_FILE\s*=\s*path\.resolve\(/, filePath);
+    assert.doesNotMatch(source, /readFileSync\(\s*path\.resolve\(\s*process\.cwd\(\)/, filePath);
+    const module: any = await import(`${pathToFileURL(filePath).href}?module-relative-authority`);
+    assert.equal(module.ANDROMEDA_DATA_REPO, "marius-patrik/private-data");
+    assert.equal(module.DARK_FACTORY_LEDGER_PATH, "darkfactory-data/runs");
+  }
+});
 
 function managedProtection(overrides: Record<string, unknown> = {}) {
   return {
@@ -751,7 +858,7 @@ test("successful dev-merge issue convergence is not undone by ledger failure", a
           mutations.push(`${method} ${pathName}`);
           return {};
         }
-        if (pathName.includes("/repos/marius-patrik/darkfactory-data/contents/")) {
+        if (pathName.includes("/repos/marius-patrik/private-data/contents/darkfactory-data/runs/")) {
           throw new Error("ledger unavailable");
         }
         throw new Error(`unexpected mocked request: ${method} ${pathName}`);
@@ -1014,7 +1121,7 @@ test("repository doctor workflow schedules trusted diagnosis with explicit repor
   assert.equal(targetToken.with["permission-pull-requests"], "read");
   assert.equal(targetToken.with["permission-secrets"], "read");
   assert.equal(targetToken.with["permission-statuses"], "read");
-  assert.equal(ledgerToken.with.repositories, "darkfactory-data");
+  assert.equal(ledgerToken.with.repositories, "private-data");
   assert.equal(ledgerToken.with["permission-contents"], "write");
   assert.match(ledgerToken.if, /schedule.*push.*write_issues/);
   assert.match(doctorStep.env.DF_LEDGER_TOKEN, /ledger-token\.outputs\.token/);
@@ -1325,7 +1432,7 @@ test("df-work Windows bootstrap avoids POSIX shell and path assumptions", async 
 
   assert.doesNotMatch(workflow, /\b(?:bash|sh)\b/i);
   assert.doesNotMatch(workflow, /\[\[|command -v|mkdir -p|cygpath|wslpath/);
-  assert.match(workflow, /New-Item -ItemType Directory -Path \.darkfactory-verification -Force/);
+  assert.match(workflow, /New-Item -ItemType Directory -Path \.agents-verification -Force/);
   assert.match(workflow, /node --experimental-strip-types darkfactory-control\/\.github\/scripts\/df-work\.mjs/);
 });
 
@@ -2164,9 +2271,9 @@ test("df-verify workflow chains worker completion into trusted verification", as
   assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
   assert.match(workflow, /actions\/download-artifact@v4/);
   assert.match(workflow, /run-id: \$\{\{ github\.event\.workflow_run\.id \}\}/);
-  assert.match(workflow, /DF_VERIFICATION_TARGET_FILE: \.darkfactory-verification\/target\.json/);
+  assert.match(workflow, /DF_VERIFICATION_TARGET_FILE: \.agents-verification\/target\.json/);
   assert.doesNotMatch(workflow, /workflow_run\.inputs/);
-  assert.match(workflow, /DF_DATA_REPO: marius-patrik\/darkfactory-data/);
+  assert.doesNotMatch(workflow, /DF_DATA_REPO/);
   assert.match(workflow, /node \.github\/scripts\/df-verify\.mjs/);
 });
 
@@ -2223,14 +2330,19 @@ test("parseWorkerClaim normalizes provider ledger fields", () => {
   assert.deepEqual(claim.usage, { inputTokens: 10, outputTokens: 5, totalTokens: 15 });
 });
 
-test("verified worker state is explicit and ledger reads reject Agent OS state", async () => {
+test("verified worker state is explicit and ledger reads use only manifest authority", async () => {
   assert.equal(isVerifiedWorkerIssue({ labels: [{ name: "df:done" }] }), true);
   assert.equal(isVerifiedWorkerIssue({ labels: [{ name: "df:running" }] }), false);
 
+  let requested = "";
   await assert.rejects(
-    readLatestRunLedger({}, "marius-patrik/agents-data", "df-work", "marius-patrik/example"),
-    /marius-patrik\/darkfactory-data/
+    readLatestRunLedger({ request: async (_method: string, requestPath: string) => {
+      requested = requestPath;
+      throw new Error("fixture stop");
+    } }, "df-work", "marius-patrik/example"),
+    /fixture stop/
   );
+  assert.equal(requested, "/repos/marius-patrik/private-data/contents/darkfactory-data/runs/marius-patrik/example");
 });
 
 test("latest ledger switches from the capped Contents listing to exact Git-tree evidence", async () => {
@@ -2239,7 +2351,8 @@ test("latest ledger switches from the capped Contents listing to exact Git-tree 
     type: "file"
   }));
   const trees = new Map([
-    ["root-tree", [{ path: "runs", type: "tree", sha: "runs-tree" }]],
+    ["root-tree", [{ path: "darkfactory-data", type: "tree", sha: "ledger-root-tree" }]],
+    ["ledger-root-tree", [{ path: "runs", type: "tree", sha: "runs-tree" }]],
     ["runs-tree", [{ path: "marius-patrik", type: "tree", sha: "owner-tree" }]],
     ["owner-tree", [{ path: "example", type: "tree", sha: "repo-tree" }]],
     ["repo-tree", [{ path: "2026-07-16T12-00-00-000Z-df-work.json", type: "blob", sha: "ledger-blob" }]]
@@ -2247,12 +2360,12 @@ test("latest ledger switches from the capped Contents listing to exact Git-tree 
   const gh = {
     request: async (method: string, requestPath: string) => {
       assert.equal(method, "GET");
-      if (requestPath.endsWith("/contents/runs/marius-patrik/example")) return stale;
+      if (requestPath.endsWith("/contents/darkfactory-data/runs/marius-patrik/example")) return stale;
       if (requestPath.endsWith("/git/ref/heads/main")) return { object: { sha: "main-commit" } };
       if (requestPath.endsWith("/git/commits/main-commit")) return { tree: { sha: "root-tree" } };
       const treeSha = requestPath.split("/git/trees/")[1];
       if (treeSha && trees.has(treeSha)) return { truncated: false, tree: trees.get(treeSha) };
-      if (requestPath.endsWith("/contents/runs/marius-patrik/example/2026-07-16T12-00-00-000Z-df-work.json")) {
+      if (requestPath.endsWith("/contents/darkfactory-data/runs/marius-patrik/example/2026-07-16T12-00-00-000Z-df-work.json")) {
         return { type: "file", encoding: "base64", content: Buffer.from(JSON.stringify({ status: "fresh" })).toString("base64") };
       }
       throw new Error(`unexpected ${method} ${requestPath}`);
@@ -2260,7 +2373,7 @@ test("latest ledger switches from the capped Contents listing to exact Git-tree 
   };
 
   assert.deepEqual(
-    await readLatestRunLedger(gh, "marius-patrik/darkfactory-data", "df-work", "marius-patrik/example"),
+    await readLatestRunLedger(gh, "df-work", "marius-patrik/example"),
     { status: "fresh" }
   );
 });
@@ -2277,7 +2390,7 @@ test("latest ledger fails closed when capped directory tree evidence is truncate
   };
 
   await assert.rejects(
-    readLatestRunLedger(gh, "marius-patrik/darkfactory-data", "df-work", "marius-patrik/example"),
+    readLatestRunLedger(gh, "df-work", "marius-patrik/example"),
     /truncated or malformed/
   );
 });
@@ -2532,10 +2645,10 @@ test("product truth forbids manual readiness and unprotected direct-merge fallba
 
 test("df-sweep evaluates enforcement rules before merge", async () => {
   const repository = { owner: "marius-patrik", repo: "active" };
-  const pull = workerPull({ number: 200, checkConclusion: "SUCCESS", author: "darkfactory-agent" });
+  const pull = workerPull({ number: 200, checkConclusion: "SUCCESS", author: "darkfactory-agent", baseRefName: "dev" });
   const enforcementRules = {
     schemaVersion: 1,
-    rules: [{ id: "work-PRs-target-dev", enabled: true, severity: "block", parameters: { defaultBranch: "main" } }]
+    rules: [{ id: "work-PRs-target-main", enabled: true, severity: "block", parameters: { defaultBranch: "main" } }]
   };
   const calls: Array<{ method: string; pathName: string; body?: any }> = [];
 
@@ -2561,7 +2674,7 @@ test("df-sweep evaluates enforcement rules before merge", async () => {
 
   assert.equal(result.action, "skip");
   assert.equal(result.reason, "enforcement-rules");
-  assert.ok(result.findings.some((finding: { rule: string }) => finding.rule === "work-PRs-target-dev"));
+  assert.ok(result.findings.some((finding: { rule: string }) => finding.rule === "work-PRs-target-main"));
   assert.equal(calls.some((call) => call.method === "PUT" && call.pathName === "/repos/marius-patrik/active/pulls/200/merge"), false);
 });
 
@@ -2588,6 +2701,7 @@ function workerPull(options: {
   includeAutoreview?: boolean;
   labels?: Array<{ name: string }>;
   author?: string;
+  baseRefName?: string;
 }) {
   const statusCheckRollup = [
     {
@@ -2614,7 +2728,7 @@ function workerPull(options: {
     author: { __typename: "Bot", login: options.author || "darkfactory-agent" },
     headRefName: `df/${options.number}-worker`,
     headRepository: { owner: { login: "marius-patrik" }, name: "active" },
-    baseRefName: "dev",
+    baseRefName: options.baseRefName || "main",
     mergeable: "MERGEABLE",
     isDraft: false,
     createdAt: "2026-07-01T00:00:00.000Z",

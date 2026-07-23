@@ -117,7 +117,7 @@ async function withFixture(run: (fixture: { agentsHome: string; packageRoot: str
   try {
     await mkdir(join(agentsHome, "bin"), { recursive: true });
     await mkdir(packageRoot, { recursive: true });
-    await writeFile(join(agentsHome, "bin", "agents.ps1"), "# fixture\n");
+    await writeFile(join(agentsHome, "bin", "andromeda.ps1"), "# fixture\n");
     await writeFile(join(packageRoot, "agent.package.json"), "{}\n");
     await writeFile(join(packageRoot, "package.json"), "{}\n");
     await run({ agentsHome, packageRoot });
@@ -140,7 +140,7 @@ function fixtureRunner(
 ): MachineProcessRunner {
   let runnerConverged = false;
   return (command, args) => {
-    const normalized = [command, ...args.map((arg) => arg.includes("agents.ps1") ? "launcher" : arg)].join(" ");
+    const normalized = [command, ...args.map((arg) => arg.includes("andromeda.ps1") ? "launcher" : arg)].join(" ");
     calls.push(normalized);
     if (command === "git" && args[0] === "rev-parse") return resultText(`${options.packageHead || LANDED_REVISION}\n`);
     if (command === "git" && args[0] === "status") return resultText(options.packageDirty ? " M src/cli.ts\n" : "");

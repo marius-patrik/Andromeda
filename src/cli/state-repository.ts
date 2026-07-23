@@ -18,8 +18,25 @@ const REQUIRED_CONTRACT_FILES = [".gitignore", "agent.package.json", "README.md"
 const ALLOWED_TRACKED_ROOT_FILES = new Set([
   ".gitignore", "agent.package.json", "agents.md", "package-lock.json", "package.json", "readme.md",
 ]);
+const ALLOWED_TRACKED_AGENT_POLICY_FILES = new Set([
+  ".agents/branching-policy.md",
+  ".agents/enforcement-rules.json",
+  ".agents/installer-policy.json",
+  ".agents/labels.json",
+  ".agents/managed-repos.json",
+  ".agents/managed-repository.json",
+  ".agents/orchestration.json",
+]);
 const ALLOWED_TRACKED_STATIC_ROOTS = new Set([
-  ".agents", ".github", "context", "managed-repository", "research", "scripts", "wiki",
+  ".github", "context", "managed-repository", "research", "scripts", "wiki",
+]);
+const ALLOWED_TRACKED_FOLDED_ROOTS = new Set([
+  "darkfactory-data", "rommie",
+]);
+const ALLOWED_TRACKED_ARCHIVED_ROMMIE_FILES = new Set([
+  "rommie/skills/memory/skill.md",
+  "rommie/skills/memory/agents/openai.yaml",
+  "rommie/skills/memory/references/layers.md",
 ]);
 const SENSITIVE_TRACKED_SEGMENTS = new Set([
   "auth", "binaries", "cache", "caches", "capabilities", "capability", "clis",
@@ -29,10 +46,8 @@ const SENSITIVE_TRACKED_SEGMENTS = new Set([
   "tokens", "transcripts",
 ]);
 
-function sensitiveTrackedPath(file: string): boolean {
-  const segments = file.toLowerCase().split("/");
-  const leaf = segments.at(-1) ?? "";
-  if (segments.slice(0, -1).some((segment) => SENSITIVE_TRACKED_SEGMENTS.has(segment))) return true;
+function secretLikeTrackedLeaf(file: string): boolean {
+  const leaf = file.toLowerCase().split("/").at(-1) ?? "";
   return (
     /^\.env(?:\..+)?$/.test(leaf) ||
     /^(?:auth|credential|credentials|key|keys|secret|secrets|token|tokens)(?:[._-].*)?\.json$/.test(leaf) ||
@@ -40,15 +55,31 @@ function sensitiveTrackedPath(file: string): boolean {
   );
 }
 
+function sensitiveTrackedPath(file: string): boolean {
+  const segments = file.toLowerCase().split("/");
+  return (
+    segments.slice(0, -1).some((segment) => SENSITIVE_TRACKED_SEGMENTS.has(segment)) ||
+    secretLikeTrackedLeaf(file)
+  );
+}
+
 function allowedTrackedFile(file: string): boolean {
   const canonicalCase = file.toLowerCase();
+  if (secretLikeTrackedLeaf(canonicalCase)) return false;
+  if (ALLOWED_TRACKED_ARCHIVED_ROMMIE_FILES.has(canonicalCase)) return true;
   if (sensitiveTrackedPath(canonicalCase)) return false;
   if (!canonicalCase.includes("/")) return ALLOWED_TRACKED_ROOT_FILES.has(canonicalCase);
-  if (canonicalCase.startsWith(".agents/")) return canonicalCase.startsWith("capabilities/.project/");
+  if (canonicalCase.startsWith(".agents/")) {
+    return (
+      ALLOWED_TRACKED_AGENT_POLICY_FILES.has(canonicalCase) ||
+      canonicalCase.startsWith(".agents/.project/")
+    );
+  }
   if (canonicalCase.startsWith("backups/")) {
     return /^backups\/events\/[a-z0-9][a-z0-9._-]{0,127}\/[a-f0-9]{64}\.bundle\.json$/.test(canonicalCase);
   }
-  return ALLOWED_TRACKED_STATIC_ROOTS.has(canonicalCase.split("/")[0]);
+  const root = canonicalCase.split("/", 1)[0];
+  return ALLOWED_TRACKED_STATIC_ROOTS.has(root) || ALLOWED_TRACKED_FOLDED_ROOTS.has(root);
 }
 
 export interface StateRepositoryStatus {

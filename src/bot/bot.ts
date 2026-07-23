@@ -170,11 +170,8 @@ export function createBot(options: BotOptions): App {
   });
 
   app.webhooks.on("pull_request.closed", async ({ octokit, payload }) => {
-    if (shouldDispatchDevMergeClosure(payload)) {
-      await dispatchDevMergeClosure(octokit, controlRepo, payload);
-    }
-    if (shouldDispatchReleaseConvergence(payload)) {
-      await dispatchReleaseConvergence(octokit, controlRepo, payload);
+    if (shouldDispatchWorkerMergeClosure(payload)) {
+      await dispatchWorkerMergeClosure(octokit, controlRepo, payload);
     }
   });
 
@@ -207,20 +204,20 @@ export function shouldDispatchForRunComment(payload: IssueCommentPayload): boole
   return DISPATCHABLE_ASSOCIATIONS.has(payload.comment.author_association);
 }
 
-export function shouldDispatchDevMergeClosure(payload: PullRequestPayload): boolean {
+export function shouldDispatchWorkerMergeClosure(payload: PullRequestPayload): boolean {
   return payload.pull_request.merged === true
-    && payload.pull_request.base?.ref === "dev"
+    && payload.pull_request.base?.ref === "main"
     && Number.isInteger(payload.pull_request.number)
     && payload.pull_request.number > 0
     && /^[0-9a-f]{40}$/i.test(payload.pull_request.merge_commit_sha ?? "");
 }
 
-export async function dispatchDevMergeClosure(
+export async function dispatchWorkerMergeClosure(
   octokit: GitHubRequester,
   controlRepo: ControlRepositoryRef,
   payload: PullRequestPayload
 ): Promise<void> {
-  if (!shouldDispatchDevMergeClosure(payload)) {
+  if (!shouldDispatchWorkerMergeClosure(payload)) {
     return;
   }
 
@@ -240,43 +237,14 @@ export async function dispatchDevMergeClosure(
       }
     });
 
-    console.log(`Dispatched dev-merge closure for ${targetRepo}#${payload.pull_request.number} at ${mergeSha}`);
+    console.log(`Dispatched worker-merge closure for ${targetRepo}#${payload.pull_request.number} at ${mergeSha}`);
   } catch (error) {
-    // Scheduled follow-through independently scans recent merged dev PRs, so a
+    // Scheduled follow-through independently scans recent merged main PRs, so a
     // transient event-bridge failure is recoverable and must not break webhook delivery.
     console.error(
-      `Failed to dispatch dev-merge closure for ${targetRepo}#${payload.pull_request.number}; scheduled recovery remains active:`,
+      `Failed to dispatch worker-merge closure for ${targetRepo}#${payload.pull_request.number}; scheduled recovery remains active:`,
       error
     );
-  }
-}
-
-export function shouldDispatchReleaseConvergence(payload: PullRequestPayload): boolean {
-  return payload.pull_request.merged === true
-    && ["main", "dev"].includes(payload.pull_request.base?.ref ?? "")
-    && Number.isInteger(payload.pull_request.number)
-    && payload.pull_request.number > 0
-    && /^[0-9a-f]{40}$/i.test(payload.pull_request.merge_commit_sha ?? "");
-}
-
-export async function dispatchReleaseConvergence(
-  octokit: GitHubRequester,
-  controlRepo: ControlRepositoryRef,
-  payload: PullRequestPayload
-): Promise<void> {
-  if (!shouldDispatchReleaseConvergence(payload)) return;
-  const targetRepo = `${payload.repository.owner.login}/${payload.repository.name}`;
-  try {
-    await octokit.request("POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", {
-      owner: controlRepo.owner,
-      repo: controlRepo.repo,
-      workflow_id: "df-release.yml",
-      ref: "main",
-      inputs: { repo: targetRepo, mode: "run" }
-    });
-    console.log(`Dispatched release convergence for ${targetRepo} after merged PR #${payload.pull_request.number}`);
-  } catch (error) {
-    console.error(`Failed to dispatch release convergence for ${targetRepo}; scheduled recovery remains active:`, error);
   }
 }
 

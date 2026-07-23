@@ -5,7 +5,6 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   WORK_LABELS,
   assertAllowedRepo,
   classifyWorkerBranchRefs,
@@ -51,7 +50,6 @@ const RESUME_BRANCH = process.env.DF_RESUME_BRANCH?.trim() || "";
 const RESUME_HEAD = process.env.DF_RESUME_HEAD?.trim().toLowerCase() || "";
 const IS_RESUME = (Number.isInteger(RESUME_PR_NUMBER) && RESUME_PR_NUMBER > 0) || RESUME_BRANCH.length > 0 || RESUME_HEAD.length > 0;
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
-const DATA_REPO = DARK_FACTORY_DATA_REPO;
 const GIT_BASIC_AUTH = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
 const gh = createGithubClient(TOKEN, "darkfactory-worker");
 
@@ -255,7 +253,6 @@ async function main() {
 
     ledger.agent_os.turn_ledger = await writeRunLedger(
       gh,
-      DATA_REPO,
       "df-work-model-turn",
       repoName(TARGET_REPO),
       {
@@ -433,18 +430,13 @@ function issueVersion(issue) {
 }
 
 async function resolveWorkBaseBranch(repository, defaultBranch, requestedBranch = "") {
-  if (requestedBranch) {
-    await ensureBranchExists(repository, requestedBranch);
-    return requestedBranch;
+  if (defaultBranch !== "main") {
+    throw new Error(`DarkFactory requires main as the target repository default branch; received '${defaultBranch || "missing"}'.`);
   }
-
-  try {
-    await ensureBranchExists(repository, "dev");
-    return "dev";
-  } catch (error) {
-    if (error.status === 404) return defaultBranch;
-    throw error;
-  }
+  const branch = requestedBranch || defaultBranch;
+  if (branch !== "main") throw new Error(`DarkFactory work must target main; received '${branch}'.`);
+  await ensureBranchExists(repository, "main");
+  return "main";
 }
 
 async function ensureBranchExists(repository, branch) {
@@ -993,7 +985,7 @@ function truncate(value, maxLength) {
 
 async function writeLedger(ledger) {
   try {
-    ledger.ledger = await writeRunLedger(gh, DATA_REPO, "df-work", repoName(TARGET_REPO), ledger);
+    ledger.ledger = await writeRunLedger(gh, "df-work", repoName(TARGET_REPO), ledger);
     console.log(`DarkFactory ledger written to ${ledger.ledger.repository}/${ledger.ledger.path}`);
   } catch (error) {
     console.warn(sanitize(`DarkFactory ledger warning: ${error.message || String(error)}`, TOKEN));

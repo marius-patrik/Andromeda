@@ -4,7 +4,7 @@
 - `.github/scripts/` — deterministic DarkFactory planning and orchestration logic
 - `.github/workflows/` — CI, synchronization, orchestration, and
   provider-agnostic DarkFactory Autoreview jobs
-- `.darkfactory/` — repository policy, managed-repository registry, and scheduler
+- `.agents/` — repository policy, managed-repository registry, and scheduler
   configuration
 - `templates/` — repository templates that carry only project-local agent context
 - `prompts/` — versioned, provider-agnostic prompt/skill library (roles, skills,
@@ -13,4 +13,4 @@
 - `tests/` — TypeScript and workflow-policy regression suite
 - `.agents/project/` — DarkFactory-specific context only
 
-Shared Agent OS state and capabilities are installed once under `$AGENTS_HOME`.
+Shared Agent OS state and capabilities are installed once under `$ANDROMEDA_HOME`.

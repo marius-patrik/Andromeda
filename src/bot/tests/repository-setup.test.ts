@@ -51,6 +51,7 @@ test("checkRepositorySetup returns no comment when managed setup is current", as
       ".agents/labels.json": "{}\n",
       ".agents/managed-repos.json": "{}\n",
       ".agents/managed-repository.json": "{}\n",
+      ".agents/ledger-migration.json": "{}\n",
       ".agents/model-policy.json": "{}\n",
       ".agents/orchestration.json": "{}\n",
       ".agents/trigger-policy.json": "{}\n",

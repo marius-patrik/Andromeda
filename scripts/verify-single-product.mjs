@@ -34,8 +34,8 @@ for (const relative of requiredLayout) {
 const nestedRepositoryMetadata = [
   // No config or state root belongs inside a component tree, in any era:
   // .agents is the current repository config root and the state root name,
-  // .andromeda the retired state root, .darkfactory the name every other
-  // managed repository still uses.
+  // .andromeda is the retired state root and .darkfactory is the retired
+  // managed-policy root. Neither belongs inside an implementation package.
   /^packages\/(?!\.project\/)(?:.*\/)?(?:\.agents|\.andromeda|\.darkfactory|docs)(?:\/|$)/i,
   /^packages\/(?!\.project\/)(?:.*\/)?(?:AGENTS|PRD)\.md$/i,
   // A component may carry exactly one contract README at its own root; anything

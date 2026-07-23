@@ -102,7 +102,7 @@ jobs:
           app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: marius-patrik
-          repositories: darkfactory-data
+          repositories: private-data
           permission-contents: write
 
       - name: Enumerate and dispatch exact-version recovery

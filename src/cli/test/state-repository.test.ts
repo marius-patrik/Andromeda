@@ -80,6 +80,103 @@ describe("private-data state repository", () => {
     }
   });
 
+  test("success: admits the exact private-data policy and folded repository paths", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-state-repository-admission-"));
+    try {
+      const state = await repositoryState(root);
+      const admitted = [
+        ".agents/branching-policy.md",
+        ".agents/enforcement-rules.json",
+        ".agents/installer-policy.json",
+        ".agents/labels.json",
+        ".agents/managed-repos.json",
+        ".agents/managed-repository.json",
+        ".agents/orchestration.json",
+        ".agents/.project/COMMANDS.md",
+        ".agents/.project/DECISIONS.md",
+        "darkfactory-data/runs/marius-patrik/Andromeda/result.json",
+        "rommie/README.md",
+        "rommie/skills/memory/SKILL.md",
+        "rommie/skills/memory/agents/openai.yaml",
+        "rommie/skills/memory/references/layers.md",
+      ];
+      for (const relative of admitted) {
+        const file = path.join(state.stateDir, ...relative.split("/"));
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, "fixture\n");
+      }
+      await git(state.stateDir, ["add", "--", ...admitted]);
+      await git(state.stateDir, ["commit", "-q", "-m", "admitted state authorities"]);
+
+      expect((await inspectStateRepository(state)).issues).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("edge input: rejects policy and folded-root lookalikes or nested variants", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-state-repository-lookalike-"));
+    try {
+      const state = await repositoryState(root);
+      const denied = [
+        ".agents/managed-repository.json.bak",
+        ".agents/project/STATUS.md",
+        ".agents/nested/managed-repository.json",
+        "darkfactory-data-copy/runs/result.json",
+        "rommie-copy/README.md",
+        "nested/darkfactory-data/runs/result.json",
+        "nested/rommie/README.md",
+        "rommie/skills/memory/SKILL.md/child.txt",
+        "rommie/skills/memory/agents/openai.yaml.bak",
+        "rommie/skills/memory/references/layers.md/child.txt",
+      ];
+      for (const relative of denied) {
+        const file = path.join(state.stateDir, ...relative.split("/"));
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, "fixture\n");
+      }
+      await git(state.stateDir, ["add", "-f", "--", ...denied]);
+      await git(state.stateDir, ["commit", "-q", "-m", "lookalike state authorities"]);
+
+      const issues = (await inspectStateRepository(state)).issues;
+      for (const relative of denied) {
+        expect(issues).toContain(`plaintext runtime state is tracked: ${relative}`);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("denied: keeps sensitive segments and malformed backup paths closed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "agents-state-repository-sensitive-"));
+    try {
+      const state = await repositoryState(root);
+      const sensitive = [
+        ".agents/.project/secrets/notes.md",
+        "darkfactory-data/secrets/token.json",
+        "rommie/providers/codex/config.json",
+        "rommie/skills/memory/agents/token.json",
+      ];
+      const malformedBackup = "backups/events/test-machine/not-a-hash.bundle.json";
+      for (const relative of [...sensitive, malformedBackup]) {
+        const file = path.join(state.stateDir, ...relative.split("/"));
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, "fixture\n");
+      }
+      await git(state.stateDir, ["add", "-f", "--", ...sensitive, malformedBackup]);
+      await git(state.stateDir, ["commit", "-q", "-m", "denied state paths"]);
+
+      const issues = (await inspectStateRepository(state)).issues;
+      for (const relative of sensitive) {
+        expect(issues).toContain(`plaintext runtime state is tracked: ${relative}`);
+      }
+      expect(issues).toContain(`plaintext runtime state is tracked: ${malformedBackup}`);
+      expect(issues).toContain(`invalid tracked state backup path: ${malformedBackup}`);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   test("backs up canonical events as one authenticated immutable Git bundle", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "agents-state-repository-"));
     try {

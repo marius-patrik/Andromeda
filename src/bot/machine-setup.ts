@@ -41,7 +41,7 @@ export async function convergeMachineRuntime(input: MachineConvergenceInput): Pr
   const platform = input.platform ?? process.platform;
   const agentsHome = exactDirectory(input.agentsHome, "ANDROMEDA_HOME");
   const packageRoot = exactDirectory(input.packageRoot, "DarkFactory package root");
-  const launcher = path.join(agentsHome, "bin", platform === "win32" ? "agents.ps1" : "agents");
+  const launcher = path.join(agentsHome, "bin", platform === "win32" ? "andromeda.ps1" : "andromeda");
   if (!existsSync(launcher)) throw new Error(`canonical Agent OS launcher is missing at ${launcher}`);
   if (!existsSync(path.join(packageRoot, "agent.package.json")) || !existsSync(path.join(packageRoot, "package.json"))) {
     throw new Error("DarkFactory package root is missing its trusted manifests");

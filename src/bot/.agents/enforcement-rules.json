@@ -9,12 +9,12 @@
       "description": "DarkFactory must never dispatch workers or merge follow-through actions into parked repositories."
     },
     {
-      "id": "work-PRs-target-dev",
+      "id": "work-PRs-target-main",
       "enabled": true,
       "severity": "block",
-      "description": "Worker pull requests must target the integration branch (dev) per the repo branching model.",
+      "description": "Worker pull requests must target the sole long-lived branch (main) per the trunk-based repository model.",
       "parameters": {
-        "defaultBranch": "dev"
+        "defaultBranch": "main"
       }
     },
     {

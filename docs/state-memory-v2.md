@@ -27,7 +27,7 @@ Each personal installation has one canonical provider root per CLI below
 `~/.agents/clis`. Physical Windows desktop roots may coexist only as declared,
 non-authoritative `app-owned` surfaces; bridges and standalone-only roots fail.
 
-The personal install exposes exactly one platform-native `agents` launcher.
+The personal install exposes exactly one platform-native `andromeda` launcher.
 Encrypted bundle exchange now proves deterministic per-machine merge,
 tombstone propagation, interruption recovery, and adversarial secret/path
 rejection. Adapter-native provider continuation remains conditional on each
@@ -328,7 +328,7 @@ start/end timestamps, result, and rollback instructions under
     checksum-registered, atomically installed, and injected with the one Rommie
     identity into every managed provider turn.
 11. The master director thread is imported as the first canonical orchestrator
-    session, and the installed boundary contains one platform-native `agents`
-    launcher (`agents` on POSIX, `agents.ps1` on Windows).
+    session, and the installed boundary contains one platform-native `andromeda`
+    launcher (`andromeda` on POSIX, `andromeda.ps1` on Windows).
 12. Exact Recovery parity was verified before removing the live `global`,
     `shared`, and multi-agent trees; the doctor rejects their reappearance.

@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   PLANNING_LABELS,
   WORK_LABELS,
   assertAllowedRepo,
@@ -35,7 +34,7 @@ import {
 } from "../../issue-spec.ts";
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const ORCHESTRATION_POLICY_PATH = ".darkfactory/orchestration.json";
+const ORCHESTRATION_POLICY_PATH = ".agents/orchestration.json";
 export const DASHBOARD_MARKER = "df-dashboard:orchestration";
 export const ASK_OWNER_MARKER = "dark-factory:orchestrator-ask-owner";
 export const RESUME_MARKER = "dark-factory:worker-resume";
@@ -85,7 +84,6 @@ export async function orchestrate(options) {
     policy: policyInput,
     triggerPolicy: triggerPolicyInput,
     loopEvidence: loopEvidenceInput,
-    submoduleStatuses: submoduleStatusesInput,
     readinessByRepository: readinessInput,
     writeLedger: shouldWriteLedger = true,
     updateDashboard: shouldUpdateDashboard = true,
@@ -225,18 +223,6 @@ export async function orchestrate(options) {
       loopEvidence = {};
     }
     const loopStatuses = projectLoopStatus(triggerPolicy, loopEvidence);
-    let submoduleStatuses = submoduleStatusesInput;
-    if (!Array.isArray(submoduleStatuses)) {
-      try {
-        submoduleStatuses = await collectSubmodulePointerStatuses(
-          gh,
-          plan.repositories.map((state) => state.repo)
-        );
-      } catch (error) {
-        warn(`DarkFactory submodule dashboard evidence warning: ${error.message || String(error)}`);
-        submoduleStatuses = [];
-      }
-    }
     await updateDashboardIssue(
       gh,
       controlRepo,
@@ -247,7 +233,6 @@ export async function orchestrate(options) {
       recoveries,
       trigger,
       loopStatuses,
-      submoduleStatuses,
       warn,
       log
     );
@@ -276,7 +261,7 @@ export async function collectRepositoryReadiness(gh, controlRepo, snapshots, opt
   let machineReceipt = options.machineReceipt;
   if (machineReceipt === undefined) {
     try {
-      machineReceipt = await readLatestRunLedger(gh, DARK_FACTORY_DATA_REPO, "repo-doctor", repoName(controlRepo));
+      machineReceipt = await readLatestRunLedger(gh, "repo-doctor", repoName(controlRepo));
     } catch (error) {
       machineReceipt = null;
     }
@@ -1639,11 +1624,11 @@ function askOwnerComment(repository, issue, escalation) {
   ].join("\n");
 }
 
-async function updateDashboardIssue(gh, controlRepo, policy, plan, dispatched, escalated, recoveries, trigger, loopStatuses = [], submoduleStatuses = [], warn = console.warn, log = console.log) {
+async function updateDashboardIssue(gh, controlRepo, policy, plan, dispatched, escalated, recoveries, trigger, loopStatuses = [], warn = console.warn, log = console.log) {
   try {
     await ensureLabels(gh, controlRepo, PLANNING_LABELS);
     const title = policy.dashboard.issueTitle;
-    const body = dashboardIssueBody(policy, plan, dispatched, escalated, recoveries, trigger, loopStatuses, submoduleStatuses);
+    const body = dashboardIssueBody(policy, plan, dispatched, escalated, recoveries, trigger, loopStatuses);
     const existing = await findDashboardIssue(gh, controlRepo);
     if (existing) {
       await gh.request("PATCH", `/repos/${repoName(controlRepo)}/issues/${existing.number}`, { title, body });
@@ -1678,7 +1663,7 @@ async function findDashboardIssue(gh, controlRepo) {
   return null;
 }
 
-function dashboardIssueBody(policy, plan, dispatched, escalated, recoveries, trigger, loopStatuses = [], submoduleStatuses = []) {
+function dashboardIssueBody(policy, plan, dispatched, escalated, recoveries, trigger, loopStatuses = []) {
   const updatedAt = new Date().toISOString();
   const rows = plan.repositories.length
     ? plan.repositories.map((state) => {
@@ -1698,21 +1683,6 @@ function dashboardIssueBody(policy, plan, dispatched, escalated, recoveries, tri
   const loopRows = loopStatuses.length
     ? loopStatusMarkdownRows(loopStatuses)
     : "| _unavailable_ | stale | never | n/a | `refs/heads/main` | `escalate:df:ask-owner` |";
-  const submoduleRows = submoduleStatuses.length
-    ? submoduleStatuses.map((status) => {
-      const parent = status.parent ? `\`${status.parent}\`` : "_unresolved_";
-      const gitlinkPath = status.path ? `\`${status.path}\`` : "_unresolved_";
-      const parentPointer = status.parentPointer ? `\`${status.parentPointer.slice(0, 12)}\`` : "n/a";
-      const childSha = status.childSha ? `\`${status.childSha.slice(0, 12)}\`` : "n/a";
-      const evidence = [
-        status.pointerUrl ? `[pointer](${status.pointerUrl})` : null,
-        status.childUrl ? `[child](${status.childUrl})` : null,
-        status.receiptUrl ? `[receipt](${status.receiptUrl})` : null
-      ].filter(Boolean).join(" / ") || "blocked before exact parent resolution";
-      return `| ${parent} | ${gitlinkPath} | ${status.state} | ${parentPointer} | \`${status.child}\` | ${childSha} | ${evidence} |`;
-    }).join("\n")
-    : "| _none_ | n/a | current | n/a | n/a | n/a | no pending pointer receipt |";
-
   return [
     `<!-- ${DASHBOARD_MARKER} -->`,
     "# DarkFactory L6 Orchestration Dashboard",
@@ -1755,12 +1725,6 @@ function dashboardIssueBody(policy, plan, dispatched, escalated, recoveries, tri
     "| --- | --- | --- | --- | --- | --- |",
     loopRows,
     "",
-    "## Submodule Pointer Convergence",
-    "",
-    "| Parent | Path | State | Parent pointer | Child | Verified child | Evidence |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-    submoduleRows,
-    "",
     "## Notes",
     "",
     "- `Running` = worker claimed success but verification against GitHub reality is pending.",
@@ -1768,72 +1732,6 @@ function dashboardIssueBody(policy, plan, dispatched, escalated, recoveries, tri
     "- Cross-repo waves, stream lanes, and concurrency caps are deterministic; AI tokens: 0.",
     "- Execution boundary: this is deterministic GitHub control-plane state; local worker turns run only through Agent OS."
   ].join("\n");
-}
-
-export async function collectSubmodulePointerStatuses(github, repositories) {
-  const statuses = [];
-  for (const repository of [...new Set(repositories)].sort()) {
-    let ledger;
-    try {
-      ledger = await readLatestRunLedger(github, DARK_FACTORY_DATA_REPO, "df-submodule-update", repository);
-    } catch (error) {
-      if (error.status === 404) continue;
-      throw error;
-    }
-    const status = submodulePointerStatusFromLedger(ledger, repository);
-    if (status) statuses.push(status);
-  }
-  return statuses;
-}
-
-export function submodulePointerStatusFromLedger(ledger, expectedTarget) {
-  const stateByStatus = new Map([
-    ["blocked", "blocked"],
-    ["waiting-for-validation", "pending"],
-    ["waiting-for-green", "pending"],
-    ["automerge-armed", "pending"],
-    ["release-dispatched", "merged"],
-    ["waiting-for-parent-release", "merged"],
-    ["released", "released"]
-  ]);
-  const state = stateByStatus.get(ledger?.status);
-  const evidence = ledger?.plan?.evidence;
-  if (ledger?.kind !== "df-submodule-update" || !state || !evidence) return null;
-  const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-  const pathPattern = /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/;
-  const shaPattern = /^[0-9a-f]{40}$/;
-  const target = String(expectedTarget || "");
-  const rawParent = String(evidence.parent || "");
-  const rawChild = String(evidence.child || "");
-  const rawPath = String(evidence.path || "");
-  const rawParentPointer = String(evidence.dev_pointer || "");
-  const rawChildSha = String(evidence.child_sha || "");
-  if (!repositoryPattern.test(target)
-      || (rawParent && !repositoryPattern.test(rawParent))
-      || !repositoryPattern.test(rawChild)
-      || (rawPath && !pathPattern.test(rawPath))
-      || (rawParentPointer && !shaPattern.test(rawParentPointer))
-      || (rawChildSha && !shaPattern.test(rawChildSha))) return null;
-
-  const parent = rawParent || null;
-  const path = rawPath || null;
-  const parentPointer = rawParentPointer || null;
-  const childSha = rawChildSha || null;
-  const targetMatches = parent
-    ? parent.toLowerCase() === target.toLowerCase()
-    : state === "blocked" && rawChild.toLowerCase() === target.toLowerCase();
-  if (!targetMatches) return null;
-  if (state !== "blocked" && (!parent || !path || !parentPointer || !childSha)) return null;
-  const receiptUrl = /^https:\/\/github\.com\/[A-Za-z0-9_.\/-]+$/.test(String(evidence.receipt || ""))
-    ? evidence.receipt
-    : null;
-  return {
-    parent, child: rawChild, path, state, parentPointer, childSha, receiptUrl,
-    pointerUrl: parent && parentPointer && path
-      ? `https://github.com/${parent}/tree/${parentPointer}/${path}`
-      : null,
-    childUrl: childSha ? `https://github.com/${rawChild}/commit/${childSha}` : null
-  };
 }
 
 export function compareReadyIssues(a, b) {
@@ -2121,13 +2019,11 @@ async function dispatchWorkerResume(gh, controlRepo, repository, issueNumber, in
 }
 
 async function resolveWorkBaseBranch(gh, repository, defaultBranch) {
-  try {
-    await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent("dev")}`);
-    return "dev";
-  } catch (error) {
-    if (error.status === 404) return defaultBranch;
-    throw error;
+  if (defaultBranch !== "main") {
+    throw new Error(`DarkFactory requires main as the target repository default branch; received '${defaultBranch || "missing"}'.`);
   }
+  await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/main`);
+  return "main";
 }
 
 async function blockIssueBeforeDispatch(gh, repository, issueNumber, baseBranch, mergePolicy) {
@@ -2179,7 +2075,7 @@ async function createIssueComment(gh, repository, issueNumber, body) {
 
 async function writeLedger(gh, controlRepo, ledger, warn = console.warn, log = console.log) {
   try {
-    const written = await writeRunLedger(gh, DARK_FACTORY_DATA_REPO, "df-orchestrate", repoName(controlRepo), ledger);
+    const written = await writeRunLedger(gh, "df-orchestrate", repoName(controlRepo), ledger);
     log(`DarkFactory ledger written to ${written.repository}/${written.path}`);
   } catch (error) {
     warn(`DarkFactory ledger warning: ${error.message || String(error)}`);

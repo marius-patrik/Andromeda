@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "description": "DarkFactory .agents repository registry for the single Agent OS product and its canonical data authority.",
+  "repositories": {
+    "marius-patrik/Andromeda": {
+      "state": "active",
+      "note": "Canonical Agent OS source, control repository, and product integration root."
+    },
+    "marius-patrik/private-data": {
+      "state": "active",
+      "note": "Canonical private Agent OS data, managed repository policy, and nested DarkFactory ledger source."
+    }
+  }
+}

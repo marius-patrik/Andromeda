@@ -1,10 +1,49 @@
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { validateAgentExecutionReceipt } from "./df-model-policy.mjs";
 
 export const API_ROOT = "https://api.github.com";
-export const AGENT_OS_DATA_REPO = "marius-patrik/Andromeda-data";
-export const DARK_FACTORY_DATA_REPO = "marius-patrik/darkfactory-data";
+export const MANAGED_REPOSITORY_CONFIG_PATH = ".agents/managed-repository.json";
+const MANAGED_REPOSITORY_CONFIG_FILE = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  MANAGED_REPOSITORY_CONFIG_PATH
+);
+
+export function validateManagedRepositoryAuthority(value) {
+  if (!isRecord(value) || value.schemaVersion !== 1) {
+    throw new Error(`${MANAGED_REPOSITORY_CONFIG_PATH} must be a schemaVersion 1 object.`);
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "ledgerRepo")) {
+    throw new Error(`${MANAGED_REPOSITORY_CONFIG_PATH} must not define retired ledgerRepo authority.`);
+  }
+  if (typeof value.dataRepo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.dataRepo)) {
+    throw new Error(`${MANAGED_REPOSITORY_CONFIG_PATH} must define one exact dataRepo authority.`);
+  }
+  if (value.ledgerPath !== "darkfactory-data/runs") {
+    throw new Error(`${MANAGED_REPOSITORY_CONFIG_PATH} must define ledgerPath darkfactory-data/runs.`);
+  }
+  return Object.freeze({ dataRepo: value.dataRepo, ledgerPath: value.ledgerPath });
+}
+
+export function loadManagedRepositoryAuthority(
+  filePath = MANAGED_REPOSITORY_CONFIG_FILE
+) {
+  let value;
+  try {
+    value = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Failed to read ${MANAGED_REPOSITORY_CONFIG_PATH}: ${error.message || String(error)}`);
+  }
+  return validateManagedRepositoryAuthority(value);
+}
+
+const MANAGED_REPOSITORY_AUTHORITY = loadManagedRepositoryAuthority();
+export const ANDROMEDA_DATA_REPO = MANAGED_REPOSITORY_AUTHORITY.dataRepo;
+export const DARK_FACTORY_LEDGER_PATH = MANAGED_REPOSITORY_AUTHORITY.ledgerPath;
 export const PARKED_REPOS = new Set([
   "marius-patrik/fabrica",
   "marius-patrik/skyagent",
@@ -13,7 +52,7 @@ export const PARKED_REPOS = new Set([
   "marius-patrik/lifequest",
   "marius-patrik/life-support"
 ]);
-export const MANAGED_REPOS_PATH = ".darkfactory/managed-repos.json";
+export const MANAGED_REPOS_PATH = ".agents/managed-repos.json";
 export const MANAGED_REPO_STATES = new Set(["active", "parked", "archived", "completed", "removed"]);
 export const TRUSTED_GATE_APP_ID = 15368;
 export const MANAGED_REQUIRED_CHECKS = Object.freeze(["Validate", "DarkFactory Autoreview"]);
@@ -852,13 +891,10 @@ export function extractClosingIssueNumbers(body, repositoryName = "") {
   return [...refs].filter((number) => Number.isInteger(number) && number > 0);
 }
 
-export async function writeRunLedger(gh, dataRepo, kind, targetRepoName, ledger) {
-  if (dataRepo !== DARK_FACTORY_DATA_REPO) {
-    throw new Error(`DarkFactory ledger writes require the canonical ${DARK_FACTORY_DATA_REPO} repository.`);
-  }
-  const repository = parseRepo(DARK_FACTORY_DATA_REPO);
+export async function writeRunLedger(gh, kind, targetRepoName, ledger) {
+  const repository = parseRepo(ANDROMEDA_DATA_REPO);
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const path = `runs/${targetRepoName}/${timestamp}-${kind}.json`;
+  const path = `${DARK_FACTORY_LEDGER_PATH}/${targetRepoName}/${timestamp}-${kind}.json`;
   const body = `${JSON.stringify({
     kind,
     target_repo: targetRepoName,
@@ -1065,12 +1101,9 @@ function encodePath(filePath) {
   return filePath.split("/").map(encodeURIComponent).join("/");
 }
 
-export async function readLatestRunLedger(gh, dataRepo, kind, targetRepoName) {
-  if (dataRepo !== DARK_FACTORY_DATA_REPO) {
-    throw new Error(`DarkFactory ledger reads require the canonical ${DARK_FACTORY_DATA_REPO} repository.`);
-  }
-  const repository = parseRepo(DARK_FACTORY_DATA_REPO);
-  const ledgerDir = `runs/${targetRepoName}`;
+export async function readLatestRunLedger(gh, kind, targetRepoName) {
+  const repository = parseRepo(ANDROMEDA_DATA_REPO);
+  const ledgerDir = `${DARK_FACTORY_LEDGER_PATH}/${targetRepoName}`;
   const response = await gh.request("GET", `/repos/${repoName(repository)}/contents/${encodePath(ledgerDir)}`);
   if (!Array.isArray(response)) {
     return null;

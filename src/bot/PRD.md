@@ -14,13 +14,13 @@ The manual workflow it absorbs is a human-driven orchestrator fanning out worker
 ## Identity and current state
 
 - GitHub App **mp-agents** (App ID 3827239), installed account-wide (`repository_selection: all`). Product workflows retain their required contents/actions/issues/PR write grants; repository doctor additionally requires read-only administration, checks, secrets, and commit-status visibility and downscopes each minted token. Secrets `DARK_FACTORY_APP_ID` / `DARK_FACTORY_PRIVATE_KEY` are configured; provider credentials remain under canonical Agent OS authority.
-- Existing assets: webhook server (`src/bot.ts`, `src/server.ts`), managed-file sync (`src/managed-sync.ts`, `src/managed-files.ts`), provider-agnostic DarkFactory Autoreview, repository doctor, and repository-setup enforcement. Managed sync resolves the sole canonical Andromeda-data authority at `$AGENTS_HOME`; unrelated data registrations may coexist without claiming that repository or path.
-- Runtime strategy: GitHub Actions owns deterministic schedule, dispatch, and control-repository events. The evaluator alone applies or revokes managed-repository `df:ready`; `/df run` requests that same evaluation and never writes readiness directly. The orchestrator or webhook path picks up the derived state without exposing control-repository secrets. Model-backed workers run only on trusted `df-local` self-hosted runners through the canonical `agents` launcher and Agent OS state.
+- Existing assets: webhook server (`src/bot.ts`, `src/server.ts`), managed-file sync (`src/managed-sync.ts`, `src/managed-files.ts`), provider-agnostic DarkFactory Autoreview, repository doctor, and repository-setup enforcement. Managed sync resolves the sole canonical data repository from `.agents/managed-repository.json.dataRepo`; unrelated data registrations may coexist without claiming that repository or path.
+- Runtime strategy: GitHub Actions owns deterministic schedule, dispatch, and control-repository events. The evaluator alone applies or revokes managed-repository `df:ready`; `/df run` requests that same evaluation and never writes readiness directly. The orchestrator or webhook path picks up the derived state without exposing control-repository secrets. Model-backed workers run only on trusted `df-local` self-hosted runners through the canonical `andromeda` launcher and Agent OS state.
 
 ## Product boundary and integration principle
 
 DarkFactory is a separate GitHub-native product with its own repository,
-version history, issues, releases, and operational ledger repository. It
+version history, issues, releases, and operational ledger subtree. It
 integrates with Agent OS for local provider execution, identity, memory,
 sessions, and secrets, but neither product is absorbed into the other. The
 layering is:
@@ -28,11 +28,11 @@ layering is:
 - `packages/core/src/harness` is the canonical managed runtime for Agent OS sessions, orchestration, memory injection, and worker execution.
 - **DarkFactory** owns GitHub control-plane translation (issues, labels, PRs,
   comments, and work units), deterministic orchestration, enforcement sync,
-  review gates, and authenticated operational ledgers in
-  `marius-patrik/darkfactory-data`.
+  review gates, and authenticated operational ledgers below the manifest-declared
+  `ledgerPath` in the manifest-declared `dataRepo`.
 - **Agent OS** owns local provider execution, identity, memory, sessions,
   secrets, and the canonical `.agents` state authority. DarkFactory delegates
-  model turns through the `agents` launcher and does not duplicate that state.
+  model turns through the `andromeda` launcher and does not duplicate that state.
 - `packages/core/src/inference` and `packages/core/src/gateway` provide the model/execution substrate; `packages/core/src/manager` owns package, state, memory, sessions, providers, and secrets; the Agent OS root PRD binds the components into one program.
 
 Every DarkFactory milestone must preserve this integration boundary: a complete
@@ -52,15 +52,15 @@ DarkFactory **automates** the orchestration work style; it does not replicate it
 ## Architecture
 
 - **Control plane**: GitHub — PRD.md (product truth), issues (work units, sequenced via labels + `Blocked-by: #N` body headers), labels (`P0|P1|P2`, evaluator-owned `df:ready`, `df:running`, `df:blocked`, `stream:<name>`), PR checks (Validate + DarkFactory Autoreview), comments (slash commands), Actions (execution triggers).
-- **Execution plane**: trusted `df-local` workers invoke `agents run` with independently authorized model tier and effort. One worker = one issue = one branch = one PR. DarkFactory Autoreview uses bounded medium review/fix rounds and an independent high confirmation through the same canonical Agent OS boundary.
-- **State**: GitHub repositories and `.darkfactory/` control metadata plus the single Agent OS state authority under `$AGENTS_HOME`; no DarkFactory-owned database, model state, or memory.
-- **Managed data**: canonical Andromeda-data is checked out at `$AGENTS_HOME`; DarkFactory reads only its `managed-repository` child. No alternate state root or second checkout authority is permitted. Runtime receipts use the separate darkfactory-data ledger authority.
-- **Policy**: the managed `.darkfactory/` files define orchestration, enforcement, labels, branching, and installer expectations.
+- **Execution plane**: trusted `df-local` workers invoke `andromeda run` with independently authorized model tier and effort. One worker = one issue = one branch = one PR. DarkFactory Autoreview uses bounded medium review/fix rounds and an independent high confirmation through the same canonical Agent OS boundary.
+- **State**: GitHub repositories and `.agents/` control metadata plus the single Agent OS state authority under `$ANDROMEDA_HOME`; no DarkFactory-owned database, model state, or memory.
+- **Managed data**: the repository declared by `.agents/managed-repository.json.dataRepo` is the sole remote authority; DarkFactory reads its `managed-repository` child and writes runtime receipts below the manifest-declared `ledgerPath`. No alternate data repository, state root, or ledger checkout authority is permitted.
+- **Policy**: the managed `.agents/` files define orchestration, enforcement, labels, branching, and installer expectations.
 
 ## Core loops
 
-- [x] **L0 Orchestrator** (NEW — replaces the orchestrator session): a scheduled brain run, with additional control-repository triggers, using a synthesized global-state brief: all installed repos' git/CI/backlog/PRD state, stream ledgers, open blockers. Managed repository pickup is schedule-driven through cron orchestrate ticks and workflow-run chaining. Each run does exactly what the human-driven orchestrator session does today: assess state, plan/replan waves, sequence and ready issues, dispatch L3 workers within concurrency caps, unstick blocked lanes, post a status digest to the dashboard, and escalate genuinely owner-only decisions as labeled question issues (`df:ask-owner`) instead of blocking. The orchestrator holds no memory outside GitHub — every run reconstructs state from repos, ledgers in `.darkfactory/`, and issue history, so it is fully resumable and replaceable.
-- [x] **L1 Sync** (exists — harden): managed repository-local baseline files pushed to every installed repo via PRs. Executable DarkFactory workflow/script payloads come from this package; shared policy and repository context come from `$AGENTS_HOME/managed-repository`; duplicate ownership fails closed. DarkFactory manages itself first, while runtime receipts remain in darkfactory-data.
+- [x] **L0 Orchestrator** (NEW — replaces the orchestrator session): a scheduled brain run, with additional control-repository triggers, using a synthesized global-state brief: all installed repos' git/CI/backlog/PRD state, stream ledgers, open blockers. Managed repository pickup is schedule-driven through cron orchestrate ticks and workflow-run chaining. Each run does exactly what the human-driven orchestrator session does today: assess state, plan/replan waves, sequence and ready issues, dispatch L3 workers within concurrency caps, unstick blocked lanes, post a status digest to the dashboard, and escalate genuinely owner-only decisions as labeled question issues (`df:ask-owner`) instead of blocking. The orchestrator holds no memory outside GitHub — every run reconstructs state from repos, ledgers in `.agents/`, and issue history, so it is fully resumable and replaceable.
+- [x] **L1 Sync** (exists — harden): managed repository-local baseline files pushed to every installed repo via PRs. Executable DarkFactory workflow/script payloads come from this package; shared policy and repository context come from `$ANDROMEDA_HOME/managed-repository`; duplicate ownership fails closed. DarkFactory manages itself first, while runtime receipts remain below the manifest-declared `ledgerPath` in the same data repository.
 - [x] **L2 Review**: provider-agnostic DarkFactory Autoreview performs medium-tier review-to-clean, high-tier final confirmation, issue review, bounded hash-bound autofix, and durable per-round receipts through canonical Agent OS. Agent OS alone resolves providers, models, authentication, and policy-authorized pre-turn fallback. Merge is blocked until the exact check is green.
 - [x] **L3 Work** (NEW — the heart): pick next `df:ready` issue respecting priority + `Blocked-by` + stream lane → create branch `df/<issue>-<slug>` → worker implements with validation → push → open PR referencing the issue → gates run → automerge on green → issue closes. Failure paths: worker comments its blocker on the issue, labels `df:blocked`, releases the lane.
 - [x] **L4 Planning** (NEW): scheduled + on-PRD-change reconciliation — parse PRD.md, diff against open backlog, file/update/close issues so backlog ≡ PRD, maintain sequencing labels and `Blocked-by` graphs. This is the PRD-as-source-of-truth enforcement.

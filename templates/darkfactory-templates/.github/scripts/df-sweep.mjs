@@ -1,6 +1,5 @@
 import {
   CODEX_REVIEW_REQUIRED_CONTEXT,
-  DARK_FACTORY_DATA_REPO,
   assertAllowedRepo,
   checksAreGreen,
   checksSummary,
@@ -37,7 +36,6 @@ const NO_CHECK_ALLOWLIST = new Set(
 const EMPTY_CHECK_SETTLE_MS = 10 * 60 * 1000;
 let gh;
 let CONTROL_REPO;
-const DATA_REPO = DARK_FACTORY_DATA_REPO;
 
 export function configureSweepRuntime(options) {
   gh = options.gh;
@@ -359,14 +357,14 @@ function hasCodexReviewContext(statusCheckRollup) {
 }
 
 async function managedConfigDeclaresCodexReview(repository, ref) {
-  const content = await getOptionalFileContent(gh, repository, ".darkfactory/managed-repository.json", ref);
+  const content = await getOptionalFileContent(gh, repository, ".agents/managed-repository.json", ref);
   if (!content) return false;
 
   try {
     const config = JSON.parse(content);
     return managedConfigPaths(config).some((filePath) => filePath === ".github/workflows/codex-review.yml");
   } catch (error) {
-    console.warn(`DarkFactory sweep warning ${repoName(repository)}: invalid .darkfactory/managed-repository.json: ${error.message || String(error)}`);
+    console.warn(`DarkFactory sweep warning ${repoName(repository)}: invalid .agents/managed-repository.json: ${error.message || String(error)}`);
     return false;
   }
 }
@@ -790,7 +788,7 @@ async function enableAutoMerge(pullRequestId) {
 
 async function writeLedger(kind, targetRepoName, ledger) {
   try {
-    const written = await writeRunLedger(gh, DATA_REPO, kind, targetRepoName, ledger);
+    const written = await writeRunLedger(gh, kind, targetRepoName, ledger);
     console.log(`DarkFactory ledger written to ${written.repository}/${written.path}`);
   } catch (error) {
     console.warn(`DarkFactory ledger warning: ${error.message || String(error)}`);

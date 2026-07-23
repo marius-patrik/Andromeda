@@ -107,6 +107,14 @@ test("repository overlay and validation selection share one trusted classificati
     validationCommandsForRepository(repository, ["package.json", "go.mod", "pyproject.toml"]),
     ["npm run check", "go test ./...", "uv run pytest"]
   );
+  assert.throws(
+    () => classifyRepositoryOverlay(repository, [".gitmodules", "package.json"]),
+    /no-submodules invariant/
+  );
+  assert.throws(
+    () => validationCommandsForRepository(repository, [".gitmodules", "package.json"]),
+    /no-submodules invariant/
+  );
   assert.throws(() => classifyRepositoryOverlay(repository, ["README.md"]), /cannot be classified/);
 });
 
@@ -200,7 +208,7 @@ test("malformed model output keeps exact prompt and route receipts on the closed
   const root = await mkdtemp(path.join(tmpdir(), "df-model-turn-malformed-"));
   const agentsHome = path.join(root, "agents");
   mkdirSync(path.join(agentsHome, "bin"), { recursive: true });
-  writeFileSync(path.join(agentsHome, "bin", "agents.ps1"), "# fixture\n");
+  writeFileSync(path.join(agentsHome, "bin", "andromeda.ps1"), "# fixture\n");
   try {
     await assert.rejects(
       executeModelTurn(

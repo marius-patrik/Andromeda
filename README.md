@@ -3,7 +3,7 @@
 Andromeda is one personal agent identity and one authoritative state and memory
 system across models, provider CLIs, harnesses, machines, and execution
 surfaces. This repository contains the implementation, and
-`agents` is its management and runtime CLI.
+`andromeda` is its management and runtime CLI.
 
 The accepted state contract is documented in
 [Canonical State and Memory v2](docs/state-memory-v2.md). Bootstrap, doctor,
@@ -45,8 +45,8 @@ export PATH="$HOME/.agents/bin:$PATH"
 The installer maintains one checkout at
 `$ANDROMEDA_USER_HOME/marius-patrik/Andromeda` (or an explicit absolute
 `ANDROMEDA_ROOT`), one state root at `$ANDROMEDA_USER_HOME/.agents` (or an explicit
-absolute `ANDROMEDA_HOME`), and one platform-native launcher file: `agents` on
-POSIX or `agents.ps1` on Windows. It does not use Bun global linking. The
+absolute `ANDROMEDA_HOME`), and one platform-native launcher file: `andromeda` on
+POSIX or `andromeda.ps1` on Windows. It does not use Bun global linking. The
 Windows launcher forwards PowerShell's argument array directly, without a
 second CMD parse. The
 `ANDROMEDA_HOME/bin` is owned by Agent OS, installation removes every other entry
@@ -83,7 +83,8 @@ ready. Do not use an old product checkout or installer as an update source.
   managed product plugins, and managed product applications.
 - `plugins/` remains the authored root for repository-owned plugin capabilities;
   it does not contain managed product repository gitlinks.
-- `data/` contains development pins for separate state and ledger repositories.
+- `data/` contains the development pin for the manifest-declared data repository;
+  DarkFactory ledgers live below its manifest-declared `ledgerPath`.
 
 Older product and topology names are migration evidence only. They are not
 aliases, compatibility surfaces, install roots, or names for new work.
@@ -133,11 +134,11 @@ agents cli doctor
 agents cli pin all
 agents cli env codex
 
-gh auth token | agents secrets set GITHUB_TOKEN
-agents runner install --json
-agents runner status --json
+gh auth token | andromeda secrets set GITHUB_TOKEN
+andromeda runner install --json
+andromeda runner status --json
 
-agents run --mode orchestrator --provider codex "Review active work"
+andromeda run --mode orchestrator --provider codex "Review active work"
 agents tui --provider codex --mode orchestrator
 agents sessions list --json
 

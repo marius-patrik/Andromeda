@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   WORK_LABELS,
   assertAllowedRepo,
   createGithubClient,
@@ -20,7 +19,6 @@ import {
 
 const CONTROL_ROOT = pathToFileURL(new URL("../../", import.meta.url).href).pathname;
 const TRIGGER = process.env.DF_TRIGGER ?? "unknown";
-const DATA_REPO = process.env.DF_DATA_REPO ?? DARK_FACTORY_DATA_REPO;
 const VERIFICATION_MARKER = "<!-- dark-factory:worker-verification -->";
 const BLOCKER_ISSUE_MARKER = "<!-- dark-factory:verification-blocker";
 
@@ -40,7 +38,6 @@ export async function main(options = {}) {
     : await readVerificationTarget(options.verificationTargetFile || requiredEnv("DF_VERIFICATION_TARGET_FILE"));
   const targetRepo = target.targetRepo;
   const issueNumber = target.issueNumber;
-  const dataRepo = options.dataRepo || DATA_REPO;
   const trigger = options.trigger || TRIGGER;
   const gh = options.gh || createGithubClient(token, "darkfactory-verify");
 
@@ -50,7 +47,6 @@ export async function main(options = {}) {
     controlRepo,
     targetRepo,
     issueNumber,
-    dataRepo,
     trigger,
     dryRun: options.dryRun === true,
     log: options.log || console.log,
@@ -59,7 +55,7 @@ export async function main(options = {}) {
 
   if (!options.gh && !options.dryRun) {
     try {
-      await writeRunLedger(gh, dataRepo, "df-verify", repoName(targetRepo), {
+      await writeRunLedger(gh, "df-verify", repoName(targetRepo), {
         trigger,
         issue: `${repoName(targetRepo)}#${issueNumber}`,
         verified: result.verified,
@@ -111,7 +107,6 @@ export async function verifyWorkerRun(gh, options) {
     controlRepo,
     targetRepo,
     issueNumber,
-    dataRepo,
     trigger,
     dryRun = false,
     log = console.log,
@@ -124,7 +119,7 @@ export async function verifyWorkerRun(gh, options) {
 
   await ensureLabels(gh, targetRepo, WORK_LABELS);
 
-  const ledger = await readLatestRunLedger(gh, dataRepo, "df-work", repoName(targetRepo));
+  const ledger = await readLatestRunLedger(gh, "df-work", repoName(targetRepo));
   const claim = ledger ? parseWorkerClaim(ledger) : null;
   const targetRef = `${repoName(targetRepo)}#${issueNumber}`;
 

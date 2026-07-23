@@ -468,10 +468,11 @@ async function fetchRepositoryContext(github: IssueDevelopmentGithub, repository
 }> {
   const [owner, repo] = validateRepository(repository).split("/");
   const metadata = githubObject(await github.request("GET", `/repos/${repository}`), "repository metadata");
-  const defaultBranch = typeof metadata.default_branch === "string" && metadata.default_branch ? metadata.default_branch : "main";
-  const branch = githubObject(await github.request("GET", `/repos/${repository}/branches/${encodeURIComponent(defaultBranch)}`), "default branch");
-  const commit = githubObject(branch.commit, "default-branch commit");
-  if (typeof commit.sha !== "string" || !/^[0-9a-f]{40}$/.test(commit.sha)) throw new Error("GitHub returned invalid default-branch revision");
+  if (metadata.default_branch !== "main") throw new Error(`Repository ${repository} must expose canonical main as its default branch`);
+  const defaultBranch = "main";
+  const branch = githubObject(await github.request("GET", `/repos/${repository}/branches/main`), "main branch");
+  const commit = githubObject(branch.commit, "main-branch commit");
+  if (typeof commit.sha !== "string" || !/^[0-9a-f]{40}$/.test(commit.sha)) throw new Error("GitHub returned invalid main-branch revision");
   const tree = githubObject(await github.request("GET", `/repos/${repository}/git/trees/${commit.sha}?recursive=1`), "repository tree");
   if (tree.truncated === true || !Array.isArray(tree.tree)) throw new Error("Complete repository inventory is unavailable");
   const repositoryPaths = tree.tree.map((entry) => isRecord(entry) && typeof entry.path === "string" ? entry.path : "").filter(Boolean).sort();
@@ -524,7 +525,7 @@ export async function createIssueDraft(
         workItem: null,
         draftIntent: { intent: intent.goal, comments: intentComments(intent) },
         policy: {
-          branching: "One worker issue, branch, and reviewed pull request; preserve dependency order and protected release lanes.",
+          branching: "One worker issue, branch from main, and reviewed pull request into protected main; preserve dependency order.",
           labels: ["P0", "P1", "P2", "df:ready", "df:blocked", "df:ask-owner"],
           enforcement: "Keep publication behind issue Autoreview and exact owner approval; never infer owner decisions or bypass gates."
         },
@@ -714,7 +715,7 @@ export async function continueIssueDraft(
             ]
           },
           policy: {
-            branching: "One worker issue, branch, and reviewed pull request; preserve dependency order and protected release lanes.",
+            branching: "One worker issue, branch from main, and reviewed pull request into protected main; preserve dependency order.",
             labels: ["P0", "P1", "P2", "df:ready", "df:blocked", "df:ask-owner"],
             enforcement: "Keep publication behind a fresh issue Autoreview and exact owner approval; owner answers apply only to the admitted conversation version."
           },

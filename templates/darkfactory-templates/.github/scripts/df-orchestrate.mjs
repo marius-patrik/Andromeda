@@ -1,7 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  DARK_FACTORY_DATA_REPO,
   PLANNING_LABELS,
   WORK_LABELS,
   assertAllowedRepo,
@@ -21,7 +20,7 @@ import {
 } from "./df-lib.mjs";
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const ORCHESTRATION_POLICY_PATH = ".darkfactory/orchestration.json";
+const ORCHESTRATION_POLICY_PATH = ".agents/orchestration.json";
 export const DASHBOARD_MARKER = "df-dashboard:orchestration";
 export const ASK_OWNER_MARKER = "dark-factory:orchestrator-ask-owner";
 export const RESUME_MARKER = "dark-factory:worker-resume";
@@ -1257,13 +1256,11 @@ async function dispatchWorkerResume(gh, controlRepo, repository, issueNumber, in
 }
 
 async function resolveWorkBaseBranch(gh, repository, defaultBranch) {
-  try {
-    await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/${encodeURIComponent("dev")}`);
-    return "dev";
-  } catch (error) {
-    if (error.status === 404) return defaultBranch;
-    throw error;
+  if (defaultBranch !== "main") {
+    throw new Error(`DarkFactory requires main as the target repository default branch; received '${defaultBranch || "missing"}'.`);
   }
+  await gh.request("GET", `/repos/${repoName(repository)}/git/ref/heads/main`);
+  return "main";
 }
 
 async function blockIssueBeforeDispatch(gh, repository, issueNumber, baseBranch, mergePolicy) {
@@ -1315,7 +1312,7 @@ async function createIssueComment(gh, repository, issueNumber, body) {
 
 async function writeLedger(gh, controlRepo, ledger, warn = console.warn, log = console.log) {
   try {
-    const written = await writeRunLedger(gh, DARK_FACTORY_DATA_REPO, "df-orchestrate", repoName(controlRepo), ledger);
+    const written = await writeRunLedger(gh, "df-orchestrate", repoName(controlRepo), ledger);
     log(`DarkFactory ledger written to ${written.repository}/${written.path}`);
   } catch (error) {
     warn(`DarkFactory ledger warning: ${error.message || String(error)}`);

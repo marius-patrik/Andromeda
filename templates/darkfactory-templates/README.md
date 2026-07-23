@@ -68,7 +68,7 @@ To bump submodule gitlinks after a submodule release, open a dedicated bump PR a
 - The `main` branch is the stable, release-ready state.
 - The `dev` branch collects approved changes before they are promoted to `main`.
 - All changes land through pull requests targeting `dev`.
-- DarkFactory-managed files (under `.darkfactory/`, `.agents/.global/`, and repository policy files) are updated by automated tooling or explicit governance PRs. Manual edits should keep their structure intact.
+- DarkFactory-managed files (under `.agents/`, `.agents/.global/`, and repository policy files) are updated by automated tooling or explicit governance PRs. Manual edits should keep their structure intact.
 - `.github/` workflows and `AGENTS.md` are part of the managed scaffold; update them through the normal PR process.
 
 ## DarkFactory-managed files

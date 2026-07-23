@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { readManagedRepositoryAuthority } from "./managed-files.js";
 
 export const SETUP_STAGE_ORDER = [
   "machine-wiring",
@@ -16,8 +17,7 @@ export type RepairClass = "auto" | "pr" | "owner" | "blocked";
 export type SetupStage = (typeof SETUP_STAGE_ORDER)[number];
 
 const MAIN_ONLY_DATA_REPOSITORIES = new Set([
-  "marius-patrik/private-data",
-  "marius-patrik/darkfactory-data"
+  readManagedRepositoryAuthority().dataRepo.toLowerCase()
 ]);
 
 export function isMainOnlyDataRepository(repository: string): boolean {
@@ -128,13 +128,14 @@ function setupOperation(repository: string, finding: DoctorFinding): Pick<SetupA
     return { stage: "registration", operation: "resolve-source-policy-contradiction", supported: false, reason: "Contradictory source policy must be reconciled at its canonical authority; target deletion is forbidden." };
   }
   if (id === "default-branch-head-missing") {
-    return { stage: "repository-bootstrap", operation: "initialize-repository", supported: true, reason: "A fresh repository receives only an empty main commit, canonical main/dev refs, and observable automation settings before any reviewed managed-content PR or gate is installed." };
+    return { stage: "repository-bootstrap", operation: "initialize-repository", supported: true, reason: "A fresh repository receives only an empty main commit, canonical main, and observable automation settings before any reviewed managed-content PR or gate is installed." };
   }
-  if (["dev-behind-main", "main-dev-diverged"].includes(id)) {
-    return { stage: "verification", operation: "reconcile-branches", supported: true, reason: "Branch reconciliation is delegated to the trusted release engine, which preserves both histories and escalates semantic conflicts." };
+  if (id === "retired-dev-branch-present" || id.startsWith("retired-lane-branch-") || /^pr-\d+-base-not-main$/.test(id)
+      || ["dev-behind-main", "main-dev-diverged"].includes(id)) {
+    return { stage: "verification", operation: "retire-non-main-branch", supported: false, reason: "The integration branch is retired; setup preserves the ref as evidence and requires an owner-reviewed disposition instead of recreating a reconciliation lane." };
   }
   if (category === "release lane" || id.startsWith("release-pr-")) {
-    return { stage: "verification", operation: "converge-release", supported: true, reason: "The trusted release engine creates or updates a current-dev-derived release branch and lands only through green protected gates." };
+    return { stage: "verification", operation: "retire-release-lane", supported: false, reason: "Release and reconcile pull-request lanes are retired; version-derived publication is owned by a merge to main." };
   }
   if (category === "branch policy" || category === "branch protection" || category === "branch convergence" || id.includes("automerge") || id.includes("label") || id.includes("workflow")) {
     return { stage: "settings-enforcement", operation: "converge-settings", supported: true, reason: "Repository settings and taxonomy are reconciled from canonical policy." };
@@ -151,14 +152,14 @@ function setupOperation(repository: string, finding: DoctorFinding): Pick<SetupA
   if (category === "repository hygiene") {
     return { stage: "verification", operation: "converge-clean", supported: true, reason: "Typed generated-artifact and managed-label repairs are delegated to the evidence-bound clean lane; all other work remains preserved." };
   }
-  if (category === "submodule pointer") {
-    return { stage: "verification", operation: "converge-submodules", supported: true, reason: "Released child pointers are delegated to the trusted submodule engine, which changes only an exact admitted gitlink through a reviewed PR." };
+  if (category === "submodule pointer" || category === "monorepo topology" || id.startsWith("gitlink-")) {
+    return { stage: "verification", operation: "remove-forbidden-gitlink", supported: false, reason: "Managed repositories declare no submodules; a gitlink is a topology violation requiring an owner-reviewed content change." };
   }
   if (id.includes("registry") || category === "registration") {
     return { stage: "registration", operation: "converge-registration", supported: true, reason: "Registration changes only through one exact reviewed private-data source-policy PR, followed by trusted managed sync." };
   }
   if (["health", "submodule metadata"].includes(category)) {
-    return { stage: "verification", operation: "verify-only", supported: false, reason: "The owning release or submodule lane must land before setup can verify convergence; setup has no authority to simulate that work." };
+    return { stage: "verification", operation: "verify-only", supported: false, reason: "The owning prerequisite must land before setup can verify convergence; setup has no authority to simulate that work." };
   }
   return { stage: "verification", operation: "unsupported", supported: false, reason: "No narrow, trusted mutation is defined for this finding." };
 }
@@ -281,7 +282,7 @@ export interface CleanEvidence {
     path: string;
     blobSha: string;
     mode: "100644" | "100755" | "120000";
-    base: "dev";
+    base: "main";
     baseSha: string;
     branch: string;
     state: "needed" | "watch" | "resolved";
@@ -302,7 +303,7 @@ export interface CleanEvidence {
     description: string;
     policyPath: ".agents/labels.json";
     policyBlob: string;
-    policyRef: "dev";
+    policyRef: "main";
     policyRevision: string;
   }>;
   markerIssues?: Array<{

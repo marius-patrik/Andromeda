@@ -12,13 +12,7 @@ import {
   humanJsonResult,
   parseHumanCliArgs
 } from "../human-cli.js";
-import {
-  executeSubmoduleEngine,
-  parseSubmoduleCliArgs,
-  runCli,
-  submoduleGithubPermissions,
-  submoduleJsonResult
-} from "../cli.js";
+import { runCli } from "../cli.js";
 
 test("human CLI registry covers every owner-approved command family and both executable aliases", async () => {
   const ids = new Set(HUMAN_COMMANDS.map((entry) => entry.id));
@@ -27,8 +21,6 @@ test("human CLI registry covers every owner-approved command family and both exe
     "issue-draft", "issue-review", "issue-fix", "issue-ready", "issue-ask",
     "plan", "streams", "dashboard", "work", "resume", "verify",
     "pr-review", "pr-fix", "pr-status", "pr-merge",
-    "release-status", "release-plan", "release-reconcile", "release-run", "release-verify",
-    "submodules-status", "submodules-update", "submodules-verify",
     "baseline-status", "baseline-sync", "baseline-verify",
     "explain", "runs-list", "runs-show", "runs-watch", "runs-retry",
     "receipts-list", "receipts-show", "receipts-verify",
@@ -57,7 +49,8 @@ test("per-command help exposes purpose, defaults, independent model/effort, perm
 });
 
 test("safe defaults, aliases, exact version gates, and unknown options fail closed", () => {
-  assert.equal(parseHumanCliArgs(["release"])?.spec.id, "release-status");
+  assert.equal(parseHumanCliArgs(["release"]), null);
+  assert.equal(parseHumanCliArgs(["submodules", "status"]), null);
   assert.equal(parseHumanCliArgs(["clean"])?.spec.id, "clean-plan");
   assert.equal(parseHumanCliArgs(["why", "issue", "owner/repo#1"])?.spec.id, "explain");
   assert.throws(() => parseHumanCliArgs(["repo", "status", "owner/repo", "--tier", "high"]), /does not accept --tier/);
@@ -69,7 +62,6 @@ test("safe defaults, aliases, exact version gates, and unknown options fail clos
   assert.throws(() => parseHumanCliArgs(["pr", "status", "owner/repo#1", "--version", "a:b"]), /unknown pr status option/);
   assert.throws(() => parseHumanCliArgs(["runs", "list", "owner/repo", "--approve", "1"]), /unknown runs list option/);
   assert.throws(() => parseHumanCliArgs(["clean", "plan", "owner/repo", "--watch"]), /unknown clean plan option/);
-  assert.throws(() => parseHumanCliArgs(["release", "status", "owner/repo", "--watch"]), /unknown release status option/);
   assert.equal(parseHumanCliArgs(["issue", "draft", "--draft", "draft.json", "--resume"])?.options["--resume"], true);
   const continuation = parseHumanCliArgs(["issue", "draft", "--draft", "draft.json", "--continue", "a".repeat(64), "--answers", "answers.json"]);
   assert.equal(continuation?.options["--continue"], "a".repeat(64));
@@ -100,58 +92,6 @@ test("JSON issue drafting never falls through to interactive prompts", async () 
     () => runCli(["issue", "draft", "marius-patrik/DarkFactory", "--draft", draftPath, "--json"]),
     /requires --input or an existing --draft/
   );
-});
-
-test("submodule CLI preserves status/update/verify parity with the shared engine", async () => {
-  const status = parseSubmoduleCliArgs(["status", "marius-patrik/DarkFactory", "--watch", "--json"]);
-  assert.deepEqual(status, { mode: "status", child: "marius-patrik/DarkFactory", watch: true, json: true });
-  assert.ok(Object.values(submoduleGithubPermissions("status")).every((permission) => permission === "read"));
-  assert.equal(submoduleGithubPermissions("update").contents, "write");
-  assert.ok(Object.values(submoduleGithubPermissions("verify")).every((permission) => permission === "read"));
-
-  const calls: Array<{ mode: string; child: string }> = [];
-  const results = [
-    { schemaVersion: 1, mode: "update", status: "waiting-for-validation", plan: { action: "update" } },
-    { schemaVersion: 1, mode: "update", status: "released", plan: { action: "released" } }
-  ];
-  let waits = 0;
-  const updated = await executeSubmoduleEngine(
-    parseSubmoduleCliArgs(["update", "marius-patrik/DarkFactory", "--watch"]),
-    { async run(input) { calls.push(input); return results.shift()!; } },
-    { maxPasses: 3, wait: async () => { waits += 1; } }
-  );
-  assert.equal(updated.status, "released");
-  assert.equal(waits, 1);
-  assert.deepEqual(calls, [
-    { mode: "update", child: "marius-patrik/DarkFactory" },
-    { mode: "update", child: "marius-patrik/DarkFactory" }
-  ]);
-
-  const verified = await executeSubmoduleEngine(
-    parseSubmoduleCliArgs(["verify", "marius-patrik/DarkFactory", "--watch"]),
-    { async run(input) { calls.push(input); return { schemaVersion: 1, mode: input.mode, status: "verified", plan: { action: "current" } }; } },
-    { maxPasses: 3, wait: async () => { waits += 1; } }
-  );
-  assert.equal(verified.mode, "verify");
-  assert.equal(verified.status, "verified");
-  assert.equal(waits, 1);
-  assert.equal(calls.at(-1)?.mode, "verify");
-  assert.deepEqual(submoduleJsonResult(
-    parseSubmoduleCliArgs(["verify", "--json"]),
-    { schemaVersion: 1, mode: "verify", status: "blocked" }
-  ), {
-    schemaVersion: 1,
-    command: "submodules-verify",
-    status: "blocked",
-    data: { schemaVersion: 1, mode: "verify", status: "blocked" },
-    error: { code: "submodule_convergence_blocked", message: "Submodule convergence is blocked by current evidence" }
-  });
-});
-
-test("submodule CLI rejects ambiguous and bypassing mutation requests", () => {
-  assert.throws(() => parseSubmoduleCliArgs(["update", "owner/one", "owner/two"]), /at most one/);
-  assert.throws(() => parseSubmoduleCliArgs(["verify", "--force"]), /intentionally unavailable/);
-  assert.throws(() => parseSubmoduleCliArgs(["status", "not-a-repository"]), /invalid repository/i);
 });
 
 test("CLI and Actions invoke the same issue and PR Autoreview engine with exact version admission", async () => {

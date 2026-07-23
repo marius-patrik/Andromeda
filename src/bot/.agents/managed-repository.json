@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "managedBy": "darkfactory",
   "dataRepo": "marius-patrik/private-data",
-  "ledgerRepo": "marius-patrik/darkfactory-data",
+  "ledgerPath": "darkfactory-data/runs",
   "requiredSecrets": [
     "DARK_FACTORY_APP_ID",
     "DARK_FACTORY_PRIVATE_KEY"
@@ -11,6 +11,7 @@
     ".agents/autoreview-policy.json",
     ".agents/data-repository-policy.json",
     ".agents/issue-draft-policy.json",
+    ".agents/ledger-migration.json",
     ".agents/model-policy.json",
     ".agents/release-policy.json",
     ".agents/submodule-policy.json",
@@ -24,9 +25,6 @@
     ".github/scripts/df-model-policy.mjs",
     ".github/scripts/df-orchestrate.mjs",
     ".github/scripts/df-plan.mjs",
-    ".github/scripts/df-release.mjs",
-    ".github/scripts/df-submodule-autoupdate.mjs",
-    ".github/scripts/df-submodule-checkout.mjs",
     ".github/scripts/df-sweep.mjs",
     ".github/scripts/df-trigger-policy.mjs",
     ".github/scripts/df-work.mjs",
@@ -38,9 +36,7 @@
     ".github/workflows/df-issue-draft-hygiene.yml",
     ".github/workflows/df-orchestrate.yml",
     ".github/workflows/df-plan.yml",
-    ".github/workflows/df-release-producer.yml",
-    ".github/workflows/df-release.yml",
-    ".github/workflows/df-submodule-autoupdate.yml",
+    ".github/workflows/release-on-merge.yml",
     ".github/workflows/df-work.yml"
   ],
   "requiredFiles": [
@@ -50,6 +46,7 @@
     ".agents/enforcement-rules.json",
     ".agents/installer-policy.json",
     ".agents/issue-draft-policy.json",
+    ".agents/ledger-migration.json",
     ".agents/labels.json",
     ".agents/managed-repos.json",
     ".agents/managed-repository.json",
@@ -68,9 +65,6 @@
     ".github/scripts/df-model-policy.mjs",
     ".github/scripts/df-orchestrate.mjs",
     ".github/scripts/df-plan.mjs",
-    ".github/scripts/df-release.mjs",
-    ".github/scripts/df-submodule-autoupdate.mjs",
-    ".github/scripts/df-submodule-checkout.mjs",
     ".github/scripts/df-sweep.mjs",
     ".github/scripts/df-trigger-policy.mjs",
     ".github/scripts/df-work.mjs",
@@ -85,9 +79,7 @@
     ".github/workflows/df-issue-draft-hygiene.yml",
     ".github/workflows/df-orchestrate.yml",
     ".github/workflows/df-plan.yml",
-    ".github/workflows/df-release-producer.yml",
-    ".github/workflows/df-release.yml",
-    ".github/workflows/df-submodule-autoupdate.yml",
+    ".github/workflows/release-on-merge.yml",
     ".github/workflows/df-work.yml",
     "AGENTS.md"
   ],
@@ -98,6 +90,12 @@
     ".github/workflows/codex-review.yml",
     ".github/codex-review.Dockerfile",
     ".github/codex-review.schema.json",
-    ".github/scripts/run-codex-review.sh"
+    ".github/scripts/run-codex-review.sh",
+    ".github/scripts/df-release.mjs",
+    ".github/scripts/df-submodule-autoupdate.mjs",
+    ".github/scripts/df-submodule-checkout.mjs",
+    ".github/workflows/df-release-producer.yml",
+    ".github/workflows/df-release.yml",
+    ".github/workflows/df-submodule-autoupdate.yml"
   ]
 }

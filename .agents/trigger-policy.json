@@ -227,50 +227,6 @@
       "ledgerKind": "df-verify"
     },
     {
-      "id": "release-convergence",
-      "ownerIssue": 41,
-      "status": "active",
-      "engine": "df release",
-      "eventWorkflows": [".github/workflows/df-release.yml"],
-      "recoveryWorkflow": ".github/workflows/df-release.yml",
-      "eventTriggers": [{ "event": "workflow_dispatch", "types": ["bot-forwarded-pull-request-closed", "manual"] }],
-      "recovery": { "cron": "11 */2 * * *", "intervalMinutes": 120, "maxDetectionMinutes": 140 },
-      "settleSeconds": 60,
-      "debounceSeconds": 120,
-      "idempotencyKey": "release-convergence:{repository}:{target}:{sourceVersion}",
-      "modelPolicy": "zero-token-unless-semantic-conflict-high",
-      "authorization": {
-        "defaultMode": "read-only-status",
-        "mutationAuthority": "verified-green-release-plan",
-        "permissions": ["actions:read", "checks:read", "contents:write", "issues:write", "pull-requests:write"],
-        "receiptRequired": true
-      },
-      "retry": { "maxAttempts": 3, "backoffSeconds": 600, "noProgressLimit": 3, "escalationLabel": "df:ask-owner" },
-      "ledgerKind": "df-release"
-    },
-    {
-      "id": "submodule-autoupdate",
-      "ownerIssue": 43,
-      "status": "active",
-      "engine": "df submodules update",
-      "eventWorkflows": [".github/workflows/df-submodule-autoupdate.yml"],
-      "recoveryWorkflow": ".github/workflows/df-submodule-autoupdate.yml",
-      "eventTriggers": [{ "event": "repository_dispatch", "types": ["darkfactory-release-verified"] }],
-      "recovery": { "cron": "29 */2 * * *", "intervalMinutes": 120, "maxDetectionMinutes": 140 },
-      "settleSeconds": 60,
-      "debounceSeconds": 180,
-      "idempotencyKey": "submodule-autoupdate:{repository}:{target}:{sourceVersion}",
-      "modelPolicy": "zero-token",
-      "authorization": {
-        "defaultMode": "read-only-status",
-        "mutationAuthority": "verified-child-release-receipt",
-        "permissions": ["actions:read", "checks:read", "contents:write", "pull-requests:write"],
-        "receiptRequired": true
-      },
-      "retry": { "maxAttempts": 3, "backoffSeconds": 600, "noProgressLimit": 3, "escalationLabel": "df:ask-owner" },
-      "ledgerKind": "df-submodule-update"
-    },
-    {
       "id": "repository-hygiene",
       "ownerIssue": 263,
       "status": "active",

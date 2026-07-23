@@ -9,7 +9,7 @@ lives in `src/prompts.ts`; the regression suite lives in `tests/prompts.test.ts`
 - DarkFactory owns this library's structure, versioning, checksums, composition
   contract, and validation harness.
 - The canonical Agent OS runtime owns concrete provider, model, auth, and
-  session execution, resolved through the `agents` launcher (issue #24). This
+  session execution, resolved through the `andromeda` launcher (issue #24). This
   library must never duplicate that state or embed its mechanics.
 
 ## Hard rules for contributors

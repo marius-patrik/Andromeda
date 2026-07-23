@@ -25,7 +25,7 @@ const BOOTSTRAP_FILES: ManagedFile[] = [
     content: `${JSON.stringify({
       schemaVersion: 1,
       dataRepo: "marius-patrik/private-data",
-      ledgerRepo: "marius-patrik/darkfactory-data",
+      ledgerPath: "darkfactory-data/runs",
       packageFiles: [],
       requiredFiles: [],
       removedFiles: []
@@ -48,7 +48,7 @@ test("setup settings convergence is a proven no-op when repository state is heal
   const calls: Array<{ route: string; parameters: Record<string, unknown> }> = [];
   const github = requester(calls, (route, parameters) => {
     if (route === "GET /repos/{owner}/{repo}") return { default_branch: "main", allow_auto_merge: true, delete_branch_on_merge: true };
-    if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { object: { sha: parameters.ref === "heads/main" ? "main-sha" : "dev-sha" } };
+    if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { object: { sha: "main-sha" } };
     if (route === "GET /repos/{owner}/{repo}/labels") return [{ name: "df:ready", color: "0e8a16", description: "Machine-evaluated" }];
     if (route === "GET /repos/{owner}/{repo}/actions/workflows") return { workflows: [{ id: 1, path: workflows[0], state: "active" }] };
     if (route === "GET /repos/{owner}/{repo}/branches/{branch}/protection") return protection();
@@ -63,7 +63,7 @@ test("setup settings convergence is a proven no-op when repository state is heal
 test("setup rejects code-repository convergence for main-only data before any GitHub call", async () => {
   for (const dataRepo of [
     { owner: "marius-patrik", repo: "private-data" },
-    { owner: "MARIUS-PATRIK", repo: "DARKFACTORY-DATA" }
+    { owner: "MARIUS-PATRIK", repo: "PRIVATE-DATA" }
   ]) {
     const calls: Array<{ route: string; parameters: Record<string, unknown> }> = [];
     const github = requester(calls, (route) => {
@@ -88,7 +88,6 @@ test("setup settings convergence repairs only deterministic settings and preserv
   const github = requester(calls, (route, parameters) => {
     if (route === "GET /repos/{owner}/{repo}") return { default_branch: "main", allow_auto_merge: automationEnabled, delete_branch_on_merge: automationEnabled };
     if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") {
-      if (parameters.ref === "heads/dev") throw notFound;
       return { object: { sha: "main-sha" } };
     }
     if (route === "GET /repos/{owner}/{repo}/labels") return [];
@@ -104,11 +103,11 @@ test("setup settings convergence repairs only deterministic settings and preserv
   });
 
   const receipts = await convergeRepositorySettings(github, repo, labels, workflows);
-  assert.ok(receipts.some((receipt) => receipt.action === "ensure-dev" && receipt.status === "applied"));
-  assert.ok(calls.some((call) => call.route === "POST /repos/{owner}/{repo}/git/refs" && call.parameters.sha === "main-sha"));
+  assert.equal(receipts.some((receipt) => receipt.action === "ensure-dev"), false);
+  assert.equal(calls.some((call) => call.route === "POST /repos/{owner}/{repo}/git/refs"), false);
   assert.ok(calls.some((call) => call.route === "PATCH /repos/{owner}/{repo}" && call.parameters.allow_auto_merge === true));
   const protections = calls.filter((call) => call.route === "PUT /repos/{owner}/{repo}/branches/{branch}/protection");
-  assert.equal(protections.length, 2);
+  assert.equal(protections.length, 1);
   assert.equal(protections.every((call) => call.parameters.enforce_admins === true && call.parameters.allow_force_pushes === false && call.parameters.allow_deletions === false), true);
 });
 
@@ -118,7 +117,7 @@ test("setup observes App-omitted auto-merge through GraphQL without inventing a 
     async request(route: string, parameters: Record<string, unknown>) {
       calls.push(route);
       if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "main", delete_branch_on_merge: true } };
-      if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: { object: { sha: parameters.ref === "heads/main" ? "main-sha" : "dev-sha" } } };
+      if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: { object: { sha: "main-sha" } } };
       if (route === "GET /repos/{owner}/{repo}/labels") return { data: [{ name: "df:ready", color: "0e8a16", description: "Machine-evaluated" }] };
       if (route === "GET /repos/{owner}/{repo}/actions/workflows") return { data: { workflows: [{ id: 1, path: workflows[0], state: "active" }] } };
       if (route === "GET /repos/{owner}/{repo}/branches/{branch}/protection") return { data: protection() };
@@ -138,7 +137,7 @@ test("setup refuses automation mutation when App-scoped settings remain unobserv
     async request(route: string, parameters: Record<string, unknown>) {
       calls.push(route);
       if (route === "GET /repos/{owner}/{repo}") return { data: { default_branch: "main" } };
-      if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: { object: { sha: parameters.ref === "heads/main" ? "main-sha" : "dev-sha" } } };
+      if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { data: { object: { sha: "main-sha" } } };
       throw new Error(`unexpected ${route}`);
     },
     async graphql() { throw Object.assign(new Error("forbidden"), { status: 403 }); }
@@ -155,7 +154,7 @@ test("setup settings convergence surfaces App permission gaps as owner actions",
   const forbidden = Object.assign(new Error("forbidden"), { status: 403 });
   const github = requester([], (route, parameters) => {
     if (route === "GET /repos/{owner}/{repo}") return { default_branch: "main", allow_auto_merge: false, delete_branch_on_merge: false };
-    if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { object: { sha: parameters.ref === "heads/main" ? "main-sha" : "dev-sha" } };
+    if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { object: { sha: "main-sha" } };
     if (route === "PATCH /repos/{owner}/{repo}") throw forbidden;
     throw new Error(`unexpected ${route}`);
   });
@@ -187,7 +186,7 @@ test("setup initializes an empty repository with an empty main commit before rev
   });
   const receipts = await convergeRepositorySettings(github, repo, labels, workflows);
   assert.ok(receipts.some((receipt) => receipt.action === "initialize-main" && receipt.status === "applied"));
-  assert.ok(receipts.some((receipt) => receipt.action === "ensure-dev" && receipt.status === "applied"));
+  assert.equal(receipts.some((receipt) => receipt.action === "ensure-dev"), false);
   assert.deepEqual(calls.find((call) => call.route === "POST /repos/{owner}/{repo}/git/trees")?.parameters.tree, []);
   assert.equal(calls.some((call) => call.route === "PATCH /repos/{owner}/{repo}" && "default_branch" in call.parameters), false);
 });
@@ -209,7 +208,7 @@ test("fresh-repository foundation creates refs without prematurely installing un
     throw new Error(`unexpected ${route}`);
   });
 
-  const receipts = await convergeRepositoryFoundation(github, repo, { createDev: false });
+  const receipts = await convergeRepositoryFoundation(github, repo);
   assert.ok(receipts.some((receipt) => receipt.action === "initialize-main"));
   assert.equal(receipts.some((receipt) => receipt.action === "ensure-dev"), false);
   assert.equal(calls.some((call) => call.route.includes("/protection")), false);
@@ -226,7 +225,7 @@ test("setup fails closed when branch-protection postconditions do not materializ
   };
   const github = requester([], (route, parameters) => {
     if (route === "GET /repos/{owner}/{repo}") return { default_branch: "main", allow_auto_merge: true, delete_branch_on_merge: true };
-    if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { object: { sha: parameters.ref === "heads/main" ? "main-sha" : "dev-sha" } };
+    if (route === "GET /repos/{owner}/{repo}/git/ref/{ref}") return { object: { sha: "main-sha" } };
     if (route === "GET /repos/{owner}/{repo}/labels") return [{ name: "df:ready", color: "0e8a16", description: "Machine-evaluated" }];
     if (route === "GET /repos/{owner}/{repo}/actions/workflows") return { workflows: [{ id: 1, path: workflows[0], state: "active" }] };
     if (route === "GET /repos/{owner}/{repo}/branches/{branch}/protection") return unsafe;
@@ -266,7 +265,7 @@ test("setup replaces the retired Codex Review gate with exact DarkFactory Autore
     throw new Error(`unexpected ${route}`);
   });
 
-  const receipt = await convergeBranchProtection(github, repo, "dev");
+  const receipt = await convergeBranchProtection(github, repo, "main");
   assert.equal(receipt.status, "applied");
   const checks = (writes[0].required_status_checks as { checks: Array<{ context: string; app_id: number }> }).checks;
   assert.deepEqual(checks, [

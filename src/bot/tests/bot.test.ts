@@ -2,13 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  dispatchDevMergeClosure,
+  dispatchWorkerMergeClosure,
   dispatchOrchestrator,
-  dispatchReleaseConvergence,
-  shouldDispatchDevMergeClosure,
+  shouldDispatchWorkerMergeClosure,
   shouldDispatchForReadyLabel,
   shouldDispatchForRunComment,
-  shouldDispatchReleaseConvergence,
   syncRepositories,
   type GitHubRequester
 } from "../bot.js";
@@ -23,7 +21,7 @@ const MANAGED_FILES: ManagedFile[] = [
     content: JSON.stringify({
       schemaVersion: 1,
       dataRepo: "marius-patrik/private-data",
-      ledgerRepo: "marius-patrik/darkfactory-data",
+      ledgerPath: "darkfactory-data/runs",
       packageFiles: [],
       requiredFiles: [],
       removedFiles: []
@@ -201,16 +199,16 @@ test("dispatchOrchestrator swallows dispatch errors", async () => {
   });
 });
 
-test("dev-merge closure dispatch requires an exact merged dev identity", () => {
-  const payload = devMergePayload();
+test("worker-merge closure dispatch requires an exact merged main identity", () => {
+  const payload = workerMergePayload();
 
-  assert.equal(shouldDispatchDevMergeClosure(payload), true);
-  assert.equal(shouldDispatchDevMergeClosure(devMergePayload({ merged: false })), false);
-  assert.equal(shouldDispatchDevMergeClosure(devMergePayload({ base: { ref: "main" } })), false);
-  assert.equal(shouldDispatchDevMergeClosure(devMergePayload({ merge_commit_sha: "not-a-sha" })), false);
+  assert.equal(shouldDispatchWorkerMergeClosure(payload), true);
+  assert.equal(shouldDispatchWorkerMergeClosure(workerMergePayload({ merged: false })), false);
+  assert.equal(shouldDispatchWorkerMergeClosure(workerMergePayload({ base: { ref: "retired-integration" } })), false);
+  assert.equal(shouldDispatchWorkerMergeClosure(workerMergePayload({ merge_commit_sha: "not-a-sha" })), false);
 });
 
-test("dispatchDevMergeClosure forwards only immutable identifiers to protected main", async () => {
+test("dispatchWorkerMergeClosure forwards only immutable identifiers to protected main", async () => {
   const requests: { route: string; parameters: Record<string, unknown> }[] = [];
   const requester: GitHubRequester = {
     async request(route, parameters) {
@@ -219,10 +217,10 @@ test("dispatchDevMergeClosure forwards only immutable identifiers to protected m
     }
   };
 
-  await dispatchDevMergeClosure(
+  await dispatchWorkerMergeClosure(
     requester,
     { owner: "marius-patrik", repo: "DarkFactory" },
-    devMergePayload()
+    workerMergePayload()
   );
 
   assert.deepEqual(requests, [{
@@ -241,51 +239,28 @@ test("dispatchDevMergeClosure forwards only immutable identifiers to protected m
   }]);
 });
 
-test("dispatchDevMergeClosure leaves scheduled recovery available on dispatch failure", async () => {
+test("dispatchWorkerMergeClosure leaves scheduled recovery available on dispatch failure", async () => {
   const requester: GitHubRequester = {
     async request() {
       throw new Error("dispatch unavailable");
     }
   };
 
-  await assert.doesNotReject(() => dispatchDevMergeClosure(
+  await assert.doesNotReject(() => dispatchWorkerMergeClosure(
     requester,
     { owner: "marius-patrik", repo: "DarkFactory" },
-    devMergePayload()
+    workerMergePayload()
   ));
 });
 
-test("release convergence bridge follows merged main and dev PRs only", async () => {
-  assert.equal(shouldDispatchReleaseConvergence(devMergePayload()), true);
-  assert.equal(shouldDispatchReleaseConvergence(devMergePayload({ base: { ref: "main" } })), true);
-  assert.equal(shouldDispatchReleaseConvergence(devMergePayload({ base: { ref: "feature" } })), false);
-  assert.equal(shouldDispatchReleaseConvergence(devMergePayload({ merged: false })), false);
-
-  const requests: Array<{ route: string; parameters: Record<string, unknown> }> = [];
-  await dispatchReleaseConvergence({
-    async request(route, parameters) {
-      requests.push({ route, parameters });
-      return { data: {} };
-    }
-  }, { owner: "marius-patrik", repo: "DarkFactory" }, devMergePayload());
-
-  assert.deepEqual(requests[0].parameters, {
-    owner: "marius-patrik",
-    repo: "DarkFactory",
-    workflow_id: "df-release.yml",
-    ref: "main",
-    inputs: { repo: "marius-patrik/Andromeda", mode: "run" }
-  });
-});
-
-function devMergePayload(overrides: Record<string, unknown> = {}) {
+function workerMergePayload(overrides: Record<string, unknown> = {}) {
   return {
     repository: { name: "Andromeda", owner: { login: "marius-patrik" } },
     pull_request: {
       number: 42,
       merged: true,
       merge_commit_sha: "0123456789abcdef0123456789abcdef01234567",
-      base: { ref: "dev" },
+      base: { ref: "main" },
       head: {
         sha: "abcdef0123456789abcdef0123456789abcdef01",
         repo: { name: "Andromeda", owner: { login: "marius-patrik" } }
