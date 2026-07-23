@@ -43,30 +43,30 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Create scoped Andromeda-data read token
+      - name: Create scoped private-data read token
         id: app-token
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.DARK_FACTORY_APP_ID }}
           private-key: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
           owner: marius-patrik
-          repositories: Andromeda-data
+          repositories: private-data
           permission-contents: read
 
-      - name: Check out canonical Andromeda-data state
+      - name: Check out canonical private-data state
         uses: actions/checkout@v4
         with:
-          repository: marius-patrik/Andromeda-data
+          repository: marius-patrik/private-data
           token: ${{ steps.app-token.outputs.token }}
           path: .andromeda-data
 
       - name: Register canonical Agent OS data checkout
         env:
-          AGENTS_DATA_REPOS: ${{ runner.temp }}/agent-os-data-repos.json
+          AGENTS_DATA_REPOS: ${{ runner.temp }}/andromeda-data-repos.json
           ANDROMEDA_HOME: ${{ github.workspace }}/.andromeda-data
         run: >-
           node -e "require('node:fs').writeFileSync(process.env.AGENTS_DATA_REPOS,
-          JSON.stringify([{id:'agent-os-data',repo:'marius-patrik/Andromeda-data',
+          JSON.stringify([{id:'andromeda-data',repo:'marius-patrik/private-data',
           path:process.env.ANDROMEDA_HOME,branch:'main',
           env:'AGENTS_SYSTEM_DATA_ROOT',configuredAt:new Date().toISOString()}],
           null, 2) + '\n')"
@@ -82,7 +82,7 @@ jobs:
 
       - name: Sync installed repositories
         env:
-          AGENTS_DATA_REPOS: ${{ runner.temp }}/agent-os-data-repos.json
+          AGENTS_DATA_REPOS: ${{ runner.temp }}/andromeda-data-repos.json
           ANDROMEDA_HOME: ${{ github.workspace }}/.andromeda-data
           GITHUB_APP_ID: ${{ secrets.DARK_FACTORY_APP_ID }}
           GITHUB_PRIVATE_KEY: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
