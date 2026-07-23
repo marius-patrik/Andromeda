@@ -69,7 +69,7 @@ function successfulReceipt(request: any) {
       provider: "fixture-provider",
       model: "fixture/model-v1",
       agentPreset: "Fixture",
-      providerVersion: "1.0.0"
+      providerVersion: "1.0.0", toolPolicy: "standard"
     },
     attempts: [{ number: 1, outcome: "success", reason: null }],
     usage: { inputTokens: 12, outputTokens: 7, totalTokens: 19 },
@@ -114,7 +114,7 @@ test("every current model-backed entrypoint converges on the shared composition 
   const root = path.resolve(import.meta.dirname, "..");
   const worker = await readFile(path.join(root, ".github", "scripts", "df-work.mjs"), "utf8");
   const autoreview = await readFile(path.join(root, ".github", "scripts", "run-darkfactory-autoreview.mjs"), "utf8");
-  const boundary = await readFile(path.join(root, "src", "model-turn.ts"), "utf8");
+  const boundary = await readFile(path.join(root, "model-turn.ts"), "utf8");
   assert.match(worker, /executeModelTurn/);
   assert.match(autoreview, /executeModelTurn/);
   assert.match(boundary, /adapters\.agentRunArguments/);

@@ -118,7 +118,7 @@ function observationRuntime(options: any = {}) {
       if (requestPath === "/repos/marius-patrik/DarkFactory") return { default_branch: "main", archived: false, disabled: false };
       if (requestPath === "/repos/marius-patrik/DarkFactory/commits/main") return { sha: NEW };
       if (requestPath === "/repos/marius-patrik/DarkFactory/branches/main/protection") return protectedBranch();
-      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.agents/release-policy.json")) return content(JSON.stringify(releasePolicy()));
       if (requestPath === `/repos/marius-patrik/DarkFactory/commits/${NEW}/check-runs?per_page=100`) {
         return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", id: 10, html_url: "https://github.com/checks/10", app: { id: 15368 } }] };
       }
@@ -147,7 +147,7 @@ function observationRuntime(options: any = {}) {
       if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/plugins/DarkFactory?ref=dev")) return { type: "submodule", sha: devPointer };
       if (requestPath === `/repos/marius-patrik/DarkFactory/compare/${devPointer}...${NEW}`) return relation;
       if (requestPath === "/repos/marius-patrik/Andromeda/branches/dev/protection") return protectedBranch();
-      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.agents/release-policy.json")) return content(JSON.stringify(releasePolicy()));
       if (requestPath === "/repos/marius-patrik/Andromeda/pulls?state=open&base=dev&per_page=100&page=1") return pulls;
       const pullMatch = requestPath.match(/^\/repos\/marius-patrik\/Andromeda\/pulls\/(\d+)$/);
       if (pullMatch) return options.pullDetails?.[Number(pullMatch[1])] || pulls.find((item: any) => item.number === Number(pullMatch[1]));
@@ -188,7 +188,7 @@ function fabricaObservationRuntime(defaultBranch = "dev") {
       }
       if (requestPath === "/repos/marius-patrik/Fabrica/commits/dev") return { sha: NEW };
       if (requestPath === "/repos/marius-patrik/Fabrica/branches/dev/protection") return protectedBranch();
-      if (requestPath.includes("/repos/marius-patrik/Fabrica/contents/.darkfactory/release-policy.json?ref=dev")) {
+      if (requestPath.includes("/repos/marius-patrik/Fabrica/contents/.agents/release-policy.json?ref=dev")) {
         return content(JSON.stringify(releasePolicy()));
       }
       if (requestPath === `/repos/marius-patrik/Fabrica/commits/${NEW}/check-runs?per_page=100`) {
@@ -219,7 +219,7 @@ function fabricaObservationRuntime(defaultBranch = "dev") {
         return { status: "ahead", ahead_by: 1, behind_by: 0 };
       }
       if (requestPath === "/repos/marius-patrik/Andromeda/branches/dev/protection") return protectedBranch();
-      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.darkfactory/release-policy.json")) {
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.agents/release-policy.json")) {
         return content(JSON.stringify(releasePolicy()));
       }
       if (requestPath === "/repos/marius-patrik/Andromeda/pulls?state=open&base=dev&per_page=100&page=1") return [];
@@ -325,7 +325,7 @@ function baseAdvanceRecoveryRuntime(options: any = {}) {
       if (requestPath === "/repos/marius-patrik/DarkFactory") return { default_branch: "main", archived: false, disabled: false };
       if (requestPath === "/repos/marius-patrik/DarkFactory/commits/main") return { sha: NEW };
       if (requestPath === "/repos/marius-patrik/DarkFactory/branches/main/protection") return protectedBranch();
-      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath.includes("/repos/marius-patrik/DarkFactory/contents/.agents/release-policy.json")) return content(JSON.stringify(releasePolicy()));
       if (requestPath === `/repos/marius-patrik/DarkFactory/commits/${NEW}/check-runs?per_page=100`) {
         return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", id: 10, html_url: "https://github.com/checks/10", app: { id: 15368 } }] };
       }
@@ -359,7 +359,7 @@ function baseAdvanceRecoveryRuntime(options: any = {}) {
         return { status: "ahead", ahead_by: 1, behind_by: 0 };
       }
       if (requestPath === "/repos/marius-patrik/Andromeda/branches/dev/protection") return protectedBranch();
-      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath.includes("/repos/marius-patrik/Andromeda/contents/.agents/release-policy.json")) return content(JSON.stringify(releasePolicy()));
       if (requestPath === "/repos/marius-patrik/Andromeda/pulls?state=open&base=dev&per_page=100&page=1") return [pull()];
       if (requestPath === "/repos/marius-patrik/Andromeda/pulls/210/files?per_page=100&page=1") return [{ filename: "plugins/DarkFactory" }];
       if (method === "GET" && requestPath === "/repos/marius-patrik/Andromeda/pulls/210") {
@@ -445,7 +445,7 @@ test("submodule policy fixes the exact Andromeda path and name contract", () => 
     ["darkfactory-data", "data/darkfactory"]
   ]);
   assert.deepEqual(policy.mainOnlyData.map((item: any) => [item.repository, item.admission]), [
-    ["marius-patrik/Andromeda-data", "encrypted-bundle-validate"],
+    ["marius-patrik/private-data", "encrypted-bundle-validate"],
     ["marius-patrik/darkfactory-data", "app-ledger-validate"]
   ]);
   assert.throws(() => submodules.validateSubmodulePolicy({ ...policy, targetBranch: "main" }), /target dev/);
@@ -476,7 +476,7 @@ test("main-only private data admits only the documented plan posture and green A
 });
 
 test("scheduled scans do not let a blocked newer receipt starve an actionable older release", () => {
-  const blocked = { child: "marius-patrik/Andromeda-data", childRelease: { sha: NEW }, candidate: null, pointerState: "blocked", blockers: ["red"] };
+  const blocked = { child: "marius-patrik/private-data", childRelease: { sha: NEW }, candidate: null, pointerState: "blocked", blockers: ["red"] };
   const released = {
     child: "marius-patrik/Other",
     childRelease: { sha: NEW },
@@ -970,7 +970,7 @@ test("a downstream umbrella consumes the released parent through the same generi
       if (requestPath === "/repos/marius-patrik/Andromeda") return { default_branch: "main", archived: false, disabled: false };
       if (requestPath === "/repos/marius-patrik/Andromeda/commits/main") return { sha: NEW };
       if (requestPath === "/repos/marius-patrik/Andromeda/branches/main/protection") return protectedBranch();
-      if (requestPath.includes("Andromeda/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath.includes("Andromeda/contents/.agents/release-policy.json")) return content(JSON.stringify(releasePolicy()));
       if (requestPath.includes(`Andromeda/commits/${NEW}/check-runs`)) return { check_runs: [{ name: "Validate", status: "completed", conclusion: "success", id: 1, html_url: "https://github.com/checks/1", app: { id: 15368 } }] };
       if (requestPath.endsWith(`/Andromeda/commits/${NEW}/status`)) return { statuses: [] };
       if (requestPath.endsWith("darkfactory-data/contents/runs/marius-patrik/Andromeda")) return [{ type: "file", name: "2026-df-release.json" }];
@@ -982,7 +982,7 @@ test("a downstream umbrella consumes the released parent through the same generi
       if (requestPath.includes("Umbrella/contents/products/Andromeda")) return { type: "submodule", sha: OLD };
       if (requestPath === `/repos/marius-patrik/Andromeda/compare/${OLD}...${NEW}`) return { status: "ahead", ahead_by: 1, behind_by: 0 };
       if (requestPath === "/repos/marius-patrik/Umbrella/branches/dev/protection") return protectedBranch();
-      if (requestPath.includes("Umbrella/contents/.darkfactory/release-policy.json")) return content(JSON.stringify(releasePolicy()));
+      if (requestPath.includes("Umbrella/contents/.agents/release-policy.json")) return content(JSON.stringify(releasePolicy()));
       if (requestPath.includes("Umbrella/pulls?state=open")) return [];
       if (requestPath.endsWith("darkfactory-data/contents/runs/marius-patrik/Umbrella")) return [];
       throw new Error(`unexpected ${method} ${requestPath}`);
@@ -1159,9 +1159,9 @@ test("finalization binds the read-only run and current App gates before automerg
 test("managed workflow keeps trusted planning, mutation, and validation authorities separate", async () => {
   const workflow = await readFile(new URL("../.github/workflows/df-submodule-autoupdate.yml", import.meta.url), "utf8");
   const source = await readFile(new URL("../../../scripts/df-submodule-autoupdate.mjs", import.meta.url), "utf8");
-  const manifest = JSON.parse(await readFile(new URL("../.darkfactory/managed-repository.json", import.meta.url), "utf8"));
-  const installer = JSON.parse(await readFile(new URL("../.darkfactory/installer-policy.json", import.meta.url), "utf8"));
-  const trigger = JSON.parse(await readFile(new URL("../.darkfactory/trigger-policy.json", import.meta.url), "utf8"));
+  const manifest = JSON.parse(await readFile(new URL("../.agents/managed-repository.json", import.meta.url), "utf8"));
+  const installer = JSON.parse(await readFile(new URL("../.agents/installer-policy.json", import.meta.url), "utf8"));
+  const trigger = JSON.parse(await readFile(new URL("../.agents/trigger-policy.json", import.meta.url), "utf8"));
   assert.match(workflow, /repository_dispatch:[\s\S]+darkfactory-release-verified/);
   assert.match(workflow, /schedule:[\s\S]+29 \*\/2 \* \* \*/);
   assert.match(workflow, /Least-privilege recursive pointer validation/);
@@ -1174,14 +1174,14 @@ test("managed workflow keeps trusted planning, mutation, and validation authorit
   assert.doesNotMatch(workflow, /needs\.plan\.outputs\.action != 'block'/);
   assert.doesNotMatch(workflow, /npm (?:ci|test|run)|bun |python |go test/);
   assert.doesNotMatch(source, /git\/refs\/heads\/(?:main|dev)|force\s*:\s*true|"DELETE"/);
-  assert.equal(manifest.dataRepo, "marius-patrik/Andromeda-data");
+  assert.equal(manifest.dataRepo, "marius-patrik/private-data");
   assert.equal(manifest.ledgerRepo, "marius-patrik/darkfactory-data");
-  assert.equal(installer.autoUpdater.source, "marius-patrik/Andromeda-data");
+  assert.equal(installer.autoUpdater.source, "marius-patrik/private-data");
   assert.equal(installer.autoUpdater.ledger, "marius-patrik/darkfactory-data");
   assert.equal(dfLib.DARK_FACTORY_DATA_REPO, "marius-patrik/darkfactory-data");
   for (const managed of [
-    ".darkfactory/data-repository-policy.json",
-    ".darkfactory/submodule-policy.json",
+    ".agents/data-repository-policy.json",
+    ".agents/submodule-policy.json",
     ".github/workflows/df-submodule-autoupdate.yml",
     ".github/scripts/df-submodule-autoupdate.mjs",
     ".github/scripts/df-submodule-checkout.mjs"

@@ -334,7 +334,7 @@ function hasAutoreviewContext(statusCheckRollup) {
 }
 
 async function managedConfigDeclaresAutoreview(repository, ref) {
-  const content = await getOptionalFileContent(gh, repository, ".darkfactory/managed-repository.json", ref);
+  const content = await getOptionalFileContent(gh, repository, ".agents/managed-repository.json", ref);
   if (!content) return false;
 
   try {

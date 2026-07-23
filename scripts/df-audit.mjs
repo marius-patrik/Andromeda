@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 export const DOCTOR_SCHEMA_VERSION = 2;
 export const DATA_REPOSITORY_POLICY_PATH = ".agents/data-repository-policy.json";
 export const DOCTOR_REPAIR_CLASSES = ["auto", "pr", "owner", "blocked"];
-export const DOC_PATHS = ["PRD.md", "AGENTS.md", ".agents/capabilities/project/STATUS.md", ".agents/capabilities/project/PROJECT.md"];
+export const DOC_PATHS = ["PRD.md", "AGENTS.md", ".agents/project/STATUS.md", ".agents/project/PROJECT.md"];
 export const DOC_STALE_DAYS = 90;
 export const STALE_PR_DAYS = 7;
 export const STALE_ISSUE_DAYS = 30;
@@ -59,10 +59,10 @@ const HEALTHY_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 const RED_CONCLUSIONS = new Set(["action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"]);
 const PULL_REQUEST_ONLY_GATE_CONTEXTS = new Set(["Codex Review", "DarkFactory Autoreview"]);
 const DOCTOR_MODES = new Set(["diagnose", "report"]);
-const CONTROL_REPO = { owner: "marius-patrik", repo: "DarkFactory" };
+const CONTROL_REPO = { owner: "marius-patrik", repo: "Andromeda" };
 const DOCTOR_ISSUE_AUTHORS = new Set(["darkfactory-agent[bot]", "mp-agents[bot]"]);
 const MAIN_ONLY_DATA_REPOSITORIES = new Set([AGENT_OS_DATA_REPO, DARK_FACTORY_DATA_REPO].map((name) => name.toLowerCase()));
-const DATA_REPOSITORY_POLICY_FILE = fileURLToPath(new URL(`../../${DATA_REPOSITORY_POLICY_PATH}`, import.meta.url));
+const DATA_REPOSITORY_POLICY_FILE = fileURLToPath(new URL(`../${DATA_REPOSITORY_POLICY_PATH}`, import.meta.url));
 const PLAN_BRANCH_PROTECTION_MESSAGE_MARKERS = [
   "upgrade to github pro",
   "make this repository public",
@@ -937,7 +937,7 @@ export async function auditManagedFileDrift(github, repository, targetRef, contr
   const controlRevision = assertExactCommit(options.controlRevision, "trusted control");
   const agentOsDataRevision = assertExactCommit(options.agentOsDataRevision, "canonical private-data");
   const findings = [];
-  const manifestText = await getOptionalFileContent(github, controlRepo, ".darkfactory/managed-repository.json", controlRevision);
+  const manifestText = await getOptionalFileContent(github, controlRepo, ".agents/managed-repository.json", controlRevision);
   const manifest = parseManagedManifest(manifestText);
   if (!manifest.ok) {
     return [doctorFinding("managed-baseline-invalid", "managed file drift", manifest.error, {
@@ -1028,11 +1028,11 @@ function parseManagedManifest(text) {
 async function auditProjectOverlay(github, repository, targetRef, agentOsDataRevision) {
   const findings = [];
   const dataRepo = parseRepo(AGENT_OS_DATA_REPO);
-  const prefix = `managed-repository/repositories/${repository.owner}/${repository.repo}/agents/.project`;
+  const prefix = `managed-repository/repositories/${repository.owner}/${repository.repo}/.agents/project`;
   const files = await listRemoteDirectoryFiles(github, dataRepo, prefix, agentOsDataRevision);
   for (const source of files) {
     const relative = source.path.slice(prefix.length + 1);
-    const targetPath = `.agents/capabilities/project/${relative}`;
+    const targetPath = `.agents/project/${relative}`;
     const expected = await readListedRemoteFile(github, dataRepo, source, agentOsDataRevision);
     const actual = await getOptionalFileContent(github, repository, targetPath, targetRef);
     if (actual === null || normalizeText(actual) !== normalizeText(expected)) {
@@ -1064,16 +1064,16 @@ export async function auditRepositoryTree(repository, tree, options = {}) {
     // and the capability floor. The same name nested anywhere below the root is
     // a leaked state home, because the runtime state root is also ~/.agents.
     // .agents is the retired state-root spelling and stays rejected outright.
-    const allowedProjectAuthority = filePath === ".agents/capabilities/project" || filePath.startsWith(".agents/capabilities/project/");
+    const allowedProjectAuthority = filePath === ".agents/project" || filePath.startsWith(".agents/project/");
     const allowedConfigAuthority = filePath === ".agents" || filePath.startsWith(".agents/");
-    const nestedAgents = lower.includes(".agents");
-    const nestedDarkFactory = lower.includes(".agents") && !allowedConfigAuthority && !allowedProjectAuthority;
+    const retiredStateRoot = lower.includes(".andromeda");
+    const nestedAgents = lower.includes(".agents") && !allowedConfigAuthority && !allowedProjectAuthority;
     const providerState = lower.some((segment) => PROVIDER_STATE_SEGMENTS.has(segment));
     const generated = lower.some((segment) => GENERATED_SEGMENTS.has(segment));
     const sensitive = lower.some((segment) => ["andromeda_secrets", "secrets"].includes(segment)) || /(^|\/)(auth\.json|\.env)$/i.test(filePath);
     const nestedGitMetadata = /(^|\/)\.git($|\/)/i.test(filePath) || (filePath !== ".gitmodules" && filePath.endsWith("/.gitmodules"));
 
-    if (!options.isData && (nestedAgents || nestedDarkFactory)) {
+    if (!options.isData && (nestedAgents || retiredStateRoot)) {
       findings.push(doctorFinding(`state-boundary-${slug(filePath)}`, "state boundary", `Repository-local control/state path \`${filePath}\` is outside the allowed root authority.`, { severity: "critical" }));
     }
     if (providerState || sensitive) {
@@ -1188,7 +1188,7 @@ export async function auditRuntimeAuthority(github, repository, ref, controlRepo
   if (!/\$ANDROMEDA_HOME|ANDROMEDA_HOME/.test(agents || "")) {
     findings.push(doctorFinding("agents-home-authority-undocumented", "runtime authority", "AGENTS.md does not point to canonical ANDROMEDA_HOME authority.", { severity: "error" }));
   }
-  const enforcementText = await getOptionalFileContent(github, repository, ".darkfactory/enforcement-rules.json", ref);
+  const enforcementText = await getOptionalFileContent(github, repository, ".agents/enforcement-rules.json", ref);
   try {
     const rules = JSON.parse(enforcementText || "{}");
     const noBypass = Array.isArray(rules.rules) && rules.rules.some((rule) => rule?.id === "no-admin-bypass" && rule.enabled !== false && rule.severity === "block");
@@ -1204,7 +1204,7 @@ export async function auditRuntimeAuthority(github, repository, ref, controlRepo
 export async function auditPrerequisites(github, repository, ref, options = {}) {
   const findings = [];
   if (!ref) return findings;
-  const manifestText = await getOptionalFileContent(github, repository, ".darkfactory/managed-repository.json", ref);
+  const manifestText = await getOptionalFileContent(github, repository, ".agents/managed-repository.json", ref);
   let requiredSecrets = [];
   try {
     const manifest = JSON.parse(manifestText || "{}");
@@ -1387,8 +1387,8 @@ function emptyMachineRuntimeEvidence(overrides = {}) {
 
 export async function auditLabelTaxonomy(github, repository, controlRepo = CONTROL_REPO, controlRevision) {
   const exactControlRevision = assertExactCommit(controlRevision, "trusted control");
-  const source = await getOptionalFileContent(github, controlRepo, "managed-repository/.darkfactory/labels.json", exactControlRevision)
-    ?? await getOptionalFileContent(github, controlRepo, ".darkfactory/labels.json", exactControlRevision);
+  const source = await getOptionalFileContent(github, controlRepo, "managed-repository/.agents/labels.json", exactControlRevision)
+    ?? await getOptionalFileContent(github, controlRepo, ".agents/labels.json", exactControlRevision);
   if (!source) {
     return [doctorFinding("label-taxonomy-source-missing", "configuration prerequisites", "Canonical label taxonomy is missing or inaccessible.", { severity: "critical" })];
   }
@@ -1945,18 +1945,18 @@ export async function auditRetiredAuthorityNames(github, repository, ref) {
     "README.md",
     "PRD.md",
     "AGENTS.md",
-    ".agents/capabilities/project/AGENTS.md",
-    ".agents/capabilities/project/COMMANDS.md",
-    ".agents/capabilities/project/DECISIONS.md",
-    ".agents/capabilities/project/HANDOFF.md",
-    ".agents/capabilities/project/PROJECT.md",
-    ".agents/capabilities/project/STATUS.md",
-    ".agents/capabilities/project/STRUCTURE.md",
+    ".agents/project/AGENTS.md",
+    ".agents/project/COMMANDS.md",
+    ".agents/project/DECISIONS.md",
+    ".agents/project/HANDOFF.md",
+    ".agents/project/PROJECT.md",
+    ".agents/project/STATUS.md",
+    ".agents/project/STRUCTURE.md",
     ".agents/branching-policy.md",
     ".agents/installer-policy.json",
     ".agents/managed-repository.json",
     ".github/workflows/sync-managed-repos.yml",
-    "src/managed-files.ts"
+    "src/bot/managed-files.ts"
   ];
   const documents = [];
   for (const filePath of authorityPaths) {

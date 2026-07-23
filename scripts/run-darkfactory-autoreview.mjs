@@ -35,14 +35,14 @@ import {
   ModelTurnError,
   executeModelTurn,
   validationCommandsForRepository
-} from "../../src/model-turn.ts";
+} from "../src/bot/model-turn.ts";
 import {
   autoreviewTargetVersionMarker,
   issueVersion,
   renderIssueAutofixComment,
   resolveEffectiveIssueContent,
   validateIssueAutofixProposal
-} from "../../src/issue-spec.ts";
+} from "../src/bot/issue-spec.ts";
 
 const CONTROL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CONTROL_REPOSITORY = "marius-patrik/darkfactory";
@@ -516,9 +516,9 @@ function trustedBaseRules(repoRoot, token, hooksRoot) {
   const paths = [
     "AGENTS.md",
     ".agents/AGENTS.md",
-    ".agents/capabilities/project/AGENTS.md",
-    ".agents/capabilities/project/PROJECT.md",
-    ".agents/capabilities/project/COMMANDS.md"
+    ".agents/project/AGENTS.md",
+    ".agents/project/PROJECT.md",
+    ".agents/project/COMMANDS.md"
   ];
   const sections = [];
   for (const filePath of paths) {

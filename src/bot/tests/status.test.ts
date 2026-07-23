@@ -342,7 +342,7 @@ function createStatusRequester(): GitHubRequester {
   return createRequester({
     "GET /repos/{owner}/{repo}/contents/{path}": (parameters) => {
       const path = String(parameters.path);
-      if (path === ".darkfactory/managed-repos.json") {
+      if (path === ".agents/managed-repos.json") {
         return managedReposContent({ "marius-patrik/dream": { state: "active" } });
       }
       if (path === "PRD.md") {

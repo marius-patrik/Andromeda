@@ -9,7 +9,7 @@ export const REPOSITORY_SETUP_COMMENT_MARKER = "<!-- dark-factory:repository-set
 
 const BOOTSTRAP_PATHS = requiredManagedFilePaths()
   .map((path) => ({
-    displayPath: path === "AGENTS.md" ? "repository" : path.startsWith(".github/") ? ".github" : ".darkfactory",
+    displayPath: path === "AGENTS.md" ? "repository" : path.startsWith(".github/") ? ".github" : ".agents",
     requiredPath: path,
     reason: managedPathReason(path)
   })) as Array<{ displayPath: string; requiredPath: string; reason: string }>;
@@ -74,8 +74,8 @@ export function formatRepositorySetupComment(report: RepositorySetupReport): str
   lines.push(
     "",
     `Bootstrap \`${GITHUB_BOOTSTRAP_WORKFLOW_PATH}\`, \`${DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH}\`, and \`${DARK_FACTORY_AUTOREVIEW_WORKFLOW_PATH}\` when GitHub workflow scaffolding is missing.`,
-    "Keep repository-local `AGENTS.md` and `.agents/.project` context aligned with the Agent OS authority in `$ANDROMEDA_HOME`.",
-    "Keep `.darkfactory` policy files from canonical Andromeda-data so installer, updater, and orchestration expectations stay consistent.",
+    "Keep repository-local `AGENTS.md` and `.agents/project` context aligned with the Agent OS authority in `$ANDROMEDA_HOME`.",
+    "Keep `.darkfactory` policy files from canonical private-data so installer, updater, and orchestration expectations stay consistent.",
     "Install the DarkFactory GitHub App credentials and an online `df-local` runner with canonical `$ANDROMEDA_HOME`; provider credentials remain in Agent OS, never repository secrets."
   );
 
@@ -86,7 +86,7 @@ function managedPathReason(path: string): string {
   if (path === DARK_FACTORY_AUTOREVIEW_WORKFLOW_PATH) return "DarkFactory Autoreview workflow";
   if (path === GITHUB_BOOTSTRAP_WORKFLOW_PATH) return "DarkFactory installer workflow";
   if (path === DARK_FACTORY_AUTOUPDATE_WORKFLOW_PATH) return "DarkFactory auto-update sentinel workflow";
-  if (path.startsWith(".darkfactory/")) return "DarkFactory managed policy";
+  if (path.startsWith(".agents/")) return "DarkFactory managed policy";
   return "DarkFactory managed workflow support";
 }
 

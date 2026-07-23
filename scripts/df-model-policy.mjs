@@ -14,6 +14,7 @@ export const MODEL_PURPOSES = Object.freeze([
   "explicitMaximum"
 ]);
 export const TASK_CLASSES = Object.freeze(["mechanical", "standard", "hard"]);
+const TOOL_POLICIES = new Set(["standard", "none"]);
 
 const SAFE_ROUTE_VALUE = /^[A-Za-z0-9][A-Za-z0-9_.\/-]{0,127}$/;
 const SAFE_ROUTE_MODEL = /^[A-Za-z0-9][A-Za-z0-9_.\/() -]{0,127}$/;
@@ -97,7 +98,7 @@ export function validateModelPolicy(raw) {
   }
 
   return Object.freeze({
-    schemaVersion: 3,
+    schemaVersion: 1,
     description: raw.description.trim(),
     purposes: Object.freeze(normalizedPurposes)
   });
@@ -125,7 +126,7 @@ export function modelRequestForPurpose(policy, purpose, options = {}) {
     request = validated.purposes[purpose];
   }
   return Object.freeze({
-    schemaVersion: 3,
+    schemaVersion: 1,
     purpose,
     modelTier: request.modelTier,
     effort: request.effort,
@@ -263,7 +264,8 @@ export function validateAgentExecutionReceipt(raw, expectedRequest, options = {}
     provider: safeRouteString(raw.resolved.provider, "resolved.provider"),
     model: safeRouteModel(raw.resolved.model, "resolved.model"),
     agentPreset: safeRouteString(raw.resolved.agentPreset, "resolved.agentPreset"),
-    providerVersion: safeRouteString(raw.resolved.providerVersion, "resolved.providerVersion")
+    providerVersion: safeRouteString(raw.resolved.providerVersion, "resolved.providerVersion"),
+    toolPolicy: raw.resolved.toolPolicy
   };
   if (!Array.isArray(raw.attempts) || raw.attempts.length < 1 || raw.attempts.length > 8) {
     throw new Error("Agent OS execution receipt attempts are invalid");

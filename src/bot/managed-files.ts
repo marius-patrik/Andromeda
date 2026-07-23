@@ -14,12 +14,12 @@ export const DARK_FACTORY_AUTOREVIEW_WORKFLOW_PATH = ".github/workflows/darkfact
 export const DARK_FACTORY_AUTOREVIEW_SCHEMA_PATH = ".github/darkfactory-autoreview.schema.json";
 export const DARK_FACTORY_AUTOREVIEW_PROTOCOL_PATH = ".github/scripts/df-autoreview.mjs";
 export const DARK_FACTORY_AUTOREVIEW_SCRIPT_PATH = ".github/scripts/run-darkfactory-autoreview.mjs";
-export const DARK_FACTORY_AUTOREVIEW_POLICY_PATH = ".darkfactory/autoreview-policy.json";
-export const DARK_FACTORY_DATA_REPOSITORY_POLICY_PATH = ".darkfactory/data-repository-policy.json";
-export const DARK_FACTORY_MODEL_POLICY_PATH = ".darkfactory/model-policy.json";
-export const DARK_FACTORY_TRIGGER_POLICY_PATH = ".darkfactory/trigger-policy.json";
-export const DARK_FACTORY_RELEASE_POLICY_PATH = ".darkfactory/release-policy.json";
-export const DARK_FACTORY_SUBMODULE_POLICY_PATH = ".darkfactory/submodule-policy.json";
+export const DARK_FACTORY_AUTOREVIEW_POLICY_PATH = ".agents/autoreview-policy.json";
+export const DARK_FACTORY_DATA_REPOSITORY_POLICY_PATH = ".agents/data-repository-policy.json";
+export const DARK_FACTORY_MODEL_POLICY_PATH = ".agents/model-policy.json";
+export const DARK_FACTORY_TRIGGER_POLICY_PATH = ".agents/trigger-policy.json";
+export const DARK_FACTORY_RELEASE_POLICY_PATH = ".agents/release-policy.json";
+export const DARK_FACTORY_SUBMODULE_POLICY_PATH = ".agents/submodule-policy.json";
 export const DARK_FACTORY_MANAGED_CHECK_SCRIPT_PATH = ".github/scripts/dark-factory-managed-check.mjs";
 export const DARK_FACTORY_SCRIPT_LIB_PATH = ".github/scripts/df-lib.mjs";
 export const DARK_FACTORY_ENFORCEMENT_SCRIPT_PATH = ".github/scripts/df-enforcement.mjs";
@@ -34,11 +34,11 @@ export const DARK_FACTORY_SWEEP_SCRIPT_PATH = ".github/scripts/df-sweep.mjs";
 export const DARK_FACTORY_WORK_SCRIPT_PATH = ".github/scripts/df-work.mjs";
 export const DARK_FACTORY_RELEASE_WORKFLOW_PATH = ".github/workflows/df-release.yml";
 export const DARK_FACTORY_SUBMODULE_WORKFLOW_PATH = ".github/workflows/df-submodule-autoupdate.yml";
-export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".darkfactory/managed-repository.json";
-export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".darkfactory/installer-policy.json";
-export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".darkfactory/branching-policy.md";
-export const DARK_FACTORY_ENFORCEMENT_RULES_PATH = ".darkfactory/enforcement-rules.json";
-export const DARK_FACTORY_LABELS_PATH = ".darkfactory/labels.json";
+export const DARK_FACTORY_MANAGED_CONFIG_PATH = ".agents/managed-repository.json";
+export const DARK_FACTORY_INSTALLER_POLICY_PATH = ".agents/installer-policy.json";
+export const DARK_FACTORY_BRANCHING_POLICY_PATH = ".agents/branching-policy.md";
+export const DARK_FACTORY_ENFORCEMENT_RULES_PATH = ".agents/enforcement-rules.json";
+export const DARK_FACTORY_LABELS_PATH = ".agents/labels.json";
 
 export interface ManagedFile {
   path: string;
@@ -50,7 +50,7 @@ export interface ManagedRepositoryRef {
   repo: string;
 }
 
-const MANAGED_COMMON_DIRS = [".github", ".darkfactory"] as const;
+const MANAGED_COMMON_DIRS = [".github", ".agents"] as const;
 const MANAGED_COMMON_FILES = [ANDROMEDA_ENTRYPOINT_PATH] as const;
 const EXCLUDED_MANAGED_FILE_PATHS = new Set([".github/workflows/df-event-forward.yml"]);
 export function readManagedFiles(repository?: ManagedRepositoryRef): ManagedFile[] {
@@ -85,7 +85,7 @@ export function readManagedFiles(repository?: ManagedRepositoryRef): ManagedFile
     const overlayRoot = resolve(managedRoot, overlayPrefix, ".agents", ".project");
 
     if (existsSync(overlayRoot)) {
-      for (const file of readManagedTree(managedRoot, `${overlayPrefix}.agents/.project`)) {
+      for (const file of readManagedTree(managedRoot, `${overlayPrefix}.agents/project`)) {
         files.set(file.path.slice(overlayPrefix.length), {
           ...file,
           path: file.path.slice(overlayPrefix.length)
@@ -136,14 +136,14 @@ function readManagedConfig(files?: readonly ManagedFile[]): {
   if (
     !isRecord(parsed) ||
     parsed.schemaVersion !== 1 ||
-    parsed.dataRepo !== "marius-patrik/Andromeda-data" ||
+    parsed.dataRepo !== "marius-patrik/private-data" ||
     parsed.ledgerRepo !== "marius-patrik/darkfactory-data" ||
     !isPathArray(parsed.packageFiles) ||
     !isPathArray(parsed.requiredFiles) ||
     !isPathArray(parsed.removedFiles)
   ) {
     throw new Error(
-      `${DARK_FACTORY_MANAGED_CONFIG_PATH} must define schemaVersion 1, canonical Andromeda-data source and darkfactory-data ledger authorities, and packageFiles, requiredFiles, and removedFiles path arrays`
+      `${DARK_FACTORY_MANAGED_CONFIG_PATH} must define schemaVersion 1, canonical private-data source and darkfactory-data ledger authorities, and packageFiles, requiredFiles, and removedFiles path arrays`
     );
   }
   const packageFiles = [...new Set(parsed.packageFiles)];
@@ -216,7 +216,7 @@ function resolveManagedContentRoot(): string {
 }
 
 function resolveProjectRoot(): string {
-  return resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  return dirname(fileURLToPath(import.meta.url));
 }
 
 function resolveCanonicalDataRepoRoot(): string {
@@ -236,30 +236,30 @@ function resolveCanonicalDataRepoRoot(): string {
     if (records.length !== parsed.length) {
       throw new Error(`Invalid Agent OS data repository registry record in ${dataReposFile}`);
     }
-    const authorities = records.filter((record) => record.id === "agent-os-data");
+    const authorities = records.filter((record) => record.id === "andromeda-data");
     if (authorities.length !== 1) {
-      throw new Error(`Agent OS data repository registry must contain exactly one agent-os-data authority record: ${dataReposFile}`);
+      throw new Error(`Agent OS data repository registry must contain exactly one andromeda-data authority record: ${dataReposFile}`);
     }
     const dataRepo = authorities[0];
-    if (dataRepo.repo !== "marius-patrik/Andromeda-data") {
-      throw new Error(`agent-os-data must use repository marius-patrik/Andromeda-data in ${dataReposFile}`);
+    if (dataRepo.repo !== "marius-patrik/private-data") {
+      throw new Error(`andromeda-data must use repository marius-patrik/private-data in ${dataReposFile}`);
     }
     if (typeof dataRepo.path !== "string" || !dataRepo.path.trim()) {
-      throw new Error(`Invalid agent-os-data path in ${dataReposFile}`);
+      throw new Error(`Invalid andromeda-data path in ${dataReposFile}`);
     }
     const registeredPath = resolve(dataRepo.path);
     if (registeredPath !== expectedPath) {
-      throw new Error(`agent-os-data path must be ${expectedPath}, received ${registeredPath}`);
+      throw new Error(`andromeda-data path must be ${expectedPath}, received ${registeredPath}`);
     }
     if (dataRepo.managedPath !== undefined) {
-      throw new Error(`agent-os-data must register its checkout root without managedPath in ${dataReposFile}`);
+      throw new Error(`andromeda-data must register its checkout root without managedPath in ${dataReposFile}`);
     }
     const conflicts = parsed.filter((entry) => isRecord(entry) && entry !== dataRepo && (
-      String(entry.repo || "").toLowerCase() === "marius-patrik/andromeda-data"
+      String(entry.repo || "").toLowerCase() === "marius-patrik/private-data"
       || (typeof entry.path === "string" && entry.path.trim() && resolve(entry.path) === expectedPath)
     ));
     if (conflicts.length > 0) {
-      throw new Error(`Agent OS data repository registry contains a conflicting Andromeda-data authority: ${dataReposFile}`);
+      throw new Error(`Agent OS data repository registry contains a conflicting private-data authority: ${dataReposFile}`);
     }
     return registeredPath;
   } catch (error) {

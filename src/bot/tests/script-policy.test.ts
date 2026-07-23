@@ -115,7 +115,7 @@ test("parsePrdItems includes nested PRD paths in stable markers", () => {
   const [packageItem] = parsePrdItems("## Milestones\n\n- **M2 — Planning**: Reconcile.", "src/example/PRD.md");
 
   assert.equal(rootItem.marker, "df-prd:milestones-m2");
-  assert.equal(packageItem.marker, "df-prd:packages-example-prd-md-milestones-m2");
+  assert.equal(packageItem.marker, "df-prd:src-example-prd-md-milestones-m2");
   assert.equal(packageItem.sourcePath, "src/example/PRD.md");
 });
 
@@ -170,7 +170,7 @@ test("prdScaffoldPullRequestBody includes the scaffold marker and file list", ()
 
   assert.match(body, /<!-- dark-factory:prd-scaffold -->/);
   assert.match(body, /- `PRD.md`/);
-  assert.match(body, /- `packages\/core\/PRD.md`/);
+  assert.match(body, /- `src\/core\/PRD.md`/);
 });
 
 test("task class labels classify work without selecting model settings", () => {
@@ -524,7 +524,7 @@ test("canonical Andromeda installation names resolve through the live managed re
       registry,
       repositories: [
         { full_name: "marius-patrik/Andromeda", archived: false, disabled: false },
-        { full_name: "marius-patrik/Andromeda-data", archived: false, disabled: false },
+        { full_name: "marius-patrik/private-data", archived: false, disabled: false },
         { full_name: "marius-patrik/DarkFactory", archived: false, disabled: false },
         { full_name: "marius-patrik/skyblock-agent", archived: false, disabled: false }
       ],
@@ -534,7 +534,7 @@ test("canonical Andromeda installation names resolve through the live managed re
 
   assert.deepEqual(active, [
     { owner: "marius-patrik", repo: "Andromeda" },
-    { owner: "marius-patrik", repo: "Andromeda-data" }
+    { owner: "marius-patrik", repo: "private-data" }
   ]);
   assert.ok(warnings.some((warning) => warning.includes("marius-patrik/DarkFactory") && warning.includes("'removed'")));
   assert.ok(warnings.some((warning) => warning.includes("marius-patrik/skyblock-agent") && warning.includes("'removed'")));
@@ -856,7 +856,7 @@ test("df-plan drift detection maps M2 PRD commitments to code artifacts", async 
   assert.match(source, /PRD drift reporting when code or backlog contradicts the PRD/);
   assert.match(source, /prd\\W\*backlog/);
   assert.match(source, /\.github\/workflows\/df-plan\.yml/);
-  assert.match(source, /\.github\/scripts\/df-plan\.mjs/);
+  assert.match(source, /scripts\/df-plan\.mjs/);
   assert.match(source, /listen for PRD file changes/);
   assert.match(source, /maintain sequencing references/);
   assert.match(source, /file or update a drift report issue/);
@@ -1031,11 +1031,11 @@ test("repository doctor workflow schedules trusted diagnosis with explicit repor
   assert.doesNotMatch(workflow, /DF_DATA_REPO/);
 });
 
-test("managed repository sync binds the canonical Andromeda-data checkout to ANDROMEDA_HOME", async () => {
+test("managed repository sync binds the canonical private-data checkout to ANDROMEDA_HOME", async () => {
   const workflow = await readFile(new URL("../.github/workflows/sync-managed-repos.yml", import.meta.url), "utf8");
   const gate = workflow.indexOf("Validate trusted control ref");
   const checkout = workflow.indexOf("Check out trusted DarkFactory control");
-  const token = workflow.indexOf("Create scoped Andromeda-data read token");
+  const token = workflow.indexOf("Create scoped private-data read token");
 
   assert.notEqual(gate, -1);
   assert.notEqual(checkout, -1);
@@ -1048,11 +1048,11 @@ test("managed repository sync binds the canonical Andromeda-data checkout to AND
   assert.match(workflow, /repository:\s+marius-patrik\/DarkFactory/);
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /persist-credentials:\s+false/);
-  assert.match(workflow, /repositories:\s+Andromeda-data/);
+  assert.match(workflow, /repositories:\s+private-data/);
   assert.match(workflow, /permission-contents:\s+read/);
-  assert.match(workflow, /repository:\s+marius-patrik\/Andromeda-data\b/);
+  assert.match(workflow, /repository:\s+marius-patrik\/private-data\b/);
   assert.match(workflow, /ANDROMEDA_HOME:\s+\$\{\{ github\.workspace \}\}\/\.andromeda-data/);
-  assert.match(workflow, /repo:'marius-patrik\/Andromeda-data'/);
+  assert.match(workflow, /repo:'marius-patrik\/private-data'/);
   assert.match(workflow, /path:process\.env\.ANDROMEDA_HOME/);
   assert.doesNotMatch(workflow, /repository:\s+marius-patrik\/agents-data\b/);
   assert.doesNotMatch(workflow, /process\.env\.ANDROMEDA_ROOT\s*\+\s*['"]\/data\/agent-os/);
@@ -1342,7 +1342,7 @@ test("df-work native gate remains fail closed before checkout and worker executi
   assert.equal((gate.match(/exit 1/g) ?? []).length, 2);
   assert.match(agentOs, /\[string\]::IsNullOrWhiteSpace\(\$env:ANDROMEDA_HOME\)/);
   assert.match(agentOs, /\[System\.IO\.Path\]::IsPathFullyQualified\(\$env:ANDROMEDA_HOME\)/);
-  assert.match(agentOs, /Join-Path -Path \$env:ANDROMEDA_HOME -ChildPath "bin\\agents\.ps1"/);
+  assert.match(agentOs, /Join-Path -Path \$env:ANDROMEDA_HOME -ChildPath "bin\\andromeda\.ps1"/);
   assert.match(agentOs, /Test-Path -LiteralPath \$agentsLauncher -PathType Leaf/);
   assert.equal((agentOs.match(/exit 1/g) ?? []).length, 3);
   assert.match(agentOs, /pwsh -NoLogo -NoProfile -File \$agentsLauncher state doctor --json/);
@@ -1360,7 +1360,7 @@ test("df-work binds Agent OS execution to the canonical launcher", async () => {
 
   assert.match(source, /const agentsHome = requiredEnv\("ANDROMEDA_HOME"\)/);
   assert.match(source, /if \(!path\.isAbsolute\(agentsHome\)\)/);
-  assert.match(source, /const agentsLauncher = path\.join\(agentsHome, "bin", "agents\.ps1"\)/);
+  assert.match(source, /const agentsLauncher = path\.join\(agentsHome, "bin", "andromeda\.ps1"\)/);
   assert.match(source, /runAgentCommand\(\["state", "doctor", "--json"\], CONTROL_ROOT\)/);
   assert.match(source, /executeModelTurn/);
   assert.match(modelTurnSource, /adapters\.agentRunArguments/);
@@ -1704,7 +1704,7 @@ test("DarkFactory Autoreview workflow binds the exact gate to trusted Agent OS e
   assert.match(workflow, /repository: marius-patrik\/DarkFactory/);
   assert.match(workflow, /ref: main/);
   assert.match(workflow, /DF_CONTROL_REVISION: \$\{\{ steps\.control\.outputs\.revision \}\}/);
-  assert.match(workflow, /bin\\agents\.ps1/);
+  assert.match(workflow, /bin\\andromeda\.ps1/);
   assert.match(workflow, /state doctor --json/);
   assert.doesNotMatch(workflow, /CODEX_AUTH_JSON|KIMI_AUTH_JSON|codex exec|kimi|claude|agy/);
 });
@@ -1972,7 +1972,7 @@ test("df-sweep blocks when exact managed branch protection is not provisioned", 
             error.status = 404;
             throw error;
           }
-          if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+          if (method === "GET" && pathName.includes("/contents/.agents/managed-repository.json")) {
             const error: Error & { status?: number } = new Error("Missing managed config");
             error.status = 404;
             throw error;
@@ -2027,7 +2027,7 @@ test("df-sweep holds worker PRs when managed config declares DarkFactory Autorev
         if (method === "GET" && pathName.endsWith("/protection")) {
           return managedProtection();
         }
-        if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+        if (method === "GET" && pathName.includes("/contents/.agents/managed-repository.json")) {
           return {
             type: "file",
             encoding: "base64",
@@ -2194,7 +2194,7 @@ test("parseWorkerClaim normalizes provider ledger fields", () => {
       primary: { provider: "fixture-primary", model: "fixture/primary-model", agentPreset: "Fixture-Primary", providerVersion: "1.0.0" },
       skipped: []
     },
-    resolved: { provider: "codex", model: "gpt-5.5", agentPreset: "Sol", providerVersion: "1.2.3" },
+    resolved: { provider: "codex", model: "gpt-5.5", agentPreset: "Sol", providerVersion: "1.2.3", toolPolicy: "standard" },
     attempts: [{ number: 1, outcome: "success", reason: null }],
     usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
     outcome: "success",
@@ -2319,7 +2319,7 @@ test("df-sweep blocks protected branches that have no required checks", async ()
         if (method === "GET" && pathName.endsWith("/protection")) {
           return { required_status_checks: null };
         }
-        if (method === "GET" && pathName.includes("/contents/.darkfactory/managed-repository.json")) {
+        if (method === "GET" && pathName.includes("/contents/.agents/managed-repository.json")) {
           const error: Error & { status?: number } = new Error("Missing managed config");
           error.status = 404;
           throw error;

@@ -24,7 +24,7 @@ export const SUBMODULE_POLICY_PATH = ".agents/submodule-policy.json";
 export const SUBMODULE_MODES = new Set(["status", "plan", "update", "verify"]);
 export const TRUSTED_GATE_APP_ID = 15368;
 const MAX_PAGINATION_PAGES = 100;
-const POLICY_FILE = fileURLToPath(new URL(`../../${SUBMODULE_POLICY_PATH}`, import.meta.url));
+const POLICY_FILE = fileURLToPath(new URL(`../${SUBMODULE_POLICY_PATH}`, import.meta.url));
 
 class PointerTrustViolation extends Error {}
 
@@ -373,7 +373,7 @@ export async function observeChildRelease(child, policy) {
   if (head?.sha !== receiptResult.sha) blockers.push(`child-${releaseBranch}-moved-after-release-receipt`);
   const protection = await optionalProtection(child, releaseBranch);
   blockers.push(...validateBoundProtection(protection, policy.requiredChecks, `child-${releaseBranch}`));
-  const releasePolicyText = await getOptionalFileContent(gh, child, ".darkfactory/release-policy.json", releaseBranch);
+  const releasePolicyText = await getOptionalFileContent(gh, child, ".agents/release-policy.json", releaseBranch);
   let releasePolicy = null;
   try { releasePolicy = validateReleasePolicy(JSON.parse(releasePolicyText || "")); } catch { blockers.push("child-release-policy-invalid"); }
   let mainChecks = null;
@@ -572,7 +572,7 @@ async function observeParentCandidate(parent, child, childRelease, policy) {
   if (pointerState === "blocked") blockers.push("parent-pointer-state-ambiguous");
   const [devProtection, releasePolicyText, pulls] = await Promise.all([
     optionalProtection(parent, policy.targetBranch),
-    getOptionalFileContent(gh, parent, ".darkfactory/release-policy.json", "main"),
+    getOptionalFileContent(gh, parent, ".agents/release-policy.json", "main"),
     listAll(`/repos/${repoName(parent)}/pulls?state=open&base=${encodeURIComponent(policy.targetBranch)}&per_page=100`)
   ]);
   blockers.push(...validateBoundProtection(devProtection, policy.requiredChecks, "parent-dev"));

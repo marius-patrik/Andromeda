@@ -60,7 +60,7 @@ test("issue draft hygiene is trusted-main, df-local, zero-token, sanitized, and 
   const [workflow, source, managed] = await Promise.all([
     readFile(path.join(root, ".github/workflows/df-issue-draft-hygiene.yml"), "utf8"),
     readFile(path.join(root, ".github/scripts/df-issue-draft-hygiene.mjs"), "utf8"),
-    readFile(path.join(root, ".darkfactory/managed-repository.json"), "utf8")
+    readFile(path.join(root, ".agents/managed-repository.json"), "utf8")
   ]);
   assert.match(workflow, /cron: "19 \*\/6 \* \* \*"/);
   assert.match(workflow, /runs-on: \[self-hosted, df-local\]/);
@@ -73,7 +73,7 @@ test("issue draft hygiene is trusted-main, df-local, zero-token, sanitized, and 
   assert.match(source, /sanitized: true/);
   const manifest = JSON.parse(managed);
   for (const required of [
-    ".darkfactory/issue-draft-policy.json",
+    ".agents/issue-draft-policy.json",
     ".github/workflows/df-issue-draft-hygiene.yml",
     ".github/scripts/df-issue-draft-hygiene.mjs"
   ]) {
@@ -284,16 +284,16 @@ test("Autoreview recovery lifecycle-filters code repositories, reruns the exact 
     controlMetadata: { archived: false, disabled: false },
     activeRepositories: [
       { owner: "marius-patrik", repo: "Andromeda" },
-      { owner: "marius-patrik", repo: "Andromeda-data" }
+      { owner: "marius-patrik", repo: "private-data" }
     ],
-    dataRepositories: ["marius-patrik/Andromeda-data", "marius-patrik/darkfactory-data"],
+    dataRepositories: ["marius-patrik/private-data", "marius-patrik/darkfactory-data"],
     now: Date.parse("2026-07-16T12:00:00Z"),
     async writeLedger(kind: string, target: string, payload: any) { ledgers.push({ kind, target, payload }); }
   });
   const repositories = await recoveryModule.listRecoveryRepositories();
   assert.deepEqual(repositories.map((entry: any) => entry.repository), ["marius-patrik/Andromeda", "marius-patrik/DarkFactory"]);
   await assert.rejects(
-    recoveryModule.listRecoveryRepositories({ repository: "marius-patrik/Andromeda-data" }),
+    recoveryModule.listRecoveryRepositories({ repository: "marius-patrik/private-data" }),
     /not an active code repository/
   );
   const result = await recoveryModule.recoverAutoreviews({ kind: "all", maxDispatches: 4, trigger: "test" });
@@ -876,10 +876,10 @@ test("active recovery workflows bind trusted main, Agent OS, scoped tokens, exac
   const [recovery, clean, managed] = await Promise.all([
     readFile(path.join(root, ".github/workflows/df-autoreview-recovery.yml"), "utf8"),
     readFile(path.join(root, ".github/workflows/df-clean.yml"), "utf8"),
-    readFile(path.join(root, ".darkfactory/managed-repository.json"), "utf8")
+    readFile(path.join(root, ".agents/managed-repository.json"), "utf8")
   ]);
   assert.match(recovery, /ref: \$\{\{ github\.sha \}\}/);
-  assert.match(recovery, /bin\\agents\.ps1/);
+  assert.match(recovery, /bin\\andromeda\.ps1/);
   assert.match(recovery, /permission-actions: write/);
   assert.match(recovery, /repositories: darkfactory-data[\s\S]*permission-contents: write/);
   assert.match(recovery, /df-autoreview-recovery\.mjs/);

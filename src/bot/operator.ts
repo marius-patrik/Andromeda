@@ -16,7 +16,7 @@ export type RepairClass = "auto" | "pr" | "owner" | "blocked";
 export type SetupStage = (typeof SETUP_STAGE_ORDER)[number];
 
 const MAIN_ONLY_DATA_REPOSITORIES = new Set([
-  "marius-patrik/andromeda-data",
+  "marius-patrik/private-data",
   "marius-patrik/darkfactory-data"
 ]);
 
@@ -155,7 +155,7 @@ function setupOperation(repository: string, finding: DoctorFinding): Pick<SetupA
     return { stage: "verification", operation: "converge-submodules", supported: true, reason: "Released child pointers are delegated to the trusted submodule engine, which changes only an exact admitted gitlink through a reviewed PR." };
   }
   if (id.includes("registry") || category === "registration") {
-    return { stage: "registration", operation: "converge-registration", supported: true, reason: "Registration changes only through one exact reviewed Andromeda-data source-policy PR, followed by trusted managed sync." };
+    return { stage: "registration", operation: "converge-registration", supported: true, reason: "Registration changes only through one exact reviewed private-data source-policy PR, followed by trusted managed sync." };
   }
   if (["health", "submodule metadata"].includes(category)) {
     return { stage: "verification", operation: "verify-only", supported: false, reason: "The owning release or submodule lane must land before setup can verify convergence; setup has no authority to simulate that work." };
@@ -300,7 +300,7 @@ export interface CleanEvidence {
     name: string;
     color: string;
     description: string;
-    policyPath: ".darkfactory/labels.json";
+    policyPath: ".agents/labels.json";
     policyBlob: string;
     policyRef: "dev";
     policyRevision: string;

@@ -50,7 +50,7 @@ test("loadEnforcementRules fails closed when file is missing", async () => {
 test("loadEnforcementRules fails closed on malformed JSON and schema", async () => {
   const root = await mkdtemp(join(tmpdir(), "df-enforcement-"));
   try {
-    await mkdir(join(root, ".darkfactory"), { recursive: true });
+    await mkdir(join(root, ".agents"), { recursive: true });
     await writeFile(join(root, ENFORCEMENT_RULES_PATH), "{");
     await assert.rejects(loadEnforcementRules(root), /Invalid JSON/);
 
@@ -71,7 +71,7 @@ test("loadEnforcementRules reads a custom rules file", async () => {
         { id: "parked-repos-untouched", enabled: true, severity: "warn" }
       ]
     };
-    await mkdir(join(root, ".darkfactory"), { recursive: true });
+    await mkdir(join(root, ".agents"), { recursive: true });
     await writeFile(join(root, ENFORCEMENT_RULES_PATH), JSON.stringify(custom));
     const rules = await loadEnforcementRules(root);
     const neverMergeRed = rules.rules.find((rule: { id: string }) => rule.id === "never-merge-red");
