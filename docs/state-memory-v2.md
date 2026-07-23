@@ -248,8 +248,9 @@ fails closed instead of creating a replacement provider session.
   local `ANDROMEDA_SYNC_KEY` secret and is provisioned out of band.
 
 Raw provider transcripts are local-only. Sessions reconciled from those
-transcripts carry `exchange: local-only`; event export skips each complete
-session before secret scanning and reports the `provider-transcript` reason.
+transcripts carry `exchange: local-only`; event export skips each session,
+including empty captures and later local continuation events, before secret
+scanning and reports the `provider-transcript` reason.
 Ordinary canonical session events roam only through the allow-listed encrypted
 transport, which rejects secret-like content, symlinks, path escapes, and
 immutable collisions. Memory supersession and retraction events are tombstones;

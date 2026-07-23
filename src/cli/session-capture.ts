@@ -213,6 +213,7 @@ const CAPTURE_CHECKPOINT_VERSION = 1 as const;
 const CAPTURE_GUARD_BYTES = 4 * 1024;
 const MAX_CAPTURE_CHECKPOINT_PAGES = 20_000;
 const MAX_CODEX_LINEAGE_DEPTH = 16;
+const EMPTY_PROVIDER_SESSION_CREATED_AT = "1970-01-01T00:00:00.000Z";
 const EMPTY_PREFIX_CHAIN_DIGEST = createHash("sha256")
   .update("andromeda-session-capture-prefix-chain-v1")
   .digest("hex");
@@ -1392,6 +1393,7 @@ function normalizeClaude(
   file: EvidenceFile,
   records: ParsedJsonLine[],
   limits: SessionCaptureLimits,
+  sourceComplete: boolean,
 ): NormalizedDesktopSession | null {
   const fileSessionId = path.basename(file.relativePath, path.extname(file.relativePath));
   if (!UUID.test(fileSessionId)) {
@@ -1402,14 +1404,24 @@ function normalizeClaude(
   const versions = new Set<string>();
   const workdirs = new Set<string>();
   const models: string[] = [];
-  const timestamps: string[] = [];
+  const identityTimestamps: string[] = [];
   const messages: NormalizedSourceMessage[] = [];
   const textualKinds = new Set(["text"]);
 
   for (const record of records) {
     const type = optionalString(record.value.type);
+    const recordSessionId = optionalString(record.value.sessionId);
+    if (recordSessionId !== null) {
+      sessionIds.add(recordSessionId.toLowerCase());
+      if (record.value.timestamp !== undefined && record.value.timestamp !== null) {
+        identityTimestamps.push(
+          normalizedTimestamp(record.value.timestamp, `Claude line ${record.line} timestamp`),
+        );
+      }
+    }
     if (type !== "user" && type !== "assistant") continue;
-    const nativeSessionId = nonEmptyString(record.value.sessionId, `Claude line ${record.line} sessionId`);
+    const nativeSessionId =
+      recordSessionId ?? nonEmptyString(record.value.sessionId, `Claude line ${record.line} sessionId`);
     sessionIds.add(nativeSessionId.toLowerCase());
     const sourceRecordId = nonEmptyString(record.value.uuid, `Claude line ${record.line} uuid`);
     const sourceTimestamp = normalizedTimestamp(record.value.timestamp, `Claude line ${record.line} timestamp`);
@@ -1423,7 +1435,6 @@ function normalizeClaude(
       throw new CaptureFailure("provider_drift", `Claude line ${record.line} isMeta must be a boolean`);
     }
     if (record.value.isMeta === true) continue;
-    timestamps.push(sourceTimestamp);
 
     const nativeMessage = plainRecord(record.value.message, `Claude line ${record.line} message`);
     const nativeRole = nonEmptyString(nativeMessage.role, `Claude line ${record.line} message.role`);
@@ -1446,13 +1457,12 @@ function normalizeClaude(
     });
   }
 
-  if (sessionIds.size === 0) return null;
-  if (sessionIds.size !== 1 || !sessionIds.has(fileSessionId.toLowerCase())) {
+  if (sessionIds.size === 0 && !sourceComplete) return null;
+  if (sessionIds.size > 0 && (sessionIds.size !== 1 || !sessionIds.has(fileSessionId.toLowerCase()))) {
     throw new CaptureFailure("provider_drift", "Claude transcript native session identity drifted");
   }
   const normalizedMessages = deduplicateMessages(messages, limits.maximumMessagesPerFile);
-  const createdAt = timestamps.sort()[0];
-  if (!createdAt) return null;
+  const createdAt = identityTimestamps.sort()[0] ?? EMPTY_PROVIDER_SESSION_CREATED_AT;
   return {
     provider: "claude",
     nativeSessionId: fileSessionId.toLowerCase(),
@@ -1716,7 +1726,7 @@ function normalizeDesktopSession(
   sourceComplete: boolean,
 ): NormalizedDesktopSession | null {
   if (file.provider === "codex") return normalizeCodex(file, records, limits, seed, sourceComplete);
-  const normalized = normalizeClaude(file, records, limits);
+  const normalized = normalizeClaude(file, records, limits, sourceComplete);
   if (normalized !== null) return normalized;
   return seed === null ? null : { ...seed, messages: [] };
 }
@@ -1774,7 +1784,6 @@ function assertExistingSource(
   source: NormalizedDesktopSession,
 ): void {
   if (
-    session.provider !== source.provider ||
     session.metadata.source !== "provider-transcript" ||
     session.metadata.sourceProvider !== source.provider ||
     session.metadata.nativeSessionId !== source.nativeSessionId ||
@@ -1969,10 +1978,10 @@ export async function reconcileDesktopSessions(
               `provider transcript exceeds maximumMessagesPerFile ${limits.maximumMessagesPerFile}`,
             );
           }
+          const canonical = await ensureCanonicalSession(state, normalized);
+          if (canonical.created) report.importedSessions += 1;
+          else report.existingSessions += 1;
           if (normalized.messages.length > 0) {
-            const canonical = await ensureCanonicalSession(state, normalized);
-            if (canonical.created) report.importedSessions += 1;
-            else report.existingSessions += 1;
             const messages = await appendImportedSessionMessages(
               state,
               canonical.descriptor.sessionId,
@@ -1980,13 +1989,11 @@ export async function reconcileDesktopSessions(
             );
             report.importedMessages += messages.appended;
             report.existingMessages += messages.existing;
-            checkpoint.visibleMessages = nextVisibleMessages;
-            checkpoint.classification = "captured";
-            checkpoint.nativeSessionId = normalized.nativeSessionId;
-            checkpoint.canonicalSessionId = canonical.descriptor.sessionId;
-          } else if (checkpoint.nativeSessionId === null) {
-            checkpoint.nativeSessionId = normalized.nativeSessionId;
           }
+          checkpoint.visibleMessages = nextVisibleMessages;
+          checkpoint.classification = "captured";
+          checkpoint.nativeSessionId = normalized.nativeSessionId;
+          checkpoint.canonicalSessionId = canonical.descriptor.sessionId;
         }
 
         cursor.files[key] = checkpoint;

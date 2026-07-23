@@ -20,11 +20,12 @@ transcript. Source working directories are evidence metadata only; they do not
 become canonical working-directory authority.
 
 System/developer policy records, Claude `isMeta: true` records, and Codex
-transport events are not imported. A source prefix with no visible
-user/assistant message can be checkpointed, but it does not create an empty
-canonical provider session. A page containing only valid Claude hidden-meta
-records advances safely without letting their content or timestamps seed the
-later visible session.
+transport events are not copied into the visible transcript. Once native
+identity is valid, a source with no visible user/assistant message still maps
+to an empty canonical provider session. Claude identity timestamps seed that
+session without exposing hidden content; a truly empty Claude JSONL uses the
+fixed `1970-01-01T00:00:00.000Z` creation timestamp so fresh reconciliation is
+deterministic.
 
 Codex lineage admission is format-aware. Line 1 is the sole owner and its
 `id`, not `session_id`, must match the rollout filename. Current Codex
@@ -50,7 +51,9 @@ Each native session maps deterministically to
 `ANDROMEDA_HOME/sessions/`. The source provider, native session id, native
 record id, timestamp, format, and root-relative source path remain attached to
 the canonical session or message. Re-running capture is idempotent; continuing
-append-only records extend the same canonical session.
+append-only records extend the same canonical session. Ordinary Andromeda
+resume turns and provider switches remain separate from deterministic imported
+turns and do not change the immutable source provenance.
 
 ## One-shot reconciliation
 
@@ -142,10 +145,17 @@ but their metadata is explicitly `exchange: local-only` with reason
 unit before secret scanning; it never exports a subset of the session. The
 export report includes the number skipped and the reason.
 
-This exception is granted only after immutable events prove the manager's
-exact provider provenance, canonical source path, deterministic imported turn,
-and at least one complete start/message/complete triple. Metadata alone,
-partial turns, traversal-shaped paths, and generic `local-only` sessions do not
-bypass secret scanning. Ordinary canonical session events remain eligible for
-the allow-listed encrypted event transport. Raw provider roots remain local,
-non-authoritative evidence and are never exchange sources.
+This exception is derived from the immutable `session.created` provider,
+canonical native identity, format, source path, and local-only reason. Every
+deterministic imported turn that exists must also contain one exact
+start/message/complete triple, or its crash-resumable prefix, with matching
+message metadata and completion receipt wherever those events exist. Empty
+captured sessions, ordinary resume turns, and provider switches remain part of
+the same atomically skipped session. Once immutable creation provenance
+identifies a provider-derived session, malformed imported-turn provenance or
+receipts abort export instead of falling through to ordinary event collection.
+Traversal-shaped creation provenance and generic `local-only` sessions do not
+bypass secret scanning. Ordinary
+non-provider-derived sessions remain eligible for the allow-listed encrypted
+event transport. Raw provider roots remain local, non-authoritative evidence
+and are never exchange sources.

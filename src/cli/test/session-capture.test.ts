@@ -12,8 +12,12 @@ import {
   loadSessionEvents,
   loadSessionStateReadOnly,
   loadTranscript,
+  runSessionTurn,
   sessionPaths,
+  switchSessionProvider,
   type ImportedSessionMessage,
+  type ProviderAdapter,
+  type SessionEvent,
 } from "../../sdk/harness/session";
 import { exportEventBundle, importEventBundle, enableEventSync } from "../event-sync";
 import { readSecret, writeSecret } from "../secrets";
@@ -42,6 +46,18 @@ const CODEX_SESSION = "019f8f67-479f-72f3-8ef3-ceed3f8218dc";
 const CODEX_PARENT_SESSION = "019f8ae2-1b2a-75d1-830e-9b20313548cd";
 const CODEX_ROOT_SESSION = "019f7450-efa8-7fb3-b843-b01e3482ae47";
 const CLI_PATH = path.resolve(import.meta.dir, "..", "cli.ts");
+
+function canonicalSessionEventPath(
+  state: SharedState,
+  sessionId: string,
+  event: Pick<SessionEvent, "id" | "machineId" | "machineSequence">,
+): string {
+  return path.join(
+    sessionPaths(state, sessionId).eventsDir,
+    event.machineId,
+    `${String(event.machineSequence).padStart(16, "0")}-${event.id}.json`,
+  );
+}
 
 function cleanEnvironment(): Record<string, string | undefined> {
   const environment = { ...process.env };
@@ -293,7 +309,7 @@ describe("desktop session capture regression triplet", () => {
       expect(JSON.stringify(codexTranscript)).not.toContain("private chain of thought");
 
       const claudeEvents = await loadSessionEvents(fixture.state, claudeId);
-      expect(claudeEvents[0]?.at).toBe("2026-07-23T09:00:00.000Z");
+      expect(claudeEvents[0]?.at).toBe("2026-07-23T08:59:59.000Z");
       const importedCompletion = claudeEvents.find(
         (event): event is Extract<typeof event, { type: "turn.completed" }> =>
           event.type === "turn.completed" && event.data.receipt?.sourceRecordId === "claude-assistant-1",
@@ -341,6 +357,153 @@ describe("desktop session capture regression triplet", () => {
     }
   });
 
+  test("success: an ordinary resumed turn stays separate from later imported provider records", async () => {
+    const fixture = await captureFixture();
+    try {
+      const claudePath = path.join(fixture.claudeRoot, "C--", `${CLAUDE_SESSION}.jsonl`);
+      await writeFile(
+        claudePath,
+        jsonl([
+          claudeRecord(
+            "user",
+            "provider-before-resume",
+            "2026-07-23T09:00:00.000Z",
+            "provider before resume",
+          ),
+        ]),
+      );
+      expect(
+        await reconcileDesktopSessions(fixture.state, {
+          providers: ["claude"],
+          claudeRoot: fixture.claudeRoot,
+        }),
+      ).toMatchObject({ importedSessions: 1, importedMessages: 1, failedFiles: 0 });
+
+      const sessionId = `desktop-claude-${CLAUDE_SESSION}`;
+      const captured = await loadSessionStateReadOnly(fixture.state, sessionId);
+      expect(captured).not.toBeNull();
+      const adapter = {
+        id: "claude",
+        displayName: "Claude fixture",
+        supportsStreaming: false,
+        async startSession() {},
+        async continueSession() {},
+        async runTurn() {
+          return { content: "ordinary resumed answer", role: "assistant" as const };
+        },
+      } satisfies ProviderAdapter;
+      await runSessionTurn(
+        fixture.state,
+        adapter,
+        {
+          sessionId,
+          provider: captured!.provider,
+          model: captured!.model,
+          mode: captured!.mode,
+          workdir: captured!.workdir,
+          stateDir: fixture.state.stateDir,
+        },
+        { prompt: "ordinary resumed question" },
+      );
+
+      await appendFile(
+        claudePath,
+        jsonl([
+          claudeRecord(
+            "assistant",
+            "provider-after-resume",
+            "2026-07-23T09:00:03.000Z",
+            "provider after resume",
+          ),
+        ]),
+      );
+      expect(
+        await reconcileDesktopSessions(fixture.state, {
+          providers: ["claude"],
+          claudeRoot: fixture.claudeRoot,
+        }),
+      ).toMatchObject({ existingSessions: 1, importedMessages: 1, failedFiles: 0 });
+      expect(
+        (await loadTranscript(fixture.state, sessionId))?.messages.map((message) => message.content),
+      ).toEqual([
+        "provider before resume",
+        "ordinary resumed question",
+        "ordinary resumed answer",
+        "provider after resume",
+      ]);
+
+      await enableEventSync(fixture.state, true);
+      expect(
+        await exportEventBundle(fixture.state, path.join(fixture.root, "resumed.bundle.json")),
+      ).toMatchObject({
+        skippedSessions: 1,
+        skippedSessionReasons: { "provider-transcript": 1 },
+      });
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("edge input: a provider switch does not change immutable capture provenance", async () => {
+    const fixture = await captureFixture();
+    try {
+      const claudePath = path.join(fixture.claudeRoot, "C--", `${CLAUDE_SESSION}.jsonl`);
+      await writeFile(
+        claudePath,
+        jsonl([
+          claudeRecord(
+            "user",
+            "provider-before-switch",
+            "2026-07-23T09:00:00.000Z",
+            "provider before switch",
+          ),
+        ]),
+      );
+      await reconcileDesktopSessions(fixture.state, {
+        providers: ["claude"],
+        claudeRoot: fixture.claudeRoot,
+      });
+      const sessionId = `desktop-claude-${CLAUDE_SESSION}`;
+      await switchSessionProvider(fixture.state, sessionId, "codex", "gpt-test");
+
+      await appendFile(
+        claudePath,
+        jsonl([
+          claudeRecord(
+            "assistant",
+            "provider-after-switch",
+            "2026-07-23T09:00:01.000Z",
+            "provider after switch",
+          ),
+        ]),
+      );
+      expect(
+        await reconcileDesktopSessions(fixture.state, {
+          providers: ["claude"],
+          claudeRoot: fixture.claudeRoot,
+        }),
+      ).toMatchObject({ existingSessions: 1, importedMessages: 1, failedFiles: 0 });
+      expect(await loadSessionStateReadOnly(fixture.state, sessionId)).toMatchObject({
+        provider: "codex",
+        model: "gpt-test",
+        metadata: {
+          sourceProvider: "claude",
+          sourcePath: `.claude/projects/C--/${CLAUDE_SESSION}.jsonl`,
+        },
+      });
+
+      await enableEventSync(fixture.state, true);
+      expect(
+        await exportEventBundle(fixture.state, path.join(fixture.root, "switched.bundle.json")),
+      ).toMatchObject({
+        skippedSessions: 1,
+        skippedSessionReasons: { "provider-transcript": 1 },
+      });
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   test("continuing Codex event transport is ignored until its canonical response_item arrives", async () => {
     const fixture = await captureFixture();
     try {
@@ -369,7 +532,7 @@ describe("desktop session capture regression triplet", () => {
         codexRoot: fixture.codexRoot,
       });
       expect(beforeResponse).toMatchObject({
-        importedSessions: 0,
+        importedSessions: 1,
         importedMessages: 0,
         skippedFiles: 1,
         failedFiles: 0,
@@ -395,7 +558,7 @@ describe("desktop session capture regression triplet", () => {
         codexRoot: fixture.codexRoot,
       });
       expect(afterResponse).toMatchObject({
-        importedSessions: 1,
+        existingSessions: 1,
         importedMessages: 1,
         failedFiles: 0,
       });
@@ -763,16 +926,24 @@ describe("desktop session capture regression triplet", () => {
           codexRoot: triggerFixture.codexRoot,
         });
         if (triggerTurn === false) {
-          expect(report).toMatchObject({ failedFiles: 0, importedSessions: 0, skippedFiles: 1 });
+          expect(report).toMatchObject({ failedFiles: 0, importedSessions: 1, skippedFiles: 1 });
+          expect(
+            (
+              await loadTranscript(
+                triggerFixture.state,
+                `desktop-codex-${CODEX_SESSION}`,
+              )
+            )?.messages,
+          ).toEqual([]);
         } else {
           expect(report.errors[0]).toMatchObject({ code: "provider_drift" });
+          expect(
+            await loadSessionStateReadOnly(
+              triggerFixture.state,
+              `desktop-codex-${CODEX_SESSION}`,
+            ),
+          ).toBeNull();
         }
-        expect(
-          await loadSessionStateReadOnly(
-            triggerFixture.state,
-            `desktop-codex-${CODEX_SESSION}`,
-          ),
-        ).toBeNull();
       } finally {
         await rm(triggerFixture.root, { recursive: true, force: true });
       }
@@ -819,6 +990,76 @@ describe("desktop session capture regression triplet", () => {
           (message) => message.content,
         ),
       ).toEqual(["hello", "answer"]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("edge input: empty Claude and meta-only Codex transcripts map once and remain idempotent", async () => {
+    const fixture = await captureFixture();
+    try {
+      const claudePath = path.join(fixture.claudeRoot, "C--", `${CLAUDE_SESSION}.jsonl`);
+      const codexPath = path.join(
+        fixture.codexRoot,
+        "2026",
+        "07",
+        "23",
+        `rollout-2026-07-23T10-00-00-${CODEX_SESSION}.jsonl`,
+      );
+      await writeFile(claudePath, "");
+      await writeFile(
+        codexPath,
+        jsonl([
+          codexSessionMeta(
+            CODEX_SESSION,
+            null,
+            "2026-07-23T10:00:00.000Z",
+          ),
+        ]),
+      );
+
+      expect(
+        await reconcileDesktopSessions(fixture.state, {
+          claudeRoot: fixture.claudeRoot,
+          codexRoot: fixture.codexRoot,
+        }),
+      ).toMatchObject({
+        importedSessions: 2,
+        importedMessages: 0,
+        skippedFiles: 2,
+        failedFiles: 0,
+      });
+      const claudeId = `desktop-claude-${CLAUDE_SESSION}`;
+      const codexId = `desktop-codex-${CODEX_SESSION}`;
+      expect((await loadTranscript(fixture.state, claudeId))?.messages).toEqual([]);
+      expect((await loadTranscript(fixture.state, codexId))?.messages).toEqual([]);
+      expect((await loadSessionEvents(fixture.state, claudeId))[0]?.at).toBe(
+        "1970-01-01T00:00:00.000Z",
+      );
+      expect((await loadSessionEvents(fixture.state, codexId))[0]?.at).toBe(
+        "2026-07-23T10:00:00.000Z",
+      );
+
+      expect(
+        await reconcileDesktopSessions(fixture.state, {
+          claudeRoot: fixture.claudeRoot,
+          codexRoot: fixture.codexRoot,
+        }),
+      ).toMatchObject({
+        importedSessions: 0,
+        existingSessions: 0,
+        importedMessages: 0,
+        skippedFiles: 2,
+        failedFiles: 0,
+      });
+
+      await enableEventSync(fixture.state, true);
+      expect(
+        await exportEventBundle(fixture.state, path.join(fixture.root, "empty-sessions.bundle.json")),
+      ).toMatchObject({
+        skippedSessions: 2,
+        skippedSessionReasons: { "provider-transcript": 2 },
+      });
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -961,7 +1202,7 @@ describe("desktop session capture regression triplet", () => {
       const hiddenPage = await reconcileDesktopSessions(fixture.state, options);
       expect(hiddenPage).toMatchObject({
         reconciledFiles: 1,
-        importedSessions: 0,
+        importedSessions: 1,
         importedMessages: 0,
         skippedFiles: 1,
         deferredFiles: 1,
@@ -972,11 +1213,11 @@ describe("desktop session capture regression triplet", () => {
           fixture.state,
           `desktop-claude-${CLAUDE_SESSION}`,
         ),
-      ).toBeNull();
+      ).not.toBeNull();
 
       const visiblePage = await reconcileDesktopSessions(fixture.state, options);
       expect(visiblePage).toMatchObject({
-        importedSessions: 1,
+        existingSessions: 1,
         importedMessages: 1,
         failedFiles: 0,
       });
@@ -987,7 +1228,7 @@ describe("desktop session capture regression triplet", () => {
       ]);
       expect(JSON.stringify(transcript)).not.toContain("hidden page content");
       expect((await loadSessionEvents(fixture.state, sessionId))[0]?.at).toBe(
-        "2026-07-23T10:00:00.000Z",
+        "2000-01-01T00:00:00.000Z",
       );
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
@@ -1572,17 +1813,165 @@ test("event exchange skips each local-only imported session atomically and repor
   }
 });
 
-test("event exchange does not trust forged provider-transcript metadata without a completed imported turn", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "andromeda-session-forged-local-only-"));
+test("event exchange atomically skips valid provider-import crash prefixes", async () => {
+  const cases = [
+    {
+      label: "started-only",
+      nativeSessionId: CLAUDE_SESSION,
+      retainedTypes: new Set<SessionEvent["type"]>(["session.created", "turn.started"]),
+    },
+    {
+      label: "started-and-message",
+      nativeSessionId: CODEX_SESSION,
+      retainedTypes: new Set<SessionEvent["type"]>([
+        "session.created",
+        "turn.started",
+        "message.appended",
+      ]),
+    },
+  ];
+
+  for (const crashCase of cases) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `andromeda-session-${crashCase.label}-`));
+    try {
+      const state = sharedState(root);
+      await ensureSharedState(state);
+      await enableEventSync(state, true);
+      const sessionId = `desktop-claude-${crashCase.nativeSessionId}`;
+      const sourcePath = `.claude/projects/C--/${crashCase.nativeSessionId}.jsonl`;
+      await createSession(state, {
+        provider: "claude",
+        model: "claude-opus-4-8",
+        sessionId,
+        metadata: {
+          source: "provider-transcript",
+          sourceProvider: "claude",
+          nativeSessionId: crashCase.nativeSessionId,
+          sourceFormat: "claude-project-jsonl-v1",
+          sourcePath,
+          exchange: "local-only",
+          exchangeReason: "provider-transcript",
+        },
+        createdAt: "2026-07-23T09:00:00.000Z",
+      });
+      await appendImportedSessionMessages(state, sessionId, [
+        {
+          provider: "claude",
+          nativeSessionId: crashCase.nativeSessionId,
+          sourceFormat: "claude-project-jsonl-v1",
+          sourcePath,
+          sourceRecordId: `${crashCase.label}-record`,
+          sourceTimestamp: "2026-07-23T09:00:01.000Z",
+          message: {
+            role: "user",
+            content: "api_key=example-value-that-must-stay-local",
+            metadata: {
+              source: "provider-transcript",
+              sourceProvider: "claude",
+              nativeSessionId: crashCase.nativeSessionId,
+              sourcePath,
+              sourceRecordId: `${crashCase.label}-record`,
+              sourceTimestamp: "2026-07-23T09:00:01.000Z",
+            },
+          },
+        },
+      ]);
+
+      for (const event of await loadSessionEvents(state, sessionId)) {
+        if (!crashCase.retainedTypes.has(event.type)) {
+          await rm(canonicalSessionEventPath(state, sessionId, event));
+        }
+      }
+
+      expect(
+        await exportEventBundle(state, path.join(root, `${crashCase.label}.bundle.json`)),
+      ).toMatchObject({
+        skippedSessions: 1,
+        skippedSessionReasons: { "provider-transcript": 1 },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("event exchange fails closed for a malformed imported completion receipt", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "andromeda-session-malformed-receipt-"));
   try {
     const state = sharedState(root);
     await ensureSharedState(state);
     await enableEventSync(state, true);
-    const forgedId = `desktop-claude-${CLAUDE_SESSION}`;
+    const sessionId = `desktop-claude-${CLAUDE_SESSION}`;
+    const sourcePath = `.claude/projects/C--/${CLAUDE_SESSION}.jsonl`;
     await createSession(state, {
       provider: "claude",
       model: "claude-opus-4-8",
-      sessionId: forgedId,
+      sessionId,
+      metadata: {
+        source: "provider-transcript",
+        sourceProvider: "claude",
+        nativeSessionId: CLAUDE_SESSION,
+        sourceFormat: "claude-project-jsonl-v1",
+        sourcePath,
+        exchange: "local-only",
+        exchangeReason: "provider-transcript",
+      },
+      createdAt: "2026-07-23T09:00:00.000Z",
+    });
+    await appendImportedSessionMessages(state, sessionId, [
+      {
+        provider: "claude",
+        nativeSessionId: CLAUDE_SESSION,
+        sourceFormat: "claude-project-jsonl-v1",
+        sourcePath,
+        sourceRecordId: "malformed-receipt-record",
+        sourceTimestamp: "2026-07-23T09:00:01.000Z",
+        message: {
+          role: "user",
+          content: "ordinary provider transcript content",
+          metadata: {
+            source: "provider-transcript",
+            sourceProvider: "claude",
+            nativeSessionId: CLAUDE_SESSION,
+            sourcePath,
+            sourceRecordId: "malformed-receipt-record",
+            sourceTimestamp: "2026-07-23T09:00:01.000Z",
+          },
+        },
+      },
+    ]);
+    const events = await loadSessionEvents(state, sessionId);
+    const completion = events.find(
+      (event): event is Extract<SessionEvent, { type: "turn.completed" }> =>
+        event.type === "turn.completed",
+    );
+    expect(completion).toBeDefined();
+    await rm(canonicalSessionEventPath(state, sessionId, completion!));
+    await completeSessionTurn(state, sessionId, completion!.data.turnId, {
+      receipt: { source: "provider-transcript", sourceRecordId: "wrong-record" },
+    });
+
+    const bundlePath = path.join(root, "malformed-receipt.bundle.json");
+    await expect(
+      exportEventBundle(state, bundlePath),
+    ).rejects.toThrow("malformed provider transcript turn");
+    await expect(stat(bundlePath)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("event exchange trusts immutable canonical provider provenance for an empty captured session", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "andromeda-session-empty-local-only-"));
+  try {
+    const state = sharedState(root);
+    await ensureSharedState(state);
+    await enableEventSync(state, true);
+    const capturedId = `desktop-claude-${CLAUDE_SESSION}`;
+    await createSession(state, {
+      provider: "claude",
+      model: "claude-opus-4-8",
+      sessionId: capturedId,
       metadata: {
         source: "provider-transcript",
         sourceProvider: "claude",
@@ -1595,9 +1984,10 @@ test("event exchange does not trust forged provider-transcript metadata without 
       createdAt: "2026-07-23T09:00:00.000Z",
     });
 
-    await expect(exportEventBundle(state, path.join(root, "forged.bundle.json"))).rejects.toThrow(
-      "secret-like field",
-    );
+    expect(await exportEventBundle(state, path.join(root, "empty.bundle.json"))).toMatchObject({
+      skippedSessions: 1,
+      skippedSessionReasons: { "provider-transcript": 1 },
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -1657,28 +2047,30 @@ test("event exchange rejects traversal-shaped provider source provenance", async
       },
       createdAt: "2026-07-23T09:00:00.000Z",
     });
-    await appendImportedSessionMessages(state, forgedId, [
-      {
-        provider: "claude",
-        nativeSessionId: CLAUDE_SESSION,
-        sourceFormat: "claude-project-jsonl-v1",
-        sourcePath,
-        sourceRecordId: "traversal-source-record",
-        sourceTimestamp: "2026-07-23T09:00:01.000Z",
-        message: {
-          role: "user",
-          content: "api_key=example-value-that-must-not-roam",
-          metadata: {
-            source: "provider-transcript",
-            sourceProvider: "claude",
-            nativeSessionId: CLAUDE_SESSION,
-            sourcePath,
-            sourceRecordId: "traversal-source-record",
-            sourceTimestamp: "2026-07-23T09:00:01.000Z",
+    await expect(
+      appendImportedSessionMessages(state, forgedId, [
+        {
+          provider: "claude",
+          nativeSessionId: CLAUDE_SESSION,
+          sourceFormat: "claude-project-jsonl-v1",
+          sourcePath,
+          sourceRecordId: "traversal-source-record",
+          sourceTimestamp: "2026-07-23T09:00:01.000Z",
+          message: {
+            role: "user",
+            content: "api_key=example-value-that-must-not-roam",
+            metadata: {
+              source: "provider-transcript",
+              sourceProvider: "claude",
+              nativeSessionId: CLAUDE_SESSION,
+              sourcePath,
+              sourceRecordId: "traversal-source-record",
+              sourceTimestamp: "2026-07-23T09:00:01.000Z",
+            },
           },
         },
-      },
-    ]);
+      ]),
+    ).rejects.toThrow("does not match provider transcript provenance");
 
     await expect(exportEventBundle(state, path.join(root, "traversal.bundle.json"))).rejects.toThrow(
       "secret-like",

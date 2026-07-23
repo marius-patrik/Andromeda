@@ -1456,24 +1456,6 @@ function importedMessageReceipt(input: ImportedSessionMessage): Record<string, u
   };
 }
 
-function assertImportedSessionProjection(projection: SessionProjection, input: ImportedSessionMessage): void {
-  const metadata = projection.state.metadata;
-  if (
-    projection.state.provider !== input.provider ||
-    metadata.source !== "provider-transcript" ||
-    metadata.sourceProvider !== input.provider ||
-    metadata.nativeSessionId !== input.nativeSessionId ||
-    metadata.sourceFormat !== input.sourceFormat ||
-    metadata.sourcePath !== input.sourcePath ||
-    metadata.exchange !== "local-only" ||
-    metadata.exchangeReason !== "provider-transcript"
-  ) {
-    throw new Error(
-      `canonical session ${projection.state.sessionId} does not match provider transcript provenance`,
-    );
-  }
-}
-
 interface ImportedTurnEvents {
   started?: Extract<SessionEvent, { type: "turn.started" }>;
   message?: Extract<SessionEvent, { type: "message.appended" }>;
@@ -1521,22 +1503,28 @@ export async function appendImportedSessionMessages(
     const machineId = await readMachineId(state);
     const batch = await readSessionEventsUnlocked(state, sessionId);
     const events = batch.events;
-    const projection = replayEvents(events, sessionId);
-    assertImportedSessionProjection(projection, uniqueInputs.values().next().value!);
+    replayEvents(events, sessionId);
+    for (const input of uniqueInputs.values()) {
+      assertImportedSessionCreation(sessionId, events[0], input);
+    }
 
     const turns = new Map<string, ImportedTurnEvents>();
+    const importedTurnIds = new Set(uniqueInputs.keys());
     for (const event of events) {
       if (event.type === "turn.started") {
+        if (!importedTurnIds.has(event.data.turnId)) continue;
         const turn = turns.get(event.data.turnId) ?? {};
         if (turn.started) throw new Error(`duplicate turn start in session ${sessionId}: ${event.data.turnId}`);
         turn.started = event;
         turns.set(event.data.turnId, turn);
       } else if (event.type === "message.appended") {
+        if (!importedTurnIds.has(event.data.turnId)) continue;
         const turn = turns.get(event.data.turnId) ?? {};
         if (turn.message) throw new Error(`desktop canonical turn contains multiple messages: ${event.data.turnId}`);
         turn.message = event;
         turns.set(event.data.turnId, turn);
       } else if (event.type === "turn.completed") {
+        if (!importedTurnIds.has(event.data.turnId)) continue;
         const turn = turns.get(event.data.turnId) ?? {};
         if (turn.completed) throw new Error(`duplicate turn completion in session ${sessionId}: ${event.data.turnId}`);
         turn.completed = event;
@@ -1579,7 +1567,6 @@ export async function appendImportedSessionMessages(
     };
 
     for (const [turnId, input] of uniqueInputs) {
-      assertImportedSessionProjection(projection, input);
       const expectedReceipt = importedMessageReceipt(input);
       const turn = turns.get(turnId) ?? {};
       if (turn.completed && (!turn.started || !turn.message)) {
@@ -1692,46 +1679,85 @@ export async function loadSessionStateReadOnly(
   return replayEvents(events, sessionId).state;
 }
 
-function providerTranscriptStateMetadataIsValid(sessionState: SessionState): boolean {
-  const metadata = sessionState.metadata;
+interface ProviderTranscriptCreationProvenance {
+  provider: "claude" | "codex";
+  nativeSessionId: string;
+  sourceFormat: string;
+  sourcePath: string;
+}
+
+function providerTranscriptCreationProvenance(
+  sessionId: string,
+  event: SessionEvent | undefined,
+): ProviderTranscriptCreationProvenance | null {
+  if (event?.type !== "session.created") return null;
+  const provider = event.data.provider;
+  const metadata = event.data.metadata;
   if (
-    (sessionState.provider !== "claude" && sessionState.provider !== "codex") ||
+    (provider !== "claude" && provider !== "codex") ||
     metadata.source !== "provider-transcript" ||
-    metadata.sourceProvider !== sessionState.provider ||
+    metadata.sourceProvider !== provider ||
     metadata.exchange !== "local-only" ||
     metadata.exchangeReason !== "provider-transcript" ||
     typeof metadata.nativeSessionId !== "string" ||
     typeof metadata.sourceFormat !== "string" ||
     typeof metadata.sourcePath !== "string"
   ) {
-    return false;
+    return null;
   }
   const nativeSessionId = metadata.nativeSessionId.toLowerCase();
   const sourcePath = metadata.sourcePath;
   if (
     metadata.nativeSessionId !== nativeSessionId ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(nativeSessionId) ||
-    sessionState.sessionId !== `desktop-${sessionState.provider}-${nativeSessionId}` ||
+    sessionId !== `desktop-${provider}-${nativeSessionId}` ||
     sourcePath.includes("\\") ||
     path.posix.isAbsolute(sourcePath) ||
     path.posix.normalize(sourcePath) !== sourcePath ||
     sourcePath.split("/").some((segment) => segment.length === 0 || segment === "." || segment === "..")
   ) {
-    return false;
+    return null;
   }
-  if (sessionState.provider === "claude") {
-    return (
-      metadata.sourceFormat === "claude-project-jsonl-v1" &&
-      sourcePath.startsWith(".claude/projects/") &&
-      sourcePath.endsWith(`/${nativeSessionId}.jsonl`)
-    );
+  if (
+    provider === "claude" &&
+    (metadata.sourceFormat !== "claude-project-jsonl-v1" ||
+      !sourcePath.startsWith(".claude/projects/") ||
+      !sourcePath.endsWith(`/${nativeSessionId}.jsonl`))
+  ) {
+    return null;
   }
-  return (
-    metadata.sourceFormat === "codex-rollout-jsonl-v1" &&
-    sourcePath.startsWith(".codex/sessions/") &&
-    path.posix.basename(sourcePath).startsWith("rollout-") &&
-    sourcePath.endsWith(`${nativeSessionId}.jsonl`)
-  );
+  if (
+    provider === "codex" &&
+    (metadata.sourceFormat !== "codex-rollout-jsonl-v1" ||
+      !sourcePath.startsWith(".codex/sessions/") ||
+      !path.posix.basename(sourcePath).startsWith("rollout-") ||
+      !sourcePath.endsWith(`${nativeSessionId}.jsonl`))
+  ) {
+    return null;
+  }
+  return {
+    provider,
+    nativeSessionId,
+    sourceFormat: metadata.sourceFormat,
+    sourcePath,
+  };
+}
+
+function assertImportedSessionCreation(
+  sessionId: string,
+  creation: SessionEvent | undefined,
+  input: ImportedSessionMessage,
+): void {
+  const provenance = providerTranscriptCreationProvenance(sessionId, creation);
+  if (
+    provenance === null ||
+    provenance.provider !== input.provider ||
+    provenance.nativeSessionId !== input.nativeSessionId ||
+    provenance.sourceFormat !== input.sourceFormat ||
+    provenance.sourcePath !== input.sourcePath
+  ) {
+    throw new Error(`canonical session ${sessionId} does not match provider transcript provenance`);
+  }
 }
 
 function exactCanonicalRecord(value: unknown, expected: Record<string, unknown>): boolean {
@@ -1742,81 +1768,131 @@ function exactCanonicalRecord(value: unknown, expected: Record<string, unknown>)
   }
 }
 
-function providerTranscriptEventsAreValid(projection: SessionProjection, events: SessionEvent[]): boolean {
-  if (!providerTranscriptStateMetadataIsValid(projection.state) || events[0]?.type !== "session.created") {
-    return false;
-  }
-  const metadata = projection.state.metadata;
-  const provider = projection.state.provider;
-  const nativeSessionId = metadata.nativeSessionId as string;
-  const sourceFormat = metadata.sourceFormat as string;
-  const sourcePath = metadata.sourcePath as string;
-  if (events.length < 4 || (events.length - 1) % 3 !== 0) return false;
-  for (let index = 1; index < events.length; index += 3) {
-    const started = events[index];
-    const message = events[index + 1];
-    const completed = events[index + 2];
+function providerTranscriptEventsAreValid(sessionId: string, events: SessionEvent[]): boolean {
+  const provenance = providerTranscriptCreationProvenance(sessionId, events[0]);
+  if (provenance === null) return false;
+  const malformedImportedTurn = (turnId: string, reason: string): never => {
+    throw new Error(`malformed provider transcript turn in session ${sessionId}: ${turnId} (${reason})`);
+  };
+  const importedTurnIds = new Set<string>();
+  for (const event of events.slice(1)) {
     if (
-      started?.type !== "turn.started" ||
-      message?.type !== "message.appended" ||
-      completed?.type !== "turn.completed" ||
+      (event.type === "turn.started" ||
+        event.type === "message.appended" ||
+        event.type === "turn.completed") &&
+      /^desktop-[a-f0-9]{40}$/.test(event.data.turnId)
+    ) {
+      importedTurnIds.add(event.data.turnId);
+    }
+    if (
+      event.type === "message.appended" &&
+      event.data.message.metadata?.source === "provider-transcript"
+    ) {
+      importedTurnIds.add(event.data.turnId);
+    }
+    if (event.type === "turn.completed" && event.data.receipt?.source === "provider-transcript") {
+      importedTurnIds.add(event.data.turnId);
+    }
+  }
+  const importedTurns = new Map<string, ImportedTurnEvents>();
+  for (const event of events.slice(1)) {
+    if (
+      event.type !== "turn.started" &&
+      event.type !== "message.appended" &&
+      event.type !== "turn.completed"
+    ) {
+      continue;
+    }
+    const turnId = event.data.turnId;
+    if (!importedTurnIds.has(turnId)) continue;
+    const turn = importedTurns.get(turnId) ?? {};
+    if (event.type === "turn.started") {
+      if (turn.started) malformedImportedTurn(turnId, "duplicate start");
+      turn.started = event;
+    } else if (event.type === "message.appended") {
+      if (turn.message) malformedImportedTurn(turnId, "multiple imported messages");
+      turn.message = event;
+    } else {
+      if (turn.completed) malformedImportedTurn(turnId, "duplicate completion");
+      turn.completed = event;
+    }
+    importedTurns.set(turnId, turn);
+  }
+  for (const [turnId, turn] of importedTurns) {
+    const { started, message, completed } = turn;
+    if (!started) {
+      throw new Error(`malformed provider transcript turn in session ${sessionId}: ${turnId} (missing start)`);
+    }
+    if (completed && !message) malformedImportedTurn(turnId, "completion before imported message");
+    if (!message) continue;
+    if (
       started.data.turnId !== message.data.turnId ||
-      started.data.turnId !== completed.data.turnId ||
+      (completed && started.data.turnId !== completed.data.turnId) ||
       (message.data.message.role !== "user" && message.data.message.role !== "assistant")
     ) {
-      return false;
+      malformedImportedTurn(turnId, "inconsistent turn identity or role");
     }
     const messageMetadata = message.data.message.metadata;
-    if (!messageMetadata || typeof messageMetadata !== "object" || Array.isArray(messageMetadata)) return false;
+    if (!messageMetadata || typeof messageMetadata !== "object" || Array.isArray(messageMetadata)) {
+      malformedImportedTurn(turnId, "missing message provenance");
+    }
     const sourceRecordId = (messageMetadata as Record<string, unknown>).sourceRecordId;
     const sourceTimestamp = (messageMetadata as Record<string, unknown>).sourceTimestamp;
-    if (typeof sourceRecordId !== "string" || typeof sourceTimestamp !== "string") return false;
+    if (
+      typeof sourceRecordId !== "string" ||
+      sourceRecordId.trim().length === 0 ||
+      typeof sourceTimestamp !== "string"
+    ) {
+      throw new Error(
+        `malformed provider transcript turn in session ${sessionId}: ${turnId} (invalid source record identity)`,
+      );
+    }
     try {
       assertIsoTimestamp(sourceTimestamp, "provider transcript source timestamp");
     } catch {
-      return false;
+      malformedImportedTurn(turnId, "invalid source timestamp");
     }
     const expectedMessageMetadata = {
       source: "provider-transcript",
-      sourceProvider: provider,
-      nativeSessionId,
-      sourcePath,
+      sourceProvider: provenance.provider,
+      nativeSessionId: provenance.nativeSessionId,
+      sourcePath: provenance.sourcePath,
       sourceRecordId,
       sourceTimestamp,
     };
     const expectedReceipt = {
       source: "provider-transcript",
-      provider,
-      nativeSessionId,
-      sourceFormat,
-      sourcePath,
+      provider: provenance.provider,
+      nativeSessionId: provenance.nativeSessionId,
+      sourceFormat: provenance.sourceFormat,
+      sourcePath: provenance.sourcePath,
       sourceRecordId,
       sourceTimestamp,
     };
     if (
       !exactCanonicalRecord(messageMetadata, expectedMessageMetadata) ||
-      !exactCanonicalRecord(completed.data.receipt, expectedReceipt) ||
-      started.data.turnId !==
+      (completed && !exactCanonicalRecord(completed.data.receipt, expectedReceipt)) ||
+      turnId !==
         importedTurnId({
-          provider,
-          nativeSessionId,
-          sourceFormat,
-          sourcePath,
+          provider: provenance.provider,
+          nativeSessionId: provenance.nativeSessionId,
+          sourceFormat: provenance.sourceFormat,
+          sourcePath: provenance.sourcePath,
           sourceRecordId,
           sourceTimestamp,
           message: message.data.message,
         }) ||
       started.at !== sourceTimestamp ||
       message.at !== sourceTimestamp ||
-      completed.at !== sourceTimestamp
+      (completed && completed.at !== sourceTimestamp)
     ) {
-      return false;
+      malformedImportedTurn(turnId, "non-canonical provenance, identity, timestamp, or receipt");
     }
   }
   return true;
 }
 
-/** Verify the narrow manager-generated provider-transcript exchange exception without writing. */
+/** Verify immutable provider-transcript creation/import provenance without writing. */
 export async function isVerifiedProviderTranscriptSessionReadOnly(
   state: SessionStateRoot,
   rawSessionId: string,
@@ -1830,7 +1906,8 @@ export async function isVerifiedProviderTranscriptSessionReadOnly(
     sessionId,
     canonicalSessionEventReadLimits(options),
   );
-  return providerTranscriptEventsAreValid(replayEvents(events, sessionId), events);
+  replayEvents(events, sessionId);
+  return providerTranscriptEventsAreValid(sessionId, events);
 }
 
 async function collectSessionIds(

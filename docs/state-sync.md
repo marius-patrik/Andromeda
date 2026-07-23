@@ -92,9 +92,12 @@ sync artifacts.
   caches, logs, temporary files, locks, process state, and arbitrary files are
   local-only.
 - Canonical sessions reconciled from provider transcripts are also local-only.
-  Export skips each complete session before secret scanning and reports the
-  `provider-transcript` reason; ordinary canonical session events remain
-  eligible for exchange.
+  Export skips each session before secret scanning and reports the
+  `provider-transcript` reason, including empty captures and later local
+  resume/provider-switch events. Ordinary non-provider-derived sessions remain
+  eligible for exchange. Valid provider creation provenance combined with a
+  malformed imported turn or receipt aborts export; it never falls through to
+  the roaming event collector.
 - Migration evidence remains below `ANDROMEDA_HOME/provenance/migrations/` and in
   the separately protected Recovery archive.
 
