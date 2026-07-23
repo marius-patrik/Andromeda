@@ -63,11 +63,11 @@ jobs:
       - name: Register canonical Agent OS data checkout
         env:
           AGENTS_DATA_REPOS: ${{ runner.temp }}/agent-os-data-repos.json
-          AGENTS_HOME: ${{ github.workspace }}/.andromeda-data
+          ANDROMEDA_HOME: ${{ github.workspace }}/.andromeda-data
         run: >-
           node -e "require('node:fs').writeFileSync(process.env.AGENTS_DATA_REPOS,
           JSON.stringify([{id:'agent-os-data',repo:'marius-patrik/Andromeda-data',
-          path:process.env.AGENTS_HOME,branch:'main',
+          path:process.env.ANDROMEDA_HOME,branch:'main',
           env:'AGENTS_SYSTEM_DATA_ROOT',configuredAt:new Date().toISOString()}],
           null, 2) + '\n')"
 
@@ -83,7 +83,7 @@ jobs:
       - name: Sync installed repositories
         env:
           AGENTS_DATA_REPOS: ${{ runner.temp }}/agent-os-data-repos.json
-          AGENTS_HOME: ${{ github.workspace }}/.andromeda-data
+          ANDROMEDA_HOME: ${{ github.workspace }}/.andromeda-data
           GITHUB_APP_ID: ${{ secrets.DARK_FACTORY_APP_ID }}
           GITHUB_PRIVATE_KEY: ${{ secrets.DARK_FACTORY_PRIVATE_KEY }}
         run: npm run sync:managed
