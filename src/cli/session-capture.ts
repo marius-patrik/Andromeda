@@ -1779,6 +1779,7 @@ function assertExistingSource(
     session.metadata.sourceProvider !== source.provider ||
     session.metadata.nativeSessionId !== source.nativeSessionId ||
     session.metadata.sourceFormat !== source.sourceFormat ||
+    session.metadata.sourcePath !== source.sourcePath ||
     session.metadata.exchange !== "local-only" ||
     session.metadata.exchangeReason !== "provider-transcript"
   ) {

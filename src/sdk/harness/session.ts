@@ -1464,6 +1464,7 @@ function assertImportedSessionProjection(projection: SessionProjection, input: I
     metadata.sourceProvider !== input.provider ||
     metadata.nativeSessionId !== input.nativeSessionId ||
     metadata.sourceFormat !== input.sourceFormat ||
+    metadata.sourcePath !== input.sourcePath ||
     metadata.exchange !== "local-only" ||
     metadata.exchangeReason !== "provider-transcript"
   ) {

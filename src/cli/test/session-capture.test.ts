@@ -447,6 +447,59 @@ describe("desktop session capture regression triplet", () => {
     }
   });
 
+  test("denied failure: never blends duplicate native session ids from different source paths", async () => {
+    const fixture = await captureFixture();
+    try {
+      const firstProject = path.join(fixture.claudeRoot, "C--");
+      const secondProject = path.join(fixture.claudeRoot, "D--");
+      await mkdir(secondProject, { recursive: true });
+      await writeFile(
+        path.join(firstProject, `${CLAUDE_SESSION}.jsonl`),
+        jsonl([
+          claudeRecord(
+            "user",
+            "first-source-record",
+            "2026-07-23T09:00:00.000Z",
+            "first source",
+          ),
+        ]),
+      );
+      await writeFile(
+        path.join(secondProject, `${CLAUDE_SESSION}.jsonl`),
+        jsonl([
+          claudeRecord(
+            "assistant",
+            "second-source-record",
+            "2026-07-23T09:00:01.000Z",
+            "second source must not blend",
+          ),
+        ]),
+      );
+
+      const report = await reconcileDesktopSessions(fixture.state, {
+        providers: ["claude"],
+        claudeRoot: fixture.claudeRoot,
+      });
+      expect(report).toMatchObject({
+        scannedFiles: 2,
+        importedSessions: 1,
+        importedMessages: 1,
+        failedFiles: 1,
+      });
+      expect(report.errors[0]).toMatchObject({
+        code: "canonical_collision",
+        retryable: false,
+      });
+      expect(
+        (await loadTranscript(fixture.state, `desktop-claude-${CLAUDE_SESSION}`))?.messages.map(
+          (message) => message.content,
+        ),
+      ).toEqual(["first source"]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   test("success: validates complete and owner-only-truncated Codex lineage without importing ancestor messages", async () => {
     for (const variant of ["complete", "owner-only-truncated"] as const) {
       const fixture = await captureFixture();
@@ -1358,6 +1411,16 @@ test("bulk import reads once, replays at most twice, and writes one projection f
       eventReplays: 1,
       projectionWrites: 0,
     });
+    const eventsBeforeMismatchedSource = await loadSessionEvents(state, sessionId);
+    await expect(
+      appendImportedSessionMessages(state, sessionId, [
+        {
+          ...messages[0]!,
+          sourcePath: `.claude/projects/D--/${CLAUDE_SESSION}.jsonl`,
+        },
+      ]),
+    ).rejects.toThrow("does not match provider transcript provenance");
+    expect(await loadSessionEvents(state, sessionId)).toEqual(eventsBeforeMismatchedSource);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
