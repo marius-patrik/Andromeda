@@ -59,7 +59,7 @@ const HEALTHY_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 const RED_CONCLUSIONS = new Set(["action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"]);
 const PULL_REQUEST_ONLY_GATE_CONTEXTS = new Set(["Codex Review", "DarkFactory Autoreview"]);
 const DOCTOR_MODES = new Set(["diagnose", "report"]);
-const CONTROL_REPO = { owner: "marius-patrik", repo: "DarkFactory" };
+const CONTROL_REPO = { owner: "marius-patrik", repo: "Andromeda" };
 const DOCTOR_ISSUE_AUTHORS = new Set(["darkfactory-agent[bot]", "mp-agents[bot]"]);
 const MAIN_ONLY_DATA_REPOSITORIES = new Set([AGENT_OS_DATA_REPO, DARK_FACTORY_DATA_REPO].map((name) => name.toLowerCase()));
 const DATA_REPOSITORY_POLICY_FILE = fileURLToPath(new URL(`../${DATA_REPOSITORY_POLICY_PATH}`, import.meta.url));

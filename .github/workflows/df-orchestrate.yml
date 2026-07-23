@@ -112,7 +112,7 @@ jobs:
       - name: Run orchestrator
         env:
           DARK_FACTORY_TOKEN: ${{ steps.app-token.outputs.token }}
-          DF_CONTROL_REPO: marius-patrik/DarkFactory
+          DF_CONTROL_REPO: marius-patrik/Andromeda
           DF_TRIGGER: ${{ github.event_name }}
           DF_TARGET_REPO: ${{ inputs.repo }}
           DF_TARGET_ISSUE_NUMBER: ${{ inputs.issue_number }}
