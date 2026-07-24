@@ -16,6 +16,7 @@ import path from "node:path";
 import {
   activateIdentityBundle,
   importBundledLegacySkill,
+  inspectCapabilityIntegrity,
   installCapability,
   type CapabilityPublicationBoundary,
 } from "../capabilities";
@@ -26,7 +27,6 @@ import {
 } from "../state";
 import {
   readPackageRegistrations,
-  upsertPackageRegistration,
 } from "../packages";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -415,46 +415,114 @@ describe("install CLI", () => {
     }
   });
 
-  test("requires schema v2 and qualified identity for public package registration", async () => {
+  test("rejects direct registration of an invalid payload before state mutation", async () => {
     const root = await mkdtemp(
-      path.join(os.tmpdir(), "agents-package-register-v2-"),
+      path.join(os.tmpdir(), "agents-package-register-invalid-"),
     );
     try {
-      const legacy = path.join(root, "legacy-package");
-      await mkdir(legacy, { recursive: true });
+      const invalid = path.join(root, "invalid-package");
+      await mkdir(invalid, { recursive: true });
+      const manifest = publicCapabilityManifest("invalid", "plugin");
+      (manifest as any).runtime = {
+        kind: "wasi",
+        module: "runtime/missing.wasm",
+        sha256: "f".repeat(64),
+      };
+      (manifest.contributions.commands[0] as any).handler = {
+        kind: "wasi",
+        export: "missing",
+      };
       await Bun.write(
-        path.join(legacy, "agent.package.json"),
-        '{"schemaVersion":1,"id":"legacy","kind":"plugin"}\n',
+        path.join(invalid, "agent.package.json"),
+        JSON.stringify(manifest),
       );
       const rejected = await runAgents(root, [
         "packages",
         "register",
-        legacy,
+        invalid,
       ]);
       expect(rejected.code).toBe(1);
       expect(rejected.stderr).toContain(
-        "schemaVersion 2 is required for public capabilities",
+        "packages register is disabled; use andromeda install",
       );
-      expect(await readPackageRegistrations(sharedState(root))).toEqual([]);
+      expect(
+        await Bun.file(path.join(root, ".agents")).exists(),
+      ).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
-      const modern = path.join(root, "modern-package");
-      await mkdir(modern, { recursive: true });
-      await Bun.write(
-        path.join(modern, "agent.package.json"),
-        JSON.stringify(
-          publicCapabilityManifest("shared", "plugin", "alpha"),
+  test("serializes concurrent installs whose requested command aliases collide", async () => {
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "agents-package-install-race-"),
+    );
+    try {
+      const state = sharedState(root);
+      await ensureSharedState(state);
+      const identitySource = path.join(root, "identity-source");
+      await writeIdentityFixture(identitySource, "Concurrent install test.");
+      await activateIdentityBundle(state, identitySource, { replace: true });
+      await rm(identitySource, { recursive: true, force: true });
+      const candidates = [
+        { id: "candidate-a", source: path.join(root, "candidate-a") },
+        { id: "candidate-b", source: path.join(root, "candidate-b") },
+      ];
+      for (const { id, source } of candidates) {
+        await mkdir(source, { recursive: true });
+        const manifest = publicCapabilityManifest(
+          id,
+          "plugin",
+          "collision",
+        );
+        (
+          manifest.contributions.commands[0] as
+            typeof manifest.contributions.commands[number] & {
+              requestedTopLevelAlias: string;
+            }
+        ).requestedTopLevelAlias = "shared-probe";
+        await Bun.write(
+          path.join(source, "agent.package.json"),
+          JSON.stringify(manifest),
+        );
+      }
+      const results = await Promise.allSettled(
+        candidates.map(({ id, source }) =>
+          installCapability(state, {
+            kind: "plugin",
+            name: `collision/${id}`,
+            source,
+          }),
         ),
       );
-      const registered = await runAgents(root, [
-        "packages",
-        "register",
-        modern,
-      ]);
-      expect(registered).toMatchObject({ code: 0, stderr: "" });
-      expect(registered.stdout).toContain("registered plugin alpha/shared");
-      expect(await readPackageRegistrations(sharedState(root))).toMatchObject([
-        { id: "alpha/shared", kind: "plugin", path: modern },
-      ]);
+      expect(
+        results.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      const rejection = results.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      expect(String(rejection?.reason)).toContain(
+        "command token collision: shared-probe",
+      );
+
+      const installs = await readInstalls(state);
+      const registrations = await readPackageRegistrations(state);
+      expect(installs).toHaveLength(1);
+      expect(registrations).toHaveLength(1);
+      expect(registrations[0]).toMatchObject({
+        id: installs[0].name,
+        kind: installs[0].kind,
+        source: installs[0].source,
+        path: installs[0].path,
+      });
+      const inspection = await inspectCapabilityIntegrity(state);
+      expect(inspection).toMatchObject({
+        ok: true,
+        installs: 1,
+        storeObjects: 2,
+      });
+      expect(inspection.issues).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -537,7 +605,7 @@ describe("install CLI", () => {
     }
   });
 
-  test("preflights installed v2 registrations and the candidate before publication", async () => {
+  test("rejects a noncanonical installed registration before publication", async () => {
     const root = await mkdtemp(
       path.join(os.tmpdir(), "agents-install-command-preflight-"),
     );
@@ -550,12 +618,22 @@ describe("install CLI", () => {
         path.join(broken, "agent.package.json"),
         '{"schemaVersion":1,"id":"broken","kind":"plugin"}\n',
       );
-      await upsertPackageRegistration(state, {
-        id: "broken/public",
-        kind: "plugin",
-        path: broken,
-        manifestPath: path.join(broken, "agent.package.json"),
-      });
+      await Bun.write(
+        state.packagesFile,
+        `${JSON.stringify(
+          [
+            {
+              id: "broken/public",
+              kind: "plugin",
+              path: broken,
+              manifestPath: path.join(broken, "agent.package.json"),
+              registeredAt: new Date(0).toISOString(),
+            },
+          ],
+          null,
+          2,
+        )}\n`,
+      );
 
       const candidate = path.join(root, "candidate");
       await mkdir(candidate, { recursive: true });
@@ -571,7 +649,7 @@ describe("install CLI", () => {
           source: candidate,
         }),
       ).rejects.toThrow(
-        "public package registration broken/public has no schema v2 manifest",
+        "package registry contains no canonical install for: broken/public",
       );
       expect(await snapshotTree(state.stateDir)).toEqual(before);
     } finally {

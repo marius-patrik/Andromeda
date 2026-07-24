@@ -25,7 +25,9 @@ Commands are registered once through `src/commands`. Third-party commands use
 top-level alias, but the registry exposes it only when the corresponding
 `<publisher>/<plugin>:<alias>` grant is present. Collisions fail atomically,
 and plugins cannot shadow the embedded `help`, `version`, `doctor`, or
-`plugins` recovery commands.
+`plugins` recovery commands. Installation reserves requested alias tokens
+before a grant exists, so two packages cannot publish mutually incompatible
+claims and race for the same future grant.
 
 Version 1 manifests remain readable only for internal legacy packages while
 their runtimes are folded into Andromeda. The installer has one path-pinned,
@@ -35,6 +37,13 @@ skills, requires version 2. The installer verifies the declared Andromeda
 compatibility range against the authoritative product version and preflights
 the candidate together with every installed v2 command contribution before
 publishing state. This is a migration boundary, not a second public format.
+Direct `packages register` mutation is disabled: public packages must enter
+through the installer so artifact admission and registry publication remain
+one serialized transaction. Doctor, package execution, and harness execution
+admit `packages.json` only when every record exactly matches a canonical
+checksum-verified install, target, artifact store object, manifest, and
+collision-free command set. External and legacy-native registry entries fail
+closed before execution.
 
 Canonical public identity is always `<publisher>/<id>`. State and registries
 retain that identity verbatim; physical capability directories use a

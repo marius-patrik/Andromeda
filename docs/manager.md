@@ -223,7 +223,6 @@ agents identity activate <source-directory> [--replace]
 agents cli list|doctor
 agents cli pin [codex|claude|kimi|agy|all]
 agents cli env <codex|claude|kimi|agy>
-agents packages register <path>
 agents packages list [--json]
 agents packages run <name-or-path> -- <args...>
 agents packages distro <define|install|upgrade|remove> ...

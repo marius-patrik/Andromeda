@@ -21,16 +21,13 @@ import {
   importBundledLegacySkill,
   inspectCapabilityIntegrity,
   installCapability,
+  readAdmittedPackageRegistrations,
   recoverCapabilityPlatform,
   type CapabilityKind,
 } from "./capabilities";
 import { canonicalChildEnvironment } from "./runtime-paths";
 import {
-  packageManifestIdentity,
-  preflightPublicPackageCommands,
   readPackageManifest,
-  readPackageRegistrations,
-  upsertPackageRegistration,
   type AgentsPackageManifest,
 } from "./packages";
 import { readAuthoritativeProductVersion } from "./product-version";
@@ -167,7 +164,6 @@ Usage:
   andromeda cli list|doctor
   andromeda cli pin [codex|claude|kimi|agy|all]
   andromeda cli env <codex|claude|kimi|agy>
-  andromeda packages register <path>
   andromeda packages list [--json]
   andromeda packages run <name-or-path> -- <args...>
   andromeda packages distro <define|install|upgrade|remove> ...
@@ -517,35 +513,19 @@ async function cliCommand(args: string[]): Promise<void> {
 
 async function packageCommand(args: string[], flags: Record<string, string | boolean>): Promise<void> {
   const [action, packagePath] = args;
+  if (action === "register") {
+    throw new Error(
+      "packages register is disabled; use andromeda install <kind> <publisher/id> <source> for full admission and atomic publication",
+    );
+  }
   const state = runtimeState();
   await ensureSharedState(state);
   if (!action || action === "list") {
-    const registrations = await readPackageRegistrations(state);
+    const registrations = (await readAdmittedPackageRegistrations(state)).map(
+      (item) => item.registration,
+    );
     if (flags.json) console.log(JSON.stringify(registrations, null, 2));
     else for (const item of registrations) console.log(`${item.kind.padEnd(8)} ${item.id.padEnd(24)} ${item.path}`);
-    return;
-  }
-  if (action === "register") {
-    if (!packagePath) throw new Error("packages register requires a path");
-    const fullPath = path.resolve(root, packagePath);
-    const packageManifest = await readPackageManifest(fullPath, {
-      requireSchemaVersion2: true,
-      andromedaVersion: await readAuthoritativeProductVersion(),
-    });
-    if (!packageManifest) throw new Error(`no package manifest found in ${packagePath}`);
-    if (packageManifest.schemaVersion !== 2) {
-      throw new Error("packages register requires agent.package.json schemaVersion 2");
-    }
-    const registrations = await readPackageRegistrations(state);
-    await preflightPublicPackageCommands(registrations, packageManifest);
-    const identity = packageManifestIdentity(packageManifest);
-    await upsertPackageRegistration(state, {
-      id: identity,
-      kind: packageManifest.kind,
-      path: fullPath,
-      manifestPath: path.join(fullPath, "agent.package.json"),
-    });
-    console.log(`registered ${packageManifest.kind} ${identity}`);
     return;
   }
   if (action === "run") {
@@ -586,9 +566,8 @@ async function findRunnablePackage(
   state: SharedState,
   query: string,
 ): Promise<{ id: string; path: string; manifest: AgentsPackageManifest } | null> {
-  for (const registration of await readPackageRegistrations(state)) {
-    const packageManifest = await readPackageManifest(registration.path);
-    if (!packageManifest) continue;
+  for (const admitted of await readAdmittedPackageRegistrations(state)) {
+    const { registration, manifest: packageManifest } = admitted;
     if (
       registration.id === query ||
       registration.path === query ||
@@ -1035,11 +1014,16 @@ async function sessionsCommand(args: string[], flags: Record<string, string | bo
 }
 
 async function harnessesFromState(state: SharedState): Promise<Array<{ id: string; path: string; manifest: AgentsPackageManifest }>> {
-  const registrations = await readPackageRegistrations(state);
   const out: Array<{ id: string; path: string; manifest: AgentsPackageManifest }> = [];
-  for (const registration of registrations.filter((item) => item.kind === "harness")) {
-    const packageManifest = await readPackageManifest(registration.path);
-    if (packageManifest) out.push({ id: registration.id, path: registration.path, manifest: packageManifest });
+  for (const admitted of await readAdmittedPackageRegistrations(state)) {
+    const { registration, manifest } = admitted;
+    if (registration.kind === "harness") {
+      out.push({
+        id: registration.id,
+        path: registration.path,
+        manifest,
+      });
+    }
   }
   return out;
 }

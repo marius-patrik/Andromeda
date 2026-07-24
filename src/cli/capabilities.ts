@@ -15,8 +15,8 @@ import {
   unlink,
 } from "node:fs/promises";
 import {
+  assertPublicPackageCommandSet,
   packageManifestIdentity,
-  preflightPublicPackageCommands,
   readPackageManifest,
   readPackageRegistrations,
   type AgentsPackageManifest,
@@ -65,6 +65,12 @@ export interface CapabilityIntegrityInspection {
   storeObjects: number;
   identitySha256: string | null;
   issues: string[];
+}
+
+export interface AdmittedPackageRegistration {
+  registration: PackageRegistration;
+  manifest: AgentsPackageManifest;
+  sha256: string;
 }
 
 export type CapabilityPublicationBoundary =
@@ -1042,7 +1048,11 @@ async function recoverCapabilityTransactions(
   state: SharedState,
 ): Promise<void> {
   const root = transactionRoot(state);
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  const rootInfo = await lstatOrNull(root);
+  if (!rootInfo) return;
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+    throw new Error("capability transaction root must be a physical directory");
+  }
   const entries = (await readdir(root, { withFileTypes: true })).sort(
     (left, right) => left.name.localeCompare(right.name),
   );
@@ -1284,6 +1294,157 @@ export async function renderCapabilitiesView(
   return content;
 }
 
+interface AdmittedInstall {
+  record: InstallRecord;
+  tree: ValidatedTree;
+}
+
+async function admitCanonicalInstalls(
+  state: SharedState,
+): Promise<{ installs: InstallRecord[]; admitted: AdmittedInstall[] }> {
+  const installs = await readInstalls(state);
+  if (!Array.isArray(installs))
+    throw new Error("installs.json must contain an array");
+  const keys = new Set<string>();
+  const admitted: AdmittedInstall[] = [];
+  for (const record of installs) {
+    const key = `${record.kind}/${record.name}`;
+    if (keys.has(key))
+      throw new Error(`duplicate capability install record: ${key}`);
+    keys.add(key);
+    assertKind(record.kind);
+    assertCapabilityIdentity(record.name);
+    if (!/^[a-f0-9]{64}$/.test(record.sha256))
+      throw new Error(`invalid capability digest: ${key}`);
+    const expectedTarget = capabilityTarget(
+      state,
+      record.kind,
+      record.name,
+    );
+    if (path.resolve(record.path) !== path.resolve(expectedTarget)) {
+      throw new Error(`capability install path is not canonical: ${key}`);
+    }
+    const targetTree = await inspectTree(expectedTarget);
+    if (targetTree.sha256 !== record.sha256)
+      throw new Error(`installed capability checksum mismatch: ${key}`);
+    const storePath = path.join(
+      stateV2Paths(state).capabilityStoreDir,
+      record.sha256,
+    );
+    const storeTree = await inspectTree(storePath);
+    if (storeTree.sha256 !== record.sha256)
+      throw new Error(`capability store checksum mismatch: ${key}`);
+    admitted.push({ record, tree: targetTree });
+  }
+  return { installs, admitted };
+}
+
+async function admitPackageRegistry(
+  state: SharedState,
+  installs: readonly AdmittedInstall[],
+): Promise<AdmittedPackageRegistration[]> {
+  const registrations = await readPackageRegistrations(state);
+  const registrationsById = new Map(
+    registrations.map((registration) => [registration.id, registration]),
+  );
+  const seenPaths = new Set<string>();
+  for (const registration of registrations) {
+    const normalizedPath = path.resolve(registration.path);
+    if (seenPaths.has(normalizedPath)) {
+      throw new Error(
+        `duplicate package registry path: ${registration.path}`,
+      );
+    }
+    seenPaths.add(normalizedPath);
+  }
+
+  const andromedaVersion = await readAuthoritativeProductVersion();
+  const admitted: AdmittedPackageRegistration[] = [];
+  const publicManifests: AgentPackageDescriptorV2[] = [];
+  const expectedIds = new Set<string>();
+  for (const { record, tree } of installs) {
+    const manifestPath = path.join(record.path, "agent.package.json");
+    const manifest = await readPackageManifest(record.path, {
+      artifactSha256: record.sha256,
+      andromedaVersion,
+    });
+    if (!manifest) continue;
+
+    const identity = packageManifestIdentity(manifest);
+    const publicIdentity = record.name.includes("/");
+    if (publicIdentity !== (manifest.schemaVersion === 2)) {
+      throw new Error(
+        `package install ${record.name} has a public/legacy manifest mismatch`,
+      );
+    }
+    if (identity !== record.name) {
+      throw new Error(
+        `package manifest identity ${identity} does not match canonical install ${record.name}`,
+      );
+    }
+    if (manifest.kind !== record.kind) {
+      throw new Error(
+        `package manifest kind ${manifest.kind} does not match canonical install ${record.kind}/${record.name}`,
+      );
+    }
+    if (manifest.schemaVersion === 2) {
+      validatePublicPluginPayload(manifest, tree, manifestPath);
+      publicManifests.push(manifest);
+    } else if (
+      manifest.kind !== "skill" ||
+      manifest.entry !== undefined
+    ) {
+      throw new Error(
+        `legacy native package ${record.name} is disabled until rewritten for schema v2`,
+      );
+    }
+
+    const registration = registrationsById.get(identity);
+    if (!registration) {
+      throw new Error(
+        `canonical package install ${identity} is missing its registry record`,
+      );
+    }
+    if (
+      registration.kind !== record.kind ||
+      registration.source !== record.source ||
+      path.resolve(registration.path) !== path.resolve(record.path) ||
+      registration.manifestPath === undefined ||
+      path.resolve(registration.manifestPath) !== path.resolve(manifestPath)
+    ) {
+      throw new Error(
+        `package registry record ${identity} does not match its canonical install`,
+      );
+    }
+    expectedIds.add(identity);
+    admitted.push({
+      registration,
+      manifest,
+      sha256: record.sha256,
+    });
+  }
+  const unexpected = registrations
+    .map((registration) => registration.id)
+    .filter((id) => !expectedIds.has(id))
+    .sort();
+  if (unexpected.length > 0) {
+    throw new Error(
+      `package registry contains no canonical install for: ${unexpected.join(", ")}`,
+    );
+  }
+  assertPublicPackageCommandSet(publicManifests);
+  return admitted.sort((left, right) =>
+    left.registration.id.localeCompare(right.registration.id),
+  );
+}
+
+export async function readAdmittedPackageRegistrations(
+  state: SharedState,
+): Promise<AdmittedPackageRegistration[]> {
+  const { admitted } = await admitCanonicalInstalls(state);
+  return admitPackageRegistry(state, admitted);
+}
+
 export async function inspectCapabilityIntegrity(
   state: SharedState,
 ): Promise<CapabilityIntegrityInspection> {
@@ -1292,30 +1453,9 @@ export async function inspectCapabilityIntegrity(
   let storeObjects = 0;
   let identitySha256: string | null = null;
   try {
-    installs = await readInstalls(state);
-    if (!Array.isArray(installs)) throw new Error("installs.json must contain an array");
-    const keys = new Set<string>();
-    for (const record of installs) {
-      const key = `${record.kind}/${record.name}`;
-      if (keys.has(key)) throw new Error(`duplicate capability install record: ${key}`);
-      keys.add(key);
-      assertKind(record.kind);
-      assertCapabilityIdentity(record.name);
-      if (!/^[a-f0-9]{64}$/.test(record.sha256)) throw new Error(`invalid capability digest: ${key}`);
-      const expectedTarget = capabilityTarget(
-        state,
-        record.kind,
-        record.name,
-      );
-      if (path.resolve(record.path) !== path.resolve(expectedTarget)) {
-        throw new Error(`capability install path is not canonical: ${key}`);
-      }
-      const targetTree = await inspectTree(expectedTarget);
-      if (targetTree.sha256 !== record.sha256) throw new Error(`installed capability checksum mismatch: ${key}`);
-      const storePath = path.join(stateV2Paths(state).capabilityStoreDir, record.sha256);
-      const storeTree = await inspectTree(storePath);
-      if (storeTree.sha256 !== record.sha256) throw new Error(`capability store checksum mismatch: ${key}`);
-    }
+    const canonical = await admitCanonicalInstalls(state);
+    installs = canonical.installs;
+    await admitPackageRegistry(state, canonical.admitted);
     const storeRoot = stateV2Paths(state).capabilityStoreDir;
     const storeEntries = (await readdir(storeRoot, { withFileTypes: true })).sort((left, right) =>
       left.name.localeCompare(right.name),
@@ -1706,34 +1846,28 @@ async function installCapabilityWithAdmission(
   }
   const materialized = await materializeSource(state, options.source);
   try {
-    const payload = await validatePayload(
-      materialized.root,
-      options.kind,
-      options.name,
-      {
-        requireSchemaVersion2: admission.kind === "public-v2",
-        andromedaVersion:
-          admission.kind === "public-v2"
-            ? admission.andromedaVersion
-            : undefined,
-      },
-    );
-    const { tree: sourceTree, manifest } = payload;
-    if (
-      admission.kind === INTERNAL_BUNDLED_SKILL_IMPORT &&
-      (options.kind !== "skill" || manifest?.schemaVersion === 2)
-    ) {
-      throw new Error(
-        "the internal bundled-skill bridge accepts only legacy first-party skills",
-      );
-    }
-    if (manifest?.schemaVersion === 2) {
-      await preflightPublicPackageCommands(
-        await readPackageRegistrations(state),
-        manifest,
-      );
-    }
     return await withCapabilityLock(state, async () => {
+      const payload = await validatePayload(
+        materialized.root,
+        options.kind,
+        options.name,
+        {
+          requireSchemaVersion2: admission.kind === "public-v2",
+          andromedaVersion:
+            admission.kind === "public-v2"
+              ? admission.andromedaVersion
+              : undefined,
+        },
+      );
+      const { tree: sourceTree, manifest } = payload;
+      if (
+        admission.kind === INTERNAL_BUNDLED_SKILL_IMPORT &&
+        (options.kind !== "skill" || manifest?.schemaVersion === 2)
+      ) {
+        throw new Error(
+          "the internal bundled-skill bridge accepts only legacy first-party skills",
+        );
+      }
       const base = assertWithinState(state, targetBase(state, options.kind));
       const target = assertWithinState(
         state,
@@ -1763,10 +1897,26 @@ async function installCapabilityWithAdmission(
         );
       }
 
-      const installs = await readInstalls(state);
-      const registrations = await readPackageRegistrations(state);
+      const canonical = await admitCanonicalInstalls(state);
+      const admittedPackages = await admitPackageRegistry(
+        state,
+        canonical.admitted,
+      );
+      const installs = canonical.installs;
+      const registrations = admittedPackages.map(
+        (item) => item.registration,
+      );
       if (manifest?.schemaVersion === 2) {
-        await preflightPublicPackageCommands(registrations, manifest);
+        assertPublicPackageCommandSet([
+          ...admittedPackages
+            .map((item) => item.manifest)
+            .filter(
+              (installed): installed is AgentPackageDescriptorV2 =>
+                installed.schemaVersion === 2 &&
+                installed.qualifiedId !== manifest.qualifiedId,
+            ),
+          manifest,
+        ]);
       }
       const existingRecord = installs.find(
         (item) => item.kind === options.kind && item.name === options.name,

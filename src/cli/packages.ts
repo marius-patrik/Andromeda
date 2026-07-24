@@ -1,8 +1,6 @@
 import path from "node:path";
 import { lstat, stat } from "node:fs/promises";
 import type { InstallKind, SharedState } from "./state";
-import { writeTextAtomic } from "./state-v2";
-import { withStateFileLock } from "./state-lock";
 import {
   assertAgentPackageCompatibilityV2,
   parseAgentPackageManifestV2,
@@ -265,51 +263,25 @@ export async function readPackageRegistrations(state: SharedState): Promise<Pack
   return parsed as PackageRegistration[];
 }
 
-export async function preflightPublicPackageCommands(
-  registrations: readonly PackageRegistration[],
-  candidate: AgentPackageDescriptorV2,
-): Promise<void> {
+export function assertPublicPackageCommandSet(
+  manifests: readonly AgentPackageDescriptorV2[],
+): void {
   const registry = new CommandRegistry();
-  const ordered = [...registrations].sort((left, right) =>
-    left.id.localeCompare(right.id),
+  // Alias grants are a separate permission decision. Admission still reserves
+  // every requested top-level token so two packages cannot be installed into
+  // a state that could never grant both requests safely.
+  const requestedAliases = manifests.flatMap((manifest) =>
+    manifest.contributions.commands.flatMap((command) =>
+      command.requestedTopLevelAlias
+        ? [`${manifest.qualifiedId}:${command.requestedTopLevelAlias}`]
+        : [],
+    ),
   );
-  for (const registration of ordered) {
-    const manifest = await readPackageManifest(registration.path);
-    if (manifest?.schemaVersion !== 2) {
-      if (registration.id.includes("/")) {
-        throw new Error(
-          `public package registration ${registration.id} has no schema v2 manifest`,
-        );
-      }
-      continue;
-    }
-    if (
-      registration.id !== manifest.qualifiedId ||
-      registration.kind !== manifest.kind
-    ) {
-      throw new Error(
-        `public package registration ${registration.id} does not match ${manifest.qualifiedId}`,
-      );
-    }
-    if (manifest.qualifiedId === candidate.qualifiedId) continue;
-    registry.registerPluginCommands(manifest);
+  for (const manifest of [...manifests].sort((left, right) =>
+    left.qualifiedId.localeCompare(right.qualifiedId),
+  )) {
+    registry.registerPluginCommands(manifest, {
+      approvedTopLevelAliases: requestedAliases,
+    });
   }
-  registry.registerPluginCommands(candidate);
-}
-
-export async function writePackageRegistrations(state: SharedState, registrations: PackageRegistration[]): Promise<void> {
-  await withStateFileLock(state, "packages", () =>
-    writeTextAtomic(state.packagesFile, `${JSON.stringify(registrations, null, 2)}\n`),
-  );
-}
-
-export async function upsertPackageRegistration(state: SharedState, registration: Omit<PackageRegistration, "registeredAt">): Promise<void> {
-  await withStateFileLock(state, "packages", async () => {
-    const registrations = await readPackageRegistrations(state);
-    const next: PackageRegistration = { ...registration, registeredAt: new Date().toISOString() };
-    const index = registrations.findIndex((item) => item.id === registration.id);
-    if (index === -1) registrations.push(next);
-    else registrations[index] = { ...registrations[index], ...next };
-    await writeTextAtomic(state.packagesFile, `${JSON.stringify(registrations, null, 2)}\n`);
-  });
 }
